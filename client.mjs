@@ -29,9 +29,9 @@ export function apply(ctx) {
     // ---------------- 样式 ----------------
     const removeCss = domCss(
       ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}" +
-      ".amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(163,67,59,.45),rgba(163,67,59,.12));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}" +
+      ".amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(19,32,63,.55),rgba(20,33,60,.22));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}" +
       ".amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}" +
-      ".amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#f2e9e6);font-size:13px;}" +
+      ".amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#eef2fb);font-size:13px;}" +
       ".amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}" +
       ".amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}" +
       ".amad-btn:hover{background:rgba(255,255,255,.18);}" +
@@ -45,7 +45,7 @@ export function apply(ctx) {
       ".amad-settings-btn:hover{background:rgba(128,128,128,.15);}" +
       ".amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}" +
       ".amad-sb-btn:hover{background:rgba(128,128,128,.15);}" +
-      ".amad-warn{margin-top:14px;font-size:12px;color:#b08968;}"
+      ".amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}"
     )
     ctx.effect(() => removeCss)
 
@@ -388,7 +388,7 @@ export function apply(ctx) {
               : ('● ' + (status.tts || '…') + ' · 队列 ' + status.queue + (status.callPending ? ' · 📞 来电中' : '')),
           ),
         ),
-        React.createElement('div', { className: 'amad-warn' }, '注意：右侧栏为 SAKIKO（丰川祥子）专用，原「工具详情」面板在插件运行期间被替代，停止插件后恢复。角色版权归 Bushiroad/BanG Dream! 项目；Live2D 模型为粉丝制作，仅供个人学习。'),
+        React.createElement('div', { className: 'amad-warn' }, '注意：右侧栏为 SAKIKO（丰川祥子）专用，原「工具详情」面板在插件运行期间被替代，停止插件后恢复。角色版权归 Bushiroad/BanG Dream! 项目；Live2D 模型为粉丝制作，仅供个人学习，禁止商用。'),
       )
     }
 
