@@ -33,7 +33,7 @@
   var callOverlay = $('call-overlay')
   var callAccept = $('call-accept')
   var callDeny = $('call-deny')
-  var callPortrait = $('call-portrait')
+  // Task5: #call-portrait / kurisu 立绘已弃用（来电改模型直出），不再持有该元素引用
   var ringAudio = $('ring-audio')
   var screenClock = $('screen-clock')
   var calibBtn = $('calib-btn')
@@ -115,22 +115,20 @@
   tickClock()
   window.setInterval(tickClock, 15000)
 
-  // ---------------- 开机动画 ----------------
+  // ---------------- 开机动画（Task5 去帧化：静态字标 + 打字行） ----------------
+  // boot 打字行 → SAKIKO 系统文案（机械词，正式版按 Task 0 表微调）
   var bootLines = [
-    'AMADEUS SYSTEM v1.048596',
+    'SAKIKO SYSTEM',
     'memory database ... connect OK',
-    'Makise Kurisu - ready.'
+    '豊川祥子 - ready.'
   ]
-  var bootLogoImg = $('boot-logo-img')
-  var bootFrame = 1
+  // 不再逐帧切换 logo1..logo39.png（旧素材已删除）；#boot-logo-img 的呈现交给
+  // HTML/CSS 任务，JS 不再读写它。.boot 浮层的显示/隐藏时序保持不变。
   var bootAnimDone = false
-  var bootTimer = null
   var modelReady = false
 
   function resetBootAnim() {
-    bootFrame = 1
     bootAnimDone = false
-    if (bootLogoImg) bootLogoImg.src = '/amadeus/assets/img/boot/logo1.png'
     boot.classList.remove('off')
   }
 
@@ -141,6 +139,7 @@
     for (var b = 0; b < targets.length; b++) targets[b].textContent = ''
     function step() {
       if (li >= bootLines.length) {
+        bootAnimDone = true
         hideBootWhenReady()
         return
       }
@@ -159,23 +158,6 @@
 
   function startBootAnimation() {
     resetBootAnim()
-    if (bootTimer !== null) {
-      window.clearInterval(bootTimer)
-      bootTimer = null
-    }
-    bootTimer = window.setInterval(function () {
-      if (!bootLogoImg || bootAnimDone) return
-      bootFrame += 1
-      if (bootFrame > 39) {
-        bootFrame = 39
-        bootAnimDone = true
-        window.clearInterval(bootTimer)
-        bootTimer = null
-        if (bootLogoImg) bootLogoImg.src = '/amadeus/assets/img/boot/logo39.png'
-        return
-      }
-      bootLogoImg.src = '/amadeus/assets/img/boot/logo' + bootFrame + '.png'
-    }, 64)
     typeBootLines()
   }
 
@@ -187,7 +169,7 @@
   }
 
   function hideBootWhenReady() {
-    // 39 帧开机动画必须完整播完一遍，且头像就绪后才进入主界面
+    // 无 39 帧动画后：打字行播完(bootAnimDone)且头像就绪(modelReady)才进入主界面
     if (!modelReady || !bootAnimDone) {
       window.setTimeout(hideBootWhenReady, 200)
       return
@@ -198,8 +180,9 @@
   startBootAnimation()
 
   // ---------------- 语音队列 ----------------
-  var EXPR = (window.AmadeusEmotion && window.AmadeusEmotion.EXPR) || { happy: 'f01', excited: 'f01', elated: 'f01', question: 'f04', sad: 'f02', angry: 'f03', furious: 'f03', soft: 'f02', neutral: '' }
-  var EXPR_TO_EMO = (window.AmadeusEmotion && window.AmadeusEmotion.EXPR_TO_EMO) || { f01: 'happy', f02: 'sad', f03: 'angry', f04: 'question', '': 'neutral' }
+  // Task5：内联回退与 window.AmadeusEmotion 同步为 Sakiko expression 名（model.json expressions.name）
+  var EXPR = (window.AmadeusEmotion && window.AmadeusEmotion.EXPR) || { happy: 'smile03', excited: 'smile05', elated: 'smile06', question: 'thinking01', sad: 'sad01', angry: 'angry01', furious: 'angry07', soft: 'smile01', blush: 'shame01', annoyed: 'sigh01', thinking: 'thinking02', surprised: 'surprised01', disappointed: 'sad02', eyes_closed: 'idle01', indifferent: 'serious01', side: 'kime01', winking: 'smile04', neutral: 'default' }
+  var EXPR_TO_EMO = (window.AmadeusEmotion && window.AmadeusEmotion.EXPR_TO_EMO) || { smile03: 'happy', smile05: 'excited', smile06: 'elated', sad01: 'sad', angry01: 'angry', angry07: 'furious', thinking01: 'question', smile01: 'soft', shame01: 'blush', sigh01: 'annoyed', thinking02: 'thinking', surprised01: 'surprised', sad02: 'disappointed', idle01: 'eyes_closed', serious01: 'indifferent', kime01: 'side', smile04: 'winking', default: 'neutral', '': 'neutral' }
   var queue = []
   var playing = false
   var lastQueued = ''
@@ -426,7 +409,10 @@
     ensureAudioEl()
     attachAnalyser()
     if (actx && actx.state === 'suspended') { try { actx.resume() } catch (e) { /* ignore */ } }
-    enqueue('ふふっ、呼んだ？', true, 'happy')
+    // TODO(Task7 考据台词填充 docs/sakiko-quotes.md)：解锁问候台词待考据后填入，
+    // 项目红线：不得自编台词，未定稿前不播报任何解锁台词。
+    // 原 kurisu 台词「ふふっ、呼んだ？」已随 Amadeus 素材下线，不沿用。
+    // if (UNLOCK_GREETING_JA) enqueue(UNLOCK_GREETING_JA, true, 'happy')
   }
   unlockBtn.addEventListener('click', unlockAction)
   screenEl.addEventListener('click', unlockAction)
@@ -442,24 +428,9 @@
     lastInteractionAt = Date.now()
     callOverlay.classList.remove('hidden')
     ringing = true
-    // 复用原版 Amadeus 解包素材：根据来电情绪切换红莉栖立绘
-    if (callPortrait) {
-      var emo = (item && item.emotion) || 'neutral'
-      var side = {
-        happy: 'sided_pleasant1',
-        soft: 'sided_pleasant1',
-        blush: 'sided_blush1',
-        angry: 'sided_angry1',
-        annoyed: 'sided_angry1',
-        surprised: 'sided_surprised1',
-        question: 'sided_surprised1',
-        sad: 'sided_worried1',
-        disappointed: 'sided_worried1',
-        eyes_closed: 'sided_eyes_closed1',
-        neutral: 'sided_pleasant1'
-      }[emo] || 'normal1'
-      callPortrait.src = '/amadeus/assets/img/kurisu/' + side + '.png'
-    }
+    // Task5 来电改模型直出：不再按情绪切换 kurisu 立绘 src（#call-portrait / kurisu/*.png
+    // 旧素材已下线）。来电时保持 canvas 模型可见、overlay 半透明显示模型——
+    // 半透明等视觉由 HTML/CSS 任务负责，JS 只保证不切图、不隐藏 #amadeus-canvas。
     try {
       var p = ringAudio.play()
       if (p && p.catch) p.catch(function () { report('ring blocked') })
@@ -892,15 +863,28 @@
     if (!model || !name) return
     var exprId = EXPR[name] || name
     var emotionName = EXPR_TO_EMO[name] || name
-    var hasExpressions = false
+    // Task5：经 vendor/pld-cubism2.min.js 验证，Cubism2 运行时支持 model.expression(name)
+    // （ExpressionManager.definitions 按 name 解析）。Sakiko model.json 注册 29 个 expressions
+    // （angry01/02/07、cry01-04、default、idle01、kime01、odoodo01、sad01/02、serious01/02、
+    //  shame01/02、sigh01/02、smile01-06、surprised01/02、thinking01/02）→ C2 也走表达式 API。
+    // 仅当目标 expression 名确实已注册时才走 API，否则落到下方参数直驱兜底（C2_FACE 已按
+    // Sakiko exp.json 的真实参数 id 修正，避免 model.expression() 空转导致表情不生效）。
+    var canExpr = false
     try {
       var mm = model.internalModel && model.internalModel.motionManager
       var exps = mm && (mm.expressions || (mm.expressionManager && mm.expressionManager.definitions))
-      if (exps) hasExpressions = Array.isArray(exps) ? exps.length > 0 : Object.keys(exps).length > 0
+      if (exps && exprId) {
+        if (Array.isArray(exps)) {
+          for (var ei = 0; ei < exps.length; ei++) {
+            var ed = exps[ei]
+            if (ed && (ed.name === exprId || ed.id === exprId || ed === exprId)) { canExpr = true; break }
+          }
+        } else if (Object.prototype.hasOwnProperty.call(exps, exprId)) {
+          canExpr = true
+        }
+      }
     } catch (e) { /* ignore */ }
-    // 只有真正加载了 expression 文件时才走 motionManager 表达式；
-    // Cubism2 无表达式模型直接走下面的参数驱动，避免 model.expression() 空转导致表情不生效。
-    if (hasExpressions) {
+    if (canExpr) {
       try { model.expression(exprId); return } catch (e) { /* ignore */ }
     }
     try {
@@ -909,11 +893,23 @@
       var c4 = typeof core.setParameterValueById === 'function'
       var set = c4 ? function (id, v) { try { core.setParameterValueById(id, v, 1) } catch (e2) { /* ignore */ } } : function (id, v) { try { core.setParamFloat(id, v) } catch (e2) { /* ignore */ } }
       var isC2 = modelFormat === 'cubism2' || !c4
-      var all = isC2
-        ? ['PARAM_EYE_SMILE', 'PARAM_CHEEK', 'PARAM_BROW_L_Y', 'PARAM_BROW_R_Y', 'PARAM_MOUTH_FORM', 'PARAM_MOUTH_OPEN_Y', 'PARAM_EYE_L_OPEN', 'PARAM_EYE_R_OPEN', 'PARAM_ANGLE_X', 'PARAM_ANGLE_Z']
-        : ['ParamEyeRSmile', 'Param9', 'Param8', 'ParamMouthForm', 'ParamEyeBallX', 'ParamEyeBallY']
-      for (var i = 0; i < all.length; i++) set(all[i], 0)
       var emoMap = (window.AmadeusEmotion && (isC2 ? window.AmadeusEmotion.C2_FACE : window.AmadeusEmotion.FACE)) || {}
+      // 兜底直驱前先清空本表情表会用到的所有参数（避免上一表情残留），再写入目标值。
+      var keys = {}
+      var rk
+      for (rk in emoMap) {
+        var row = emoMap[rk]
+        if (row) for (var pk in row) if (Object.prototype.hasOwnProperty.call(row, pk)) keys[pk] = 1
+      }
+      if (isC2) {
+        // C2 骨架上始终参与口型/眨眼/头部的基础参数
+        keys.PARAM_MOUTH_OPEN_Y = 1
+        keys.PARAM_EYE_L_OPEN = 1
+        keys.PARAM_EYE_R_OPEN = 1
+        keys.PARAM_ANGLE_X = 1
+        keys.PARAM_ANGLE_Z = 1
+      }
+      for (var zk in keys) set(zk, 0)
       var target = emoMap[emotionName] || {}
       for (var k in target) {
         if (Object.prototype.hasOwnProperty.call(target, k)) set(k, target[k])
@@ -1089,24 +1085,28 @@
     for (var k = 0; k < gesture.head.length; k++) gesture.head[k](k === 0 ? headX : (k === 1 ? headZ : headX * 0.4))
   }
 
+  // Task5: 每帧平滑脸参数层（writeFaceConfig 写盘）。与 emotion.js 同源调教：
+  //  - Sakiko C2 表情主路径 = 运行时 model.expression(name)（smile03/sad01/...，见 setExpression）；
+  //  - 本表保留为无 expression 时的兜底/过渡层，情绪键与 EXPR 一致，18 情绪全覆盖，
+  //    数值与 C2_FACE 同族（白祥系微笑/害羞幅度略高，愤怒更收敛、保持优雅）。
   var EMOTION_FACE = {
-    happy:        { cheek: 0.35, eyeSmile: 0.7, mouthForm: 0.3, browL: 0.05, browR: 0.05, pupilSize: 1.05 },
-    excited:      { cheek: 0.45, eyeSmile: 0.85, mouthForm: 0.45, browL: 0.1, browR: 0.1, eyeLOpen: 0.95, eyeROpen: 0.95, pupilSize: 1.1 },
-    elated:       { cheek: 0.55, eyeSmile: 0.95, mouthForm: 0.6, browL: 0.15, browR: 0.15, eyeLOpen: 1, eyeROpen: 1, pupilSize: 1.15 },
-    sad:          { cheek: 0.1, eyeSmile: -0.3, mouthForm: -0.3, browL: 0.25, browR: 0.25, pupilY: 0.2, tear: 0.25, pupilSize: 0.9 },
-    angry:        { cheek: 0.15, eyeSmile: -0.5, mouthForm: 0.3, browL: -0.35, browR: -0.35, eyeLOpen: 0.85, eyeROpen: 0.85, pupilSize: 0.95 },
-    furious:      { cheek: 0.25, eyeSmile: -0.7, mouthForm: 0.5, browL: -0.55, browR: -0.55, eyeLOpen: 0.8, eyeROpen: 0.8, pupilSize: 0.9 },
+    happy:        { cheek: 0.4, eyeSmile: 0.85, mouthForm: 0.35, browL: 0.05, browR: 0.05, pupilSize: 1.05 },
+    excited:      { cheek: 0.5, eyeSmile: 0.95, mouthForm: 0.5, browL: 0.1, browR: 0.1, eyeLOpen: 0.95, eyeROpen: 0.95, pupilSize: 1.1 },
+    elated:       { cheek: 0.6, eyeSmile: 1.0, mouthForm: 0.65, browL: 0.15, browR: 0.15, eyeLOpen: 1, eyeROpen: 1, pupilSize: 1.15 },
+    sad:          { cheek: 0.12, eyeSmile: -0.3, mouthForm: -0.3, browL: 0.25, browR: 0.25, pupilY: 0.2, tear: 0.25, pupilSize: 0.9 },
+    angry:        { cheek: 0.15, eyeSmile: -0.45, mouthForm: 0.3, browL: -0.3, browR: -0.3, eyeLOpen: 0.85, eyeROpen: 0.85, pupilSize: 0.95 },
+    furious:      { cheek: 0.2, eyeSmile: -0.6, mouthForm: 0.45, browL: -0.45, browR: -0.45, eyeLOpen: 0.8, eyeROpen: 0.8, pupilSize: 0.9 },
     question:     { cheek: 0.05, eyeSmile: 0.1, mouthForm: 0.1, browL: 0.25, browR: 0.25, pupilX: 0.15, pupilY: -0.1, pupilSize: 1.0 },
-    soft:         { cheek: 0.25, eyeSmile: 0.4, mouthForm: -0.15, browL: 0.08, browR: 0.08, pupilSize: 1.0 },
-    blush:        { cheek: 1.0, eyeSmile: 0.55, mouthForm: -0.12, browL: 0.18, browR: 0.18, pupilY: 0.18, pupilSize: 1.05 },
-    annoyed:      { cheek: 0.1, eyeSmile: -0.4, mouthForm: 0.2, browL: -0.3, browR: -0.3, pupilSize: 0.95 },
+    soft:         { cheek: 0.3, eyeSmile: 0.5, mouthForm: -0.1, browL: 0.08, browR: 0.08, pupilSize: 1.0 },
+    blush:        { cheek: 1.0, eyeSmile: 0.6, mouthForm: -0.1, browL: 0.18, browR: 0.18, pupilY: 0.18, pupilSize: 1.05 },
+    annoyed:      { cheek: 0.1, eyeSmile: -0.35, mouthForm: 0.15, browL: -0.25, browR: -0.25, pupilSize: 0.95 },
     thinking:     { cheek: 0.05, eyeSmile: 0.1, mouthForm: -0.2, browL: 0.3, browR: 0.3, pupilX: -0.2, pupilY: -0.25, pupilSize: 0.9 },
     surprised:    { cheek: 0.1, eyeSmile: 0.1, mouthForm: 0.2, browL: -0.35, browR: -0.35, eyeLOpen: 1, eyeROpen: 1, pupilX: 0, pupilY: 0, pupilSize: 1.25 },
     disappointed: { cheek: 0.05, eyeSmile: -0.3, mouthForm: -0.35, browL: 0.2, browR: 0.2, pupilY: 0.2, pupilSize: 0.9 },
     eyes_closed:  { eyeSmile: 0.2, mouthForm: -0.1, eyeLOpen: 0, eyeROpen: 0, pupilSize: 1.0 },
     indifferent:  { cheek: 0, eyeSmile: -0.1, mouthForm: -0.2, browL: 0.05, browR: 0.05, pupilSize: 0.95 },
     side:         { cheek: 0.05, eyeSmile: 0.1, mouthForm: -0.1, browL: 0.2, browR: 0.2, pupilX: 0.35, pupilY: -0.1, pupilSize: 1.0 },
-    winking:      { cheek: 0.35, eyeSmile: 0.6, mouthForm: 0.2, browL: 0.1, browR: 0.1, eyeLOpen: 1, eyeROpen: 0, pupilSize: 1.05 },
+    winking:      { cheek: 0.4, eyeSmile: 0.7, mouthForm: 0.25, browL: 0.1, browR: 0.1, eyeLOpen: 1, eyeROpen: 0, pupilSize: 1.05 },
     neutral:      { cheek: 0, eyeSmile: 0, mouthForm: 0, browL: 0, browR: 0, pupilX: 0, pupilY: 0, pupilSize: 1 }
   }
 
@@ -1250,37 +1250,35 @@
     window.requestAnimationFrame(loop)
   }
 
+  // TODO(Task7 考据台词填充 docs/sakiko-quotes.md)：触摸台词池内容一律置空，
+  // 项目红线：不得自编台词。原 kurisu 触摸台词已随 Amadeus 素材下线，不沿用。
+  // 空池时 playTap 只做动作/表情反应、不播报台词。
   var TAP_LINES = {
-    head: [
-      { jp: 'ん？なに？', emotion: 'question' },
-      { jp: 'ちょっと、どこ触ってるの？', emotion: 'annoyed' },
-      { jp: 'ふぅん、退屈そうね。', emotion: 'soft' },
-      { jp: 'あら、私の顔に何かついてる？', emotion: 'question' }
-    ],
-    body: [
-      { jp: 'ちょっと！', emotion: 'annoyed' },
-      { jp: '何するのよ！', emotion: 'angry' },
-      { jp: 'ふふっ、やめなさいよ。', emotion: 'happy' },
-      { jp: 'もう、仕方ないわね。', emotion: 'blush' }
-    ]
+    head: [],
+    body: []
   }
 
   function playTap(area) {
     if (!model) return
     lastInteractionAt = Date.now()
     var prevEmotion = gestureEmotion || 'neutral'
-    var pool = TAP_LINES[area] || TAP_LINES.body
-    var pick = pool[Math.floor(Math.random() * pool.length)]
+    var pool = TAP_LINES[area] || []
+    var pick = null
+    if (pool.length > 0) pick = pool[Math.floor(Math.random() * pool.length)]
     if (area === 'head') {
-      setExpression('question')
-      applyEmotionFace('question', 0.8)
-      try { model.motion('flick_head') } catch (e) { /* ignore */ }
+      // Task5: 原 flick_head motion 在 Sakiko model.json 不存在 → 映射为 nod01（已确认存在）
+      var headEmo = (pick && pick.emotion) || 'question'
+      setExpression(headEmo)
+      applyEmotionFace(headEmo, 0.8)
+      try { model.motion('nod01') } catch (e) { /* ignore */ }
       for (var i = 0; i < gesture.head.length; i++) gesture.head[i](i === 0 ? -0.25 : (i === 1 ? 0.1 : -0.1))
       window.setTimeout(function () { for (var j = 0; j < gesture.head.length; j++) gesture.head[j](0) }, 500)
     } else {
-      setExpression(pick.emotion || 'happy')
-      applyEmotionFace(pick.emotion || 'happy', 0.8)
-      try { model.motion('tap_body') } catch (e) { /* ignore */ }
+      // Task5: 原 tap_body motion 在 Sakiko model.json 不存在 → 映射为 kime01（已确认存在）
+      var bodyEmo = (pick && pick.emotion) || 'happy'
+      setExpression(bodyEmo)
+      applyEmotionFace(bodyEmo, 0.8)
+      try { model.motion('kime01') } catch (e) { /* ignore */ }
       for (var k = 0; k < gesture.arms.length; k++) gesture.arms[k](0.6 + 0.2 * Math.sin(k))
       window.setTimeout(function () { for (var m = 0; m < gesture.arms.length; m++) gesture.arms[m](0) }, 600)
     }
@@ -1289,7 +1287,7 @@
       setExpression(prevEmotion)
       applyEmotionFace(prevEmotion, 0.5)
     }, 900)
-    enqueue(pick.jp, true, pick.emotion || 'happy')
+    if (pick && pick.jp) enqueue(pick.jp, true, pick.emotion || 'happy')
   }
 
   function handleCanvasTap(ev) {
@@ -1464,12 +1462,13 @@
   }
 
   function makeAvatar() {
-    var img = document.createElement('img')
-    img.className = 'msg-avatar'
-    img.src = '/amadeus/assets/img/boot/logo39.png'
-    img.alt = 'AMADEUS'
-    img.title = 'AMADEUS'
-    return img
+    // Task5: 聊天头像不再引用已删除的 img/boot/logo39.png → 改为首字母 S 占位。
+    // 样式由 CSS 任务负责（.msg-avatar 文本头像）；JS 只保证元素类名与文本正确。
+    var av = document.createElement('span')
+    av.className = 'msg-avatar'
+    av.textContent = 'S'
+    av.setAttribute('aria-label', 'Sakiko')
+    return av
   }
   function makeBubble() {
     var b = document.createElement('div')

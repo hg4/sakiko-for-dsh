@@ -1,35 +1,68 @@
-/* Amadeus 情绪/表情/动作映射表（统一调教入口） */
+/* ============================================================
+ * SAKIKO (豊川祥子, Cubism2 本地模型) 情绪/表情/动作映射表
+ *
+ * Task5 结论（见 task-5-report.md）：
+ *  - vendor/pld-cubism2.min.js 内置 Cubism2 ExpressionManager（class tt），
+ *    model.expression(name) 支持按名字解析（definitions.findIndex(e=>e.name===name)），
+ *    Sakiko model.json 注册 29 个 expressions（smile01-06/angry01/02/07/...），
+ *    因此表情体系直接走运行时 expression API（主路径）。
+ *  - EXPR: 情绪 → Sakiko expression 名（供 setExpression/model.expression 用）
+ *  - EXPR_TO_EMO: expression 名 → 情绪（供 gestureEmotion 回退解析）
+ *  - FACE:   保留 Cubism4 amadeusV1 旧骨架的参数直驱表（本 C2 模型用不到，仅兼容）
+ *  - C2_FACE: Cubism2 无 expression 文件/名未命中时的参数直驱兜底；
+ *            参数 id 一律取 assets/live2d/sakiko/data/expressions/*.exp.json 中真实存在的
+ *            （PARAM_EYE_R_SMILE/PARAM_BROW_R_FORM/PARAM_MOUTH_FORM_01 等，
+ *             并经 sakiko_casual-2023.moc 二进制扫描确认存在；shizuku 独有单键
+ *             PARAM_EYE_SMILE 已删除，Sakiko 只有左右分键）。
+ *  - GESTURE: 白祥系幅度整体上浮约 5~10%（微笑/害羞类调高），注释见下。
+ * ============================================================ */
 window.AmadeusEmotion = (function () {
+  // 情绪 → Sakiko expression 名（model.json expressions 的 name 字段，勿改拼写）
   var EXPR = {
-    happy: 'f01',
-    excited: 'f01',
-    elated: 'f01',
-    question: 'f04',
-    sad: 'f02',
-    angry: 'f03',
-    furious: 'f03',
-    soft: 'f02',
-    blush: 'f02',
-    annoyed: 'f03',
-    thinking: 'f04',
-    surprised: 'f04',
-    disappointed: 'f02',
-    eyes_closed: '',
-    indifferent: '',
-    side: '',
-    winking: 'f01',
-    neutral: ''
+    happy: 'smile03',
+    excited: 'smile05',
+    elated: 'smile06',
+    sad: 'sad01',
+    angry: 'angry01',
+    furious: 'angry07',
+    question: 'thinking01',
+    soft: 'smile01',
+    blush: 'shame01',
+    annoyed: 'sigh01',
+    thinking: 'thinking02',
+    surprised: 'surprised01',
+    disappointed: 'sad02',
+    eyes_closed: 'idle01',
+    indifferent: 'serious01',
+    side: 'kime01',
+    winking: 'smile04',
+    neutral: 'default'
   }
 
+  // expression 名 → 情绪（与 EXPR 互为反查；空串 → neutral 兼容旧消息）
   var EXPR_TO_EMO = {
-    f01: 'happy',
-    f02: 'sad',
-    f03: 'angry',
-    f04: 'question',
+    smile03: 'happy',
+    smile05: 'excited',
+    smile06: 'elated',
+    sad01: 'sad',
+    angry01: 'angry',
+    angry07: 'furious',
+    thinking01: 'question',
+    smile01: 'soft',
+    shame01: 'blush',
+    sigh01: 'annoyed',
+    thinking02: 'thinking',
+    surprised01: 'surprised',
+    sad02: 'disappointed',
+    idle01: 'eyes_closed',
+    serious01: 'indifferent',
+    kime01: 'side',
+    smile04: 'winking',
+    default: 'neutral',
     '': 'neutral'
   }
 
-  // Cubism4 amadeusV1 无 expression 文件时，直接驱动这些参数
+  // Cubism4 amadeusV1 旧骨架参数直驱（本 Sakiko C2 模型用不到，保留结构作兼容）。
   var FACE = {
     happy:        { ParamEyeRSmile: 0.75, Param9: 0.45, ParamMouthForm: 0.45 },
     excited:      { ParamEyeRSmile: 0.85, Param9: 0.55, ParamMouthForm: 0.6 },
@@ -51,48 +84,52 @@ window.AmadeusEmotion = (function () {
     neutral:      {}
   }
 
-  // Cubism2 shizuku 骨架（本地 kurisu 模型）使用的参数名
+  // Cubism2 Sakiko 参数直驱兜底表。
+  // 仅当 model.expression 不可用/名字未命中时才驱动；值从对应 exp.json 提炼。
+  // 眼开度(EYE_*_OPEN) 由 panel.js 的眨眼/表情分层(applyEyeLids)负责，不在此重复占位。
   var C2_FACE = {
-    happy:        { PARAM_EYE_SMILE: 0.7, PARAM_MOUTH_FORM: 0.4, PARAM_CHEEK: 0.35 },
-    excited:      { PARAM_EYE_SMILE: 0.8, PARAM_MOUTH_FORM: 0.5, PARAM_CHEEK: 0.45 },
-    elated:       { PARAM_EYE_SMILE: 0.9, PARAM_MOUTH_FORM: 0.6, PARAM_CHEEK: 0.55 },
-    sad:          { PARAM_BROW_L_Y: 0.3, PARAM_BROW_R_Y: 0.3, PARAM_MOUTH_FORM: -0.3 },
-    angry:        { PARAM_BROW_L_Y: -0.4, PARAM_BROW_R_Y: -0.4, PARAM_MOUTH_FORM: 0.3 },
-    furious:      { PARAM_BROW_L_Y: -0.6, PARAM_BROW_R_Y: -0.6, PARAM_MOUTH_FORM: 0.5 },
-    question:     { PARAM_BROW_L_Y: 0.2, PARAM_BROW_R_Y: 0.2, PARAM_ANGLE_X: -0.2 },
-    soft:         { PARAM_EYE_SMILE: 0.3, PARAM_MOUTH_FORM: -0.1 },
-    blush:        { PARAM_CHEEK: 1.0, PARAM_EYE_SMILE: 0.5, PARAM_MOUTH_FORM: -0.12 },
-    annoyed:      { PARAM_BROW_L_Y: -0.3, PARAM_BROW_R_Y: -0.3, PARAM_MOUTH_FORM: -0.3 },
-    thinking:     { PARAM_BROW_L_Y: 0.3, PARAM_BROW_R_Y: 0.3, PARAM_ANGLE_X: -0.3, PARAM_ANGLE_Z: 0.15 },
-    surprised:    { PARAM_EYE_L_OPEN: 1, PARAM_EYE_R_OPEN: 1, PARAM_MOUTH_OPEN_Y: 0.6, PARAM_BROW_L_Y: -0.4 },
-    disappointed: { PARAM_BROW_L_Y: 0.25, PARAM_BROW_R_Y: 0.25, PARAM_MOUTH_FORM: -0.4 },
+    happy:        { PARAM_EYE_R_SMILE: 1, PARAM_EYE_L_SMILE: 1, PARAM_EYE_FORM: 1, PARAM_BROW_R_ANGLE: 0.33, PARAM_BROW_R_FORM: -2, PARAM_BROW_L_ANGLE: 0.33, PARAM_BROW_L_FORM: -2, PARAM_MOUTH_FORM_01: 0.5, PARAM_MOUTH_SCALE: -0.35 },
+    excited:      { PARAM_EYE_R_SMILE: 1, PARAM_EYE_L_SMILE: 1, PARAM_BROW_R_Y: -0.2, PARAM_BROW_R_ANGLE: 0.36, PARAM_BROW_R_FORM: -2, PARAM_BROW_L_Y: -0.2, PARAM_BROW_L_ANGLE: 0.36, PARAM_BROW_L_FORM: -2, PARAM_MOUTH_FORM_01: 1.5, PARAM_CHEEK2: 0.55 },
+    elated:       { PARAM_EYE_FORM: -0.26, PARAM_BROW_R_Y: 0.44, PARAM_BROW_R_X: 0.08, PARAM_BROW_R_ANGLE: 0.19, PARAM_BROW_R_FORM: 0.5, PARAM_BROW_L_Y: 0.44, PARAM_BROW_L_X: 0.08, PARAM_BROW_L_ANGLE: 0.19, PARAM_BROW_L_FORM: 0.5, PARAM_MOUTH_FORM_01: 0.5, PARAM_MOUTH_SCALE: -1 },
+    sad:          { PARAM_EYE_FORM: 0.46, PARAM_BROW_R_Y: -0.56, PARAM_BROW_R_X: -0.12, PARAM_BROW_R_ANGLE: 0.15, PARAM_BROW_R_FORM: -1.5, PARAM_BROW_L_Y: -0.56, PARAM_BROW_L_X: -0.12, PARAM_BROW_L_ANGLE: 0.15, PARAM_BROW_L_FORM: -1.5, PARAM_MOUTH_FORM_01: -0.5, PARAM_MOUTH_SCALE: -1 },
+    angry:        { PARAM_BROW_R_Y: -0.87, PARAM_BROW_R_X: -0.23, PARAM_BROW_R_ANGLE: -0.4, PARAM_BROW_R_FORM: -1, PARAM_BROW_L_Y: -0.87, PARAM_BROW_L_X: -0.23, PARAM_BROW_L_ANGLE: -0.4, PARAM_BROW_L_FORM: -1, PARAM_MOUTH_FORM_01: -1 },
+    furious:      { PARAM_EYE_BALL_Y: 0.18, PARAM_EYE_FORM: -1, PARAM_BROW_R_Y: -0.8, PARAM_BROW_R_X: -0.23, PARAM_BROW_R_ANGLE: -0.4, PARAM_BROW_R_FORM: -2.5, PARAM_BROW_L_Y: -0.8, PARAM_BROW_L_X: -0.23, PARAM_BROW_L_ANGLE: -0.4, PARAM_BROW_L_FORM: -2.5, PARAM_EYE_BROWS: 0.5, PARAM_MOUTH_FORM_01: -2.5, PARAM_MOUTH_SCALE: 0.57 },
+    question:     { PARAM_BROW_R_X: 0.12, PARAM_BROW_R_ANGLE: 0.21, PARAM_BROW_R_FORM: 2, PARAM_BROW_L_X: 0.12, PARAM_BROW_L_ANGLE: 0.21, PARAM_BROW_L_FORM: 2, PARAM_MOUTH_FORM_01: -0.5, PARAM_MOUTH_SCALE: -0.33 },
+    soft:         { PARAM_EYE_R_SMILE: 1, PARAM_EYE_L_SMILE: 1, PARAM_EYE_FORM: 1, PARAM_BROW_R_Y: 0.47, PARAM_BROW_R_X: 0.13, PARAM_BROW_R_ANGLE: 0.19, PARAM_BROW_R_FORM: 1.5, PARAM_BROW_L_Y: 0.47, PARAM_BROW_L_X: 0.13, PARAM_BROW_L_ANGLE: 0.19, PARAM_BROW_L_FORM: 1.5, PARAM_MOUTH_FORM_01: 0.5, PARAM_MOUTH_FORM_Y: -0.01 },
+    blush:        { PARAM_EYE_FORM: -0.35, PARAM_BROW_R_ANGLE: 0.49, PARAM_BROW_R_FORM: -2.5, PARAM_BROW_L_ANGLE: 0.49, PARAM_BROW_L_FORM: -2.5, PARAM_EYE_BROWS: 0.01, PARAM_MOUTH_FORM_01: -0.5, PARAM_CHEEK: 1, PARAM_CHEEK2: 0.35 },
+    annoyed:      { PARAM_EYE_FORM: 0.19, PARAM_BROW_R_Y: -0.58, PARAM_BROW_R_X: -0.23, PARAM_BROW_R_ANGLE: -0.05, PARAM_BROW_L_Y: -0.58, PARAM_BROW_L_X: -0.23, PARAM_BROW_L_ANGLE: -0.05, PARAM_MOUTH_FORM_01: -1 },
+    thinking:     { PARAM_EYE_FORM: -0.26, PARAM_BROW_R_Y: -0.35, PARAM_BROW_R_ANGLE: 0.02, PARAM_BROW_R_FORM: -3, PARAM_BROW_L_Y: -0.35, PARAM_BROW_L_ANGLE: 0.02, PARAM_BROW_L_FORM: -3, PARAM_MOUTH_FORM_01: -1 },
+    surprised:    { PARAM_BROW_R_Y: 0.49, PARAM_BROW_R_X: 0.12, PARAM_BROW_R_ANGLE: 0.31, PARAM_BROW_R_FORM: 2, PARAM_BROW_L_Y: 0.49, PARAM_BROW_L_X: 0.12, PARAM_BROW_L_ANGLE: 0.31, PARAM_BROW_L_FORM: 2, PARAM_MOUTH_FORM_01: -1, PARAM_MOUTH_SCALE: 0.21 },
+    disappointed: { PARAM_EYE_FORM: 0.35, PARAM_BROW_R_Y: -0.35, PARAM_BROW_R_ANGLE: 0.11, PARAM_BROW_R_FORM: -3, PARAM_BROW_L_Y: -0.35, PARAM_BROW_L_ANGLE: 0.11, PARAM_BROW_L_FORM: -3, PARAM_MOUTH_FORM_01: -3, PARAM_MOUTH_SCALE: -1 },
     eyes_closed:  { PARAM_EYE_L_OPEN: 0, PARAM_EYE_R_OPEN: 0 },
-    indifferent:  { PARAM_EYE_L_OPEN: 0.7, PARAM_EYE_R_OPEN: 0.7, PARAM_MOUTH_FORM: -0.2 },
-    side:         { PARAM_ANGLE_Y: 0.3, PARAM_ANGLE_Z: -0.1 },
-    winking:      { PARAM_EYE_L_OPEN: 1, PARAM_EYE_R_OPEN: 0, PARAM_EYE_SMILE: 0.5 },
+    indifferent:  { PARAM_EYE_FORM: 0.09, PARAM_BROW_R_Y: -0.42, PARAM_BROW_R_X: -0.23, PARAM_BROW_R_ANGLE: -0.4, PARAM_BROW_R_FORM: -1, PARAM_BROW_L_Y: -0.42, PARAM_BROW_L_X: -0.23, PARAM_BROW_L_ANGLE: -0.4, PARAM_BROW_L_FORM: -1, PARAM_MOUTH_FORM_01: -1 },
+    side:         { PARAM_BROW_R_Y: -0.32, PARAM_BROW_R_X: 0.08, PARAM_BROW_R_ANGLE: -0.2, PARAM_BROW_R_FORM: 0.5, PARAM_BROW_L_Y: -0.32, PARAM_BROW_L_X: 0.08, PARAM_BROW_L_ANGLE: -0.2, PARAM_BROW_L_FORM: 0.5, PARAM_MOUTH_FORM_01: 1.5 },
+    winking:      { PARAM_EYE_R_SMILE: 1, PARAM_EYE_L_SMILE: 1, PARAM_EYE_FORM: 0.22, PARAM_EYE_SCALE: 0.67, PARAM_BROW_R_Y: -0.08, PARAM_BROW_R_X: -0.23, PARAM_BROW_R_ANGLE: -0.12, PARAM_BROW_R_FORM: -2, PARAM_BROW_L_Y: -0.08, PARAM_BROW_L_X: -0.23, PARAM_BROW_L_ANGLE: -0.12, PARAM_BROW_L_FORM: -2, PARAM_MOUTH_FORM_01: 1.5, PARAM_CHEEK2: 0.58 },
     neutral:      {}
   }
 
-  // 说话动作幅度/速度
+  // 说话动作幅度/速度 —— 白祥(Sakiko)调教：
+  // 整体幅度上浮约 5~10%（较旧 kurisu 表更外放）；微笑/害羞/兴奋类情绪取 +10% 档，
+  // 其余取 +5~8% 档，保证优雅感的同时不至于缩手缩脚。
   var GESTURE = {
-    angry:        { amp: 1.4, speed: 1.25 },
-    furious:      { amp: 1.4, speed: 1.25 },
-    excited:      { amp: 1.25, speed: 1.15 },
-    elated:       { amp: 1.25, speed: 1.15 },
-    happy:        { amp: 1.1, speed: 1.05 },
-    sad:          { amp: 0.6, speed: 0.7 },
-    soft:         { amp: 0.7, speed: 0.8 },
-    question:     { amp: 0.9, speed: 0.9 },
-    blush:        { amp: 0.8, speed: 0.8 },
-    annoyed:      { amp: 1.2, speed: 1.1 },
-    thinking:     { amp: 0.7, speed: 0.6 },
-    surprised:    { amp: 1.3, speed: 1.3 },
-    disappointed: { amp: 0.55, speed: 0.65 },
-    eyes_closed:  { amp: 0.4, speed: 0.5 },
-    indifferent:  { amp: 0.5, speed: 0.7 },
-    side:         { amp: 0.55, speed: 0.6 },
-    winking:      { amp: 1.0, speed: 1.0 },
-    neutral:      { amp: 1, speed: 1 }
+    angry:        { amp: 1.5, speed: 1.25 },
+    furious:      { amp: 1.5, speed: 1.25 },
+    excited:      { amp: 1.38, speed: 1.15 },
+    elated:       { amp: 1.38, speed: 1.15 },
+    happy:        { amp: 1.21, speed: 1.05 },
+    sad:          { amp: 0.65, speed: 0.7 },
+    soft:         { amp: 0.77, speed: 0.8 },
+    question:     { amp: 0.99, speed: 0.9 },
+    blush:        { amp: 0.88, speed: 0.8 },
+    annoyed:      { amp: 1.3, speed: 1.1 },
+    thinking:     { amp: 0.77, speed: 0.6 },
+    surprised:    { amp: 1.4, speed: 1.3 },
+    disappointed: { amp: 0.6, speed: 0.65 },
+    eyes_closed:  { amp: 0.44, speed: 0.5 },
+    indifferent:  { amp: 0.55, speed: 0.7 },
+    side:         { amp: 0.6, speed: 0.6 },
+    winking:      { amp: 1.1, speed: 1.0 },
+    neutral:      { amp: 1.08, speed: 1 }
   }
 
   return {
