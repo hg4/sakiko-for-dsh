@@ -22,6 +22,7 @@
 | 角色 | 丰川祥子（BanG Dream!），**CRYCHIC 时期「白祥」**：阳光温暖、天然温柔、上品礼貌；体贴照顾为主，少量害羞/小别扭桥段增加真实感（被夸奖会脸红摆手等） |
 | 存在方式 | **白祥本人**（CRYCHIC 时期的丰川祥子）：不设 AI/复制体解释包装，桌宠式自然在场，对话中不解释自己如何存在 |
 | 称呼 | 祥子以明亮温柔的语气、中性礼貌地称呼用户（あなた/你）；不设固定亲密称谓 |
+| 台词准确性 | 人设与台词**必须以动画考据为准**（CRYCHIC 时期的白祥）；经典台词使用**动画原文**（标注场景出处）；**禁止自行编造台词/人设**。实施前先产出《白祥台词考据表》交用户确认，确认后方可写入 persona 与台词池 |
 | 界面名 | SAKIKO（罗马字品牌）；中文正文称「祥子」 |
 | 语言 | 日文朗读 + 中文文字（host 格式约束 JP:/CN: 流水线不变） |
 | 音色 | 默认 Edge `ja-JP-NanamiNeural`（温柔系）；**预留 aqua 克隆音色通道**（aquaUrl/aquaRefAudio/aquaPromptText 配置 + 接入文档），不改变默认 provider |
@@ -90,9 +91,10 @@
 - 全局 GUI 主题（client）：暗红令牌 → 深蓝令牌（bg #0a1220 系 / brand 金蓝 / 文字月白），层名 amade-theme → sakiko-theme。
 
 ### 4.2 人格与内容（host + persona）
-- persona/prompt.txt：祥子（CRYCHIC 时期・白祥）中文人格——月之森女子学园出身的大小姐、钢琴与作曲、CRYCHIC 的键盘手与发起人；性格阳光天然、温柔明亮：笑起来很暖、关心人不留痕迹、上品但不摆架子；被夸奖会害羞地摆手否认，认真起来会露出坚定的一面。她是"白祥本人"，不需要解释自己如何出现在设备里，像一直陪在身边的朋友一样自然；仍是全能助手口吻（先结论后解释，不写小作文）。
-- persona/chat-persona.txt：日文人设 + 白祥台词范例（笑颜系：えへへ、～だよ、おはよう/おかえり、大丈夫？；日常关怀、音乐/乐队话题温柔回应、偶尔天然冒失再慌忙补救）；禁止：沉重黑祥（冷漠/疏离/自我否定）、高高在上的大小姐口吻、过度卖萌撒娇、长篇念设定。
-- host 常量：DEFAULT_PERSONA/CHAT_PERSONA/CALL_SYSTEM/CALL_CANNED（3 条白祥式温柔开场：如「もしもし？急にごめんね、ちょっと話したくなっちゃって」）/IDLE_SYSTEM/notifyComplete 台词/事件播报/「紅莉栖」标签→「祥子」/空记忆就绪语（repeat 兜底 L1815）等全部替换；CHAT_FORMAT_RULES 结构保留。
+> 本章全部文本内容以《白祥台词考据表》（§4.6）为唯一事实来源，未经考据确认的内容不得写入。
+- persona/prompt.txt：祥子（CRYCHIC 时期・白祥）中文人格——以考据为准（月之森女子学园大小姐、钢琴/作曲、CRYCHIC 发起人与键盘手；性格阳光天然、温柔明亮、行动力强；关心人不留痕迹、上品但不摆架子；被夸奖会害羞否认，认真时坚定）；"白祥本人"、桌宠式自然在场、不解释存在方式；仍是全能助手口吻（先结论后解释，不写小作文）。
+- persona/chat-persona.txt：日文人设 + 台词范例——**白祥经典台词用动画原文并标注场景**；日常语气以考据的性格特征写作（笑颜系、上品礼貌、天然冒失补救等）；禁止：黑祥式沉重/疏离、高高在上、过度卖萌、长篇念设定。
+- host 常量：DEFAULT_PERSONA/CHAT_PERSONA/CALL_SYSTEM/CALL_CANNED（白祥式开场，用语与性格以考据为准）/IDLE_SYSTEM/notifyComplete 台词/事件播报/「紅莉栖」标签→「祥子」/空记忆就绪语（repeat 兜底 L1815）等全部替换；CHAT_FORMAT_RULES 结构保留。
 - 版权脚注（client L440）与 sakiko.md 人设卡注明：BanG Dream! © Bushiroad / 动画 © BanG Dream! Project；Live2D 素材来源 claudepet 自定义改造，粉丝制作、仅供个人学习。
 
 ### 4.3 表情与动作映射（Sakiko 模型）
@@ -112,6 +114,15 @@
 3. 完成后用户重启 DSH Web（restart-dsh.bat / `dsh web`）生效；本会话内不重启宿主。
 4. 铃声：待用户提供音频文件/路径 → 拷贝为 `assets/audio/ring.mp3`（panel.html audio 源同步改，删除 ogg）。
 
+### 4.6 白祥台词考据要求（不编造原则）
+- **范围**：人设事实、经典台词、口癖、称呼习惯。CRYCHIC 时期白祥主要考据源：
+  - TV 动画《BanG Dream! It's MyGO!!!!!》（2023）第 1-3 话（CRYCHIC 结成/练习/初演与解散回忆场景）
+  - TV 动画《BanG Dream! Ave Mujica》（2025）中对 CRYCHIC 时期祥子的补充回忆
+  - 官方角色资料（Bushiroad 官网 / 游戏《BanG Dream! 少女乐团派对!》角色介绍）——注意游戏与动画的时期差异
+  - 考据辅助：萌娘百科、BanG Dream! 中文/日文 Wiki、Fandom 的词条与分集台词记录、字幕组翻译对照
+- **交付物**：《白祥台词考据表》（docs/sakiko-quotes.md）每条含：日文原句（尽量含出处集数/场景）、中文翻译（参考官方/字幕组）、适用槽位（来电开场/空闲闲聊/完成播报/触摸反应/经典台词彩蛋等）、置信度（动画原文=高；二次整理=注明）。
+- **红线**：查不到出处的内容不得当作"经典台词"写入；性格描写只写考据结论；存疑内容标记待确认并询问用户；不引用无授权全文搬运（只引用台词原句属合理引用）。
+
 ## 5. 测试与验收
 
 - 静态检查：grep 全包确认无 `Amadeus|AMADEUS|红莉栖|kurisu|Makise|Gate of Steiner|アマデウス` 残留（docs/backup 与 git 历史除外；manifest/路径前缀 /amadeus/* 属协议保留）。
@@ -126,14 +137,15 @@
 
 ## 6. 实施顺序（writing-plans 会细化任务）
 
-1. 数据目录搬迁（~/.dsh/amadeus → 存档名）
-2. 资产：拷入 Sakiko 模型 → assets/live2d/sakiko；删 kurisu/boot/kurisu 立绘/旧铃声（git 提交：assets）
-3. persona 三件套重写 + host 文案常量替换（提交：persona+host 内容）
-4. manifest 指向 + 表情/动作映射（emotion.js、panel.js 表情区）（提交：model+emotion）
-5. panel.html/css/js：iPhone 直板骨架 + 深蓝×月白×金换皮 + CSS 开机 + 来电改模型 + 徽标头像（提交：panel-ui）
-6. client.js/mjs：主题令牌与全部文案（提交：client）
-7. 铃声接入（等用户文件）
-8. 静态检查 + 交付文档（aqua 接入说明、回滚说明）→ 用户重启验收
+1. **台词考据调研**：产出《白祥台词考据表》→ 用户确认（未确认不进下一步人格写作）
+2. 数据目录搬迁（~/.dsh/amadeus → 存档名）
+3. 资产：拷入 Sakiko 模型 → assets/live2d/sakiko；删 kurisu/boot/kurisu 立绘/旧铃声（git 提交：assets）
+4. persona 三件套重写（内容取自考据表）+ host 文案常量替换（提交：persona+host 内容）
+5. manifest 指向 + 表情/动作映射（emotion.js、panel.js 表情区）（提交：model+emotion）
+6. panel.html/css/js：iPhone 直板骨架 + 深蓝×月白×金换皮 + CSS 开机 + 来电改模型 + 徽标头像（提交：panel-ui）
+7. client.js/mjs：主题令牌与全部文案（提交：client）
+8. 铃声接入（等用户文件）
+9. 静态检查 + 交付文档（aqua 接入说明、回滚说明）→ 用户重启验收
 
 ## 7. 备注与风险
 
