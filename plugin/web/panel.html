@@ -3,49 +3,80 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AMADEUS</title>
+<title>SAKIKO</title>
 <link rel="stylesheet" href="/amadeus/web/panel.css">
 </head>
 <body>
   <div id="phone">
     <div id="screen">
+      <!-- ===== iPhone 灵动岛状态条（纯静态装饰；#screen-clock 为既有时钟元素，仅做 CSS 定位） ===== -->
+      <div id="sb-bar" class="sb-bar">
+        <div id="sb-island" class="sb-island" aria-hidden="true"></div>
+        <div id="sb-right" class="sb-right" aria-hidden="true"><i></i><i></i><i></i></div>
+      </div>
+
       <canvas id="amadeus-canvas"></canvas>
-      <img id="amadeus-img" alt="Makise Kurisu" hidden>
+      <img id="amadeus-img" alt="Sakiko" title="Sakiko" hidden>
       <div id="amadeus-placeholder" hidden>
-        <svg viewBox="0 0 200 240" xmlns="http://www.w3.org/2000/svg">
-          <path d="M100 30 C 60 30 40 70 38 130 C 36 180 48 230 100 230 C 152 230 164 180 162 130 C 160 70 140 30 100 30 Z" fill="#8c3b2e"/>
-          <path d="M55 150 L100 118 L145 150 L160 240 L40 240 Z" fill="#f2f2f2" stroke="#d8d8d8" stroke-width="1.5"/>
-          <path d="M96 140 L104 140 L110 170 L100 182 L90 170 Z" fill="#c0392b"/>
-          <path d="M70 140 L100 165 L130 140 L124 170 L100 158 L76 170 Z" fill="#e8e8e8"/>
-          <ellipse cx="100" cy="105" rx="42" ry="48" fill="#ffe9dc"/>
-          <path d="M60 90 C 60 55 90 42 100 42 C 112 42 140 56 140 90 C 130 66 112 60 100 62 C 86 60 70 66 60 90 Z" fill="#a3433b"/>
-          <ellipse cx="82" cy="108" rx="8" ry="6" fill="#4a6fa5"/>
-          <ellipse cx="118" cy="108" rx="8" ry="6" fill="#4a6fa5"/>
-          <circle cx="83" cy="107" r="2.5" fill="#1c2b3a"/>
-          <circle cx="119" cy="107" r="2.5" fill="#1c2b3a"/>
-          <ellipse cx="70" cy="122" rx="6" ry="3.5" fill="#f5b7a1" opacity="0.8"/>
-          <ellipse cx="130" cy="122" rx="6" ry="3.5" fill="#f5b7a1" opacity="0.8"/>
-          <path d="M92 128 Q100 134 108 128" stroke="#b26a5a" stroke-width="2" fill="none"/>
-          <path d="M100 42 Q 108 26 118 24 Q 110 32 108 44 Z" fill="#a3433b"/>
+        <svg viewBox="0 0 200 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sakiko 剪影占位">
+          <!-- 蓝发整体轮廓 -->
+          <path d="M100 30 C 58 30 40 68 37 130 C 35 182 46 232 100 232 C 154 232 165 182 163 130 C 160 68 142 30 100 30 Z" fill="#2b3a67"/>
+          <!-- 发丝层次 -->
+          <path d="M100 44 C 72 44 54 68 49 112 C 62 84 80 66 100 64 C 122 66 140 84 151 112 C 146 68 128 44 100 44 Z" fill="#3a4d80"/>
+          <!-- 月白长裙 -->
+          <path d="M56 152 L100 120 L144 152 L159 240 L41 240 Z" fill="#eef2fb"/>
+          <!-- 裙摆层次 -->
+          <path d="M100 226 L48 236 L56 152 L100 120 L144 152 L152 236 Z" fill="#dde6fa" opacity="0.5"/>
+          <!-- 金腰带 -->
+          <path d="M66 160 L100 143 L134 160 L130 174 L100 164 L70 174 Z" fill="#c9a86a"/>
+          <!-- 衣领金饰 -->
+          <path d="M93 124 L100 136 L107 124 L104 146 L100 150 L96 146 Z" fill="#c9a86a" opacity="0.9"/>
+          <!-- 脸 -->
+          <ellipse cx="100" cy="104" rx="40" ry="46" fill="#f7ead9"/>
+          <!-- 前发 -->
+          <path d="M62 92 C 62 54 90 40 100 40 C 114 40 138 54 138 92 C 126 68 110 60 100 62 C 88 60 74 68 62 92 Z" fill="#2b3a67"/>
+          <!-- 侧发 -->
+          <path d="M62 92 C 54 126 56 164 68 172 C 62 136 68 108 78 90 Z" fill="#2b3a67"/>
+          <path d="M138 92 C 146 126 144 164 132 172 C 138 136 132 108 122 90 Z" fill="#2b3a67"/>
+          <!-- 金发饰 -->
+          <circle cx="139" cy="64" r="5" fill="#c9a86a"/>
+          <circle cx="139" cy="64" r="2" fill="#0b1224" opacity="0.3"/>
+          <!-- 眼 -->
+          <ellipse cx="84" cy="106" rx="7.5" ry="5.2" fill="#8fb3ff"/>
+          <ellipse cx="116" cy="106" rx="7.5" ry="5.2" fill="#8fb3ff"/>
+          <circle cx="85.5" cy="107" r="2.2" fill="#0b1224"/>
+          <circle cx="117.5" cy="107" r="2.2" fill="#0b1224"/>
+          <circle cx="83.5" cy="104.5" r="1.2" fill="#eef2fb" opacity="0.9"/>
+          <circle cx="115.5" cy="104.5" r="1.2" fill="#eef2fb" opacity="0.9"/>
+          <!-- 眉 -->
+          <path d="M74 93 Q 82 89 92 92" stroke="#1b2746" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+          <path d="M126 93 Q 118 89 108 92" stroke="#1b2746" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+          <!-- 腮红 -->
+          <ellipse cx="70" cy="120" rx="5" ry="3" fill="#d9a08c" opacity="0.4"/>
+          <ellipse cx="130" cy="120" rx="5" ry="3" fill="#d9a08c" opacity="0.4"/>
+          <!-- 微笑 -->
+          <path d="M93 128 Q 100 134 107 128" stroke="#7c6a7d" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+          <!-- 呆毛 -->
+          <path d="M100 40 Q 108 24 118 22 Q 110 32 108 44 Z" fill="#2b3a67"/>
         </svg>
       </div>
 
       <div id="screen-clock">--:--</div>
 
-      <button id="close-btn" title="关闭 Amadeus 系统">×</button>
+      <button id="close-btn" title="关闭 SAKIKO 系统">×</button>
       <button id="calib-btn" title="L2D 校准" hidden>⚙</button>
 
       <div id="boot">
         <div class="boot-logo">
-          <img id="boot-logo-img" src="/amadeus/assets/img/boot/logo1.png" alt="AMADEUS">
+          <img id="boot-logo-img" src="/amadeus/assets/img/boot/logo1.png" alt="SAKIKO">
         </div>
-        <div class="boot-title">AMADEUS</div>
+        <div class="boot-title">SAKIKO</div>
         <div class="boot-lines">
           <div class="boot-line" id="boot-line1"></div>
           <div class="boot-line" id="boot-line2"></div>
           <div class="boot-line" id="boot-line3"></div>
         </div>
-        <div class="boot-loading">Loading Amadeus System...</div>
+        <div class="boot-loading">Loading Sakiko System...</div>
         <div class="boot-version">v1.0.0</div>
       </div>
 
@@ -55,9 +86,9 @@
 
       <div id="call-overlay" class="hidden">
         <div id="call-portrait-wrap">
-          <img id="call-portrait" src="/amadeus/assets/img/kurisu/sided_pleasant1.png" alt="Makise Kurisu">
+          <img id="call-portrait" src="/amadeus/assets/img/kurisu/sided_pleasant1.png" alt="Sakiko">
         </div>
-        <div class="call-name">AMADEUS</div>
+        <div class="call-name">SAKIKO</div>
         <div class="call-sub">着信中…</div>
         <div class="call-btns">
           <button id="call-accept" class="call-accept">応答</button>
@@ -68,8 +99,6 @@
       <div id="errline" class="hidden"></div>
       <div id="status-chip">● connecting…</div>
     </div>
-
-    <div id="hinge"><span class="hinge-l"></span><span class="hinge-r"></span></div>
 
     <div id="keypad">
       <div id="history"></div>
@@ -82,14 +111,14 @@
           </svg>
         </button>
         <button id="chat-lang" title="识别语言">中</button>
-        <input id="chat-input" type="text" placeholder="和 Amadeus 说话…" autocomplete="off">
+        <input id="chat-input" type="text" placeholder="和 Sakiko 说话…" autocomplete="off">
         <button id="chat-send" title="发送">➤</button>
       </div>
     </div>
   </div>
 
   <audio id="ring-audio" loop preload="none">
-    <source src="/amadeus/assets/audio/ringtone_gate_of_steiner.ogg" type="audio/ogg">
+    <!-- ring.mp3 为占位铃声；待用户铃声文件就绪后，在下方追加第二个 <source> -->
     <source src="/amadeus/assets/audio/ring.mp3" type="audio/mpeg">
   </audio>
 
