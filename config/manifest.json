@@ -1,7 +1,7 @@
 {
   "models": [
     {
-      "url": "/amadeus/assets/live2d/kurisu/kurisu.model.json",
+      "url": "/amadeus/assets/live2d/sakiko/model.json",
       "format": "cubism2",
       "scale": 1,
       "layout": {
@@ -10,7 +10,7 @@
         "y": 0,
         "yRatio": 0.62
       },
-      "note": "local BaiduNetdisk kurisu"
+      "note": "Sakiko (Togawa Sakiko, BanG Dream!) casual 2023 — from claudepet custom character"
     }
   ],
   "image": "",
