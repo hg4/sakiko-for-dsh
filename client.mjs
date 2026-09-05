@@ -1,6 +1,6 @@
 // ============================================================
-// Amadeus for DSH — Client half (v3)
-// 功能：暗红全局主题；牧濑红莉栖 Live2D 常驻右侧栏（details 列）；
+// SAKIKO（丰川祥子）for DSH — Client half (v3)
+// 功能：深蓝全局主题；丰川祥子 Live2D 常驻右侧栏（details 列）；
 //   设置页；侧边栏打开按钮；配置与状态轮询。
 // 说明：本文件内容即动态 Cordis 插件的 client 函数体（return {...}）。
 // ============================================================
@@ -32,14 +32,14 @@ export function apply(ctx) {
       ".amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(163,67,59,.45),rgba(163,67,59,.12));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}" +
       ".amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}" +
       ".amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#f2e9e6);font-size:13px;}" +
-      ".amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#9a8f8b);margin-right:auto;}" +
+      ".amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}" +
       ".amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}" +
       ".amad-btn:hover{background:rgba(255,255,255,.18);}" +
       ".amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}" +
-      ".amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#8d8380);border-top:1px solid rgba(255,255,255,.08);flex:none;}" +
+      ".amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#7688ad);border-top:1px solid rgba(255,255,255,.08);flex:none;}" +
       ".amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}" +
       ".amad-settings-label{font-weight:600;}" +
-      ".amad-settings-desc{font-size:12px;color:#9a8f8b;margin-top:2px;}" +
+      ".amad-settings-desc{font-size:12px;color:#a8b6d8;margin-top:2px;}" +
       ".amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}" +
       ".amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}" +
       ".amad-settings-btn:hover{background:rgba(128,128,128,.15);}" +
@@ -49,29 +49,29 @@ export function apply(ctx) {
     )
     ctx.effect(() => removeCss)
 
-    // ---------------- Amadeus 全局主题（强制暗红：light/dark 均取暗色） ----------------
+    // ---------------- SAKIKO 全局主题（强制深蓝：light/dark 均取暗色） ----------------
     const theme = ctx.get('theme')
-    const AMADEUS_TOKENS = {
-      '--dsw-alias-bg-base': { light: '#170b0e', dark: '#170b0e' },
-      '--dsw-alias-bg-layer-1': { light: '#200f13', dark: '#200f13' },
-      '--dsw-alias-bg-layer-2': { light: '#2a1419', dark: '#2a1419' },
-      '--dsw-alias-bg-overlay': { light: '#331a20', dark: '#331a20' },
-      '--dsw-alias-border-l1': { light: '#42262c', dark: '#42262c' },
-      '--dsw-alias-border-l2': { light: '#5a333c', dark: '#5a333c' },
-      '--dsw-alias-brand-primary': { light: '#e0604f', dark: '#e0604f' },
-      '--dsw-alias-label-primary': { light: '#f2e4e1', dark: '#f2e4e1' },
-      '--dsw-alias-label-secondary': { light: '#b49a93', dark: '#b49a93' },
-      '--dsw-alias-state-error-primary': { light: '#ff6f61', dark: '#ff6f61' },
+    const SAKIKO_TOKENS = {
+      '--dsw-alias-bg-base': { light: '#0a1020', dark: '#0a1020' },
+      '--dsw-alias-bg-layer-1': { light: '#0f1830', dark: '#0f1830' },
+      '--dsw-alias-bg-layer-2': { light: '#141f3a', dark: '#141f3a' },
+      '--dsw-alias-bg-overlay': { light: '#1a2747', dark: '#1a2747' },
+      '--dsw-alias-border-l1': { light: '#26365c', dark: '#26365c' },
+      '--dsw-alias-border-l2': { light: '#3a4f7f', dark: '#3a4f7f' },
+      '--dsw-alias-brand-primary': { light: '#8fb3ff', dark: '#8fb3ff' },
+      '--dsw-alias-label-primary': { light: '#eef2fb', dark: '#eef2fb' },
+      '--dsw-alias-label-secondary': { light: '#a8b6d8', dark: '#a8b6d8' },
+      '--dsw-alias-state-error-primary': { light: '#ff7b6b', dark: '#ff7b6b' },
       '--dsw-alias-state-success-primary': { light: '#7fd47f', dark: '#7fd47f' },
       '--dsw-alias-state-warn-primary': { light: '#e0a06a', dark: '#e0a06a' },
-      '--dsw-specific-sidebar-fill': { light: '#1a0c10', dark: '#1a0c10' },
+      '--dsw-specific-sidebar-fill': { light: '#080d1a', dark: '#080d1a' },
     }
     let themeLayer = null
     function applyTheme(on) {
       if (theme === undefined) return
       if (on && themeLayer === null) {
         try {
-          themeLayer = theme.overrideTokens('amade-theme', AMADEUS_TOKENS)
+          themeLayer = theme.overrideTokens('sakiko-theme', SAKIKO_TOKENS)
         } catch (e) {
           console.error('[amadeus] 主题覆盖失败', e)
           themeLayer = null
@@ -153,7 +153,7 @@ export function apply(ctx) {
             openDetailsSafe()
           }
           if (res.callPending !== true) lastCallPending = false
-          // 面板请求关闭 Amadeus 系统 → 收起右侧栏并确认
+          // 面板请求关闭 SAKIKO 系统 → 收起右侧栏并确认
           if (typeof res.pendingClose === 'number' && res.pendingClose !== lastPendingClose) {
             lastPendingClose = res.pendingClose
             try { if (layout) layout.closeDetails() } catch (e) { /* ignore */ }
@@ -238,8 +238,8 @@ export function apply(ctx) {
       return null
     }
 
-    // ---------------- 右侧栏 Amadeus 列 ----------------
-    function AmadeusColumn() {
+    // ---------------- 右侧栏 SAKIKO 列 ----------------
+    function SakikoColumn() {
       const config = useStore(configStore)
       const status = useStore(statusStore)
 
@@ -268,7 +268,7 @@ export function apply(ctx) {
         React.createElement('iframe', {
           className: 'amad-frame',
           src: panelSrc,
-          title: 'Amadeus Live2D',
+          title: 'Sakiko Live2D',
           allow: 'microphone; camera; autoplay',
           ref: (el) => { iframeEl = el },
         }),
@@ -327,27 +327,27 @@ export function apply(ctx) {
       })
     }
 
-    function AmadeusSettings() {
+    function SakikoSettings() {
       const config = useStore(configStore)
       const status = useStore(statusStore)
       if (!config) {
         return React.createElement('div', null,
-          React.createElement('div', { className: 'amad-settings-row' }, React.createElement('span', null, status.error ? '⚠ 无法连接 Amadeus Host：' + status.error : '正在连接 Amadeus Host…')),
+          React.createElement('div', { className: 'amad-settings-row' }, React.createElement('span', null, status.error ? '⚠ 无法连接 SAKIKO Host：' + status.error : '正在连接 SAKIKO Host…')),
         )
       }
-      const group = (title) => React.createElement('div', { style: { marginTop: '18px', marginBottom: '4px', fontSize: '12px', fontWeight: 700, letterSpacing: '1px', color: '#d98a7d', textTransform: 'uppercase' } }, title)
+      const group = (title) => React.createElement('div', { style: { marginTop: '18px', marginBottom: '4px', fontSize: '12px', fontWeight: 700, letterSpacing: '1px', color: '#c9a86a', textTransform: 'uppercase' } }, title)
       const idleOptions = [[300000, '5 分钟'], [600000, '10 分钟'], [1200000, '20 分钟（默认）'], [1800000, '30 分钟'], [3600000, '60 分钟']]
       const callOptions = [[7200000, '2 小时'], [21600000, '6 小时'], [36000000, '10 小时（默认）'], [86400000, '24 小时']]
       const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 1200000
       const pickCall = (v) => callOptions.find((o) => o[0] === v) ? v : 36000000
       return React.createElement('div', null,
         group('基本开关'),
-        Row({ label: '语音朗读', desc: '助手回复自动由 Amadeus 朗读', control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
-        Row({ label: 'AI 聊天', desc: '右栏底部与 Amadeus 直接对话（日语音频 + 中文文字，带长期记忆）', control: Check({ checked: config.chatOn !== false, onChange: (v) => patchConfig({ chatOn: v }) }) }),
+        Row({ label: '语音朗读', desc: '助手回复自动由 SAKIKO 朗读', control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
+        Row({ label: 'AI 聊天', desc: '右栏底部与 SAKIKO 直接对话（日语音频 + 中文文字，带长期记忆）', control: Check({ checked: config.chatOn !== false, onChange: (v) => patchConfig({ chatOn: v }) }) }),
         Row({ label: '主动来电', desc: '她每天像原作一样主动「打电话」给你（来电铃音 + 震屏）', control: Check({ checked: config.callOn !== false, onChange: (v) => patchConfig({ callOn: v }) }) }),
         Row({ label: '空闲闲聊', desc: '长时间不互动时，她主动找话题开口说话', control: Check({ checked: config.idleChatOn !== false, onChange: (v) => patchConfig({ idleChatOn: v }) }) }),
-        Row({ label: '红莉栖人格注入', desc: '让 Agent 以 Amadeus（红莉栖）口吻回答，作用于所有会话', control: Check({ checked: config.personaOn === true, onChange: (v) => patchConfig({ personaOn: v }) }) }),
-        Row({ label: 'Amadeus 全局主题', desc: '整套 GUI 强制暗红 Amadeus 配色（插件停止后自动还原）', control: Check({ checked: config.themeOn !== false, onChange: (v) => patchConfig({ themeOn: v }) }) }),
+        Row({ label: '祥子人格注入', desc: '让 Agent 以祥子口吻回答，作用于所有会话', control: Check({ checked: config.personaOn === true, onChange: (v) => patchConfig({ personaOn: v }) }) }),
+        Row({ label: 'SAKIKO 全局主题', desc: '整套 GUI 强制深蓝 SAKIKO 配色（插件停止后自动还原）', control: Check({ checked: config.themeOn !== false, onChange: (v) => patchConfig({ themeOn: v }) }) }),
 
         group('AI 聊天（独立 API，留空则用 DSH 默认模型）'),
         Row({ label: 'API 地址', desc: 'OpenAI 兼容格式', control: TextInput({ value: config.chatBaseUrl, placeholder: 'https://api.deepseek.com/v1', onChange: (v) => patchConfig({ chatBaseUrl: v }) }) }),
@@ -374,7 +374,7 @@ export function apply(ctx) {
         Row({ label: '来电间隔', control: Select({ value: pickCall(config.callIntervalMs), options: callOptions, onChange: (v) => patchConfig({ callIntervalMs: Number(v) }) }) }),
 
         React.createElement('div', { style: { marginTop: '16px' } },
-          React.createElement('button', { className: 'amad-settings-btn', onClick: () => rpcSay('アマデウス、準備完了。') }, '💬 测试语音'),
+          React.createElement('button', { className: 'amad-settings-btn', onClick: () => rpcSay('祥子、準備完了。') }, '💬 测试语音'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: async () => { const r = await rpcTestChat(); window.alert(r && r.ok ? 'AI API OK: ' + r.content : 'AI API Error: ' + (r && r.error ? r.error : 'unknown')) } }, '🔌 测试 AI API'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: rpcRepeat }, '↺ 重播上一条'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: rpcClear }, '🧹 清空队列'),
@@ -383,12 +383,12 @@ export function apply(ctx) {
           React.createElement('button', { className: 'amad-settings-btn', onClick: () => { if (layout) layout.closeDetails() } }, '🚫 关闭右侧栏'),
         ),
         React.createElement('div', { className: 'amad-settings-row', style: { marginTop: '10px' } },
-          React.createElement('span', { style: { fontSize: '12px', color: '#9a8f8b' } },
+          React.createElement('span', { style: { fontSize: '12px', color: '#a8b6d8' } },
             status.error ? '⚠ host 不可达'
               : ('● ' + (status.tts || '…') + ' · 队列 ' + status.queue + (status.callPending ? ' · 📞 来电中' : '')),
           ),
         ),
-        React.createElement('div', { className: 'amad-warn' }, '注意：右侧栏为 Amadeus 专用，原「工具详情」面板在插件运行期间被替代，停止插件后恢复。牧濑红莉栖角色版权归 MAGES./Nitroplus；Live2D 模型与语音素材为粉丝制作，仅供个人学习，禁止商用。'),
+        React.createElement('div', { className: 'amad-warn' }, '注意：右侧栏为 SAKIKO（丰川祥子）专用，原「工具详情」面板在插件运行期间被替代，停止插件后恢复。角色版权归 Bushiroad/BanG Dream! 项目；Live2D 模型为粉丝制作，仅供个人学习。'),
       )
     }
 
@@ -399,28 +399,28 @@ export function apply(ctx) {
         React.createElement(RootPoller),
         React.createElement('button', {
           className: 'amad-sb-btn',
-          title: '打开 Amadeus 右侧栏',
+          title: '打开 SAKIKO 右侧栏',
           onClick: () => { notifyOpen(); if (layout) layout.openDetails() },
-        }, wide ? 'Amadeus' : 'A'),
+        }, wide ? 'SAKIKO' : 'S'),
       )
     }
 
     // ---------------- 槽位注册 ----------------
     slots.inject('details', () => slots.register(
       { name: 'details', priority: -1 },
-      () => React.createElement(AmadeusColumn),
+      () => React.createElement(SakikoColumn),
     ))
 
     slots.inject('sidebar.footer.action', () => slots.register(
-      { name: 'sidebar.footer.action', id: 'amadeus', order: 50, label: 'Amadeus' },
+      { name: 'sidebar.footer.action', id: 'amadeus', order: 50, label: 'SAKIKO' },
       (props) => React.createElement(SidebarToggle, props),
     ))
 
     slots.inject('settings.section', () => slots.register(
-      { name: 'settings.section', id: 'amadeus', order: 90, label: 'Amadeus' },
+      { name: 'settings.section', id: 'amadeus', order: 90, label: 'SAKIKO' },
       () => React.createElement('div', null,
-        React.createElement('h2', null, 'Amadeus'),
-        React.createElement(AmadeusSettings),
+        React.createElement('h2', null, 'SAKIKO'),
+        React.createElement(SakikoSettings),
       ),
     ))
 

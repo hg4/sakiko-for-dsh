@@ -58,31 +58,31 @@ function apply(ctx) {
     };
   }
   const removeCss = domCss(
-    ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}.amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(163,67,59,.45),rgba(163,67,59,.12));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}.amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}.amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#f2e9e6);font-size:13px;}.amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#9a8f8b);margin-right:auto;}.amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}.amad-btn:hover{background:rgba(255,255,255,.18);}.amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}.amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#8d8380);border-top:1px solid rgba(255,255,255,.08);flex:none;}.amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}.amad-settings-label{font-weight:600;}.amad-settings-desc{font-size:12px;color:#9a8f8b;margin-top:2px;}.amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}.amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}.amad-settings-btn:hover{background:rgba(128,128,128,.15);}.amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}.amad-sb-btn:hover{background:rgba(128,128,128,.15);}.amad-warn{margin-top:14px;font-size:12px;color:#b08968;}"
+    ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}.amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(163,67,59,.45),rgba(163,67,59,.12));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}.amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}.amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#f2e9e6);font-size:13px;}.amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}.amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}.amad-btn:hover{background:rgba(255,255,255,.18);}.amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}.amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#7688ad);border-top:1px solid rgba(255,255,255,.08);flex:none;}.amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}.amad-settings-label{font-weight:600;}.amad-settings-desc{font-size:12px;color:#a8b6d8;margin-top:2px;}.amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}.amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}.amad-settings-btn:hover{background:rgba(128,128,128,.15);}.amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}.amad-sb-btn:hover{background:rgba(128,128,128,.15);}.amad-warn{margin-top:14px;font-size:12px;color:#b08968;}"
   );
   ctx.effect(() => removeCss);
   const theme = ctx.get("theme");
-  const AMADEUS_TOKENS = {
-    "--dsw-alias-bg-base": { light: "#170b0e", dark: "#170b0e" },
-    "--dsw-alias-bg-layer-1": { light: "#200f13", dark: "#200f13" },
-    "--dsw-alias-bg-layer-2": { light: "#2a1419", dark: "#2a1419" },
-    "--dsw-alias-bg-overlay": { light: "#331a20", dark: "#331a20" },
-    "--dsw-alias-border-l1": { light: "#42262c", dark: "#42262c" },
-    "--dsw-alias-border-l2": { light: "#5a333c", dark: "#5a333c" },
-    "--dsw-alias-brand-primary": { light: "#e0604f", dark: "#e0604f" },
-    "--dsw-alias-label-primary": { light: "#f2e4e1", dark: "#f2e4e1" },
-    "--dsw-alias-label-secondary": { light: "#b49a93", dark: "#b49a93" },
-    "--dsw-alias-state-error-primary": { light: "#ff6f61", dark: "#ff6f61" },
+  const SAKIKO_TOKENS = {
+    "--dsw-alias-bg-base": { light: "#0a1020", dark: "#0a1020" },
+    "--dsw-alias-bg-layer-1": { light: "#0f1830", dark: "#0f1830" },
+    "--dsw-alias-bg-layer-2": { light: "#141f3a", dark: "#141f3a" },
+    "--dsw-alias-bg-overlay": { light: "#1a2747", dark: "#1a2747" },
+    "--dsw-alias-border-l1": { light: "#26365c", dark: "#26365c" },
+    "--dsw-alias-border-l2": { light: "#3a4f7f", dark: "#3a4f7f" },
+    "--dsw-alias-brand-primary": { light: "#8fb3ff", dark: "#8fb3ff" },
+    "--dsw-alias-label-primary": { light: "#eef2fb", dark: "#eef2fb" },
+    "--dsw-alias-label-secondary": { light: "#a8b6d8", dark: "#a8b6d8" },
+    "--dsw-alias-state-error-primary": { light: "#ff7b6b", dark: "#ff7b6b" },
     "--dsw-alias-state-success-primary": { light: "#7fd47f", dark: "#7fd47f" },
     "--dsw-alias-state-warn-primary": { light: "#e0a06a", dark: "#e0a06a" },
-    "--dsw-specific-sidebar-fill": { light: "#1a0c10", dark: "#1a0c10" }
+    "--dsw-specific-sidebar-fill": { light: "#080d1a", dark: "#080d1a" }
   };
   let themeLayer = null;
   function applyTheme(on) {
     if (theme === void 0) return;
     if (on && themeLayer === null) {
       try {
-        themeLayer = theme.overrideTokens("amade-theme", AMADEUS_TOKENS);
+        themeLayer = theme.overrideTokens("sakiko-theme", SAKIKO_TOKENS);
       } catch (e) {
         console.error("[amadeus] \u4E3B\u9898\u8986\u76D6\u5931\u8D25", e);
         themeLayer = null;
@@ -270,7 +270,7 @@ function apply(ctx) {
     }, []);
     return null;
   }
-  function AmadeusColumn() {
+  function SakikoColumn() {
     const config = useStore(configStore);
     const status = useStore(statusStore);
     import_react.default.useEffect(() => {
@@ -304,7 +304,7 @@ function apply(ctx) {
       import_react.default.createElement("iframe", {
         className: "amad-frame",
         src: panelSrc,
-        title: "Amadeus Live2D",
+        title: "Sakiko Live2D",
         allow: "microphone; camera; autoplay",
         ref: (el) => {
           iframeEl = el;
@@ -364,17 +364,17 @@ function apply(ctx) {
       style: { flex: 1, minWidth: 0, border: "1px solid rgba(128,128,128,.4)", borderRadius: "6px", padding: "4px 8px", background: "transparent", color: "inherit" }
     });
   }
-  function AmadeusSettings() {
+  function SakikoSettings() {
     const config = useStore(configStore);
     const status = useStore(statusStore);
     if (!config) {
       return import_react.default.createElement(
         "div",
         null,
-        import_react.default.createElement("div", { className: "amad-settings-row" }, import_react.default.createElement("span", null, status.error ? "\u26A0 \u65E0\u6CD5\u8FDE\u63A5 Amadeus Host\uFF1A" + status.error : "\u6B63\u5728\u8FDE\u63A5 Amadeus Host\u2026"))
+        import_react.default.createElement("div", { className: "amad-settings-row" }, import_react.default.createElement("span", null, status.error ? "\u26A0 \u65E0\u6CD5\u8FDE\u63A5 SAKIKO Host\uFF1A" + status.error : "\u6B63\u5728\u8FDE\u63A5 SAKIKO Host\u2026"))
       );
     }
-    const group = (title) => import_react.default.createElement("div", { style: { marginTop: "18px", marginBottom: "4px", fontSize: "12px", fontWeight: 700, letterSpacing: "1px", color: "#d98a7d", textTransform: "uppercase" } }, title);
+    const group = (title) => import_react.default.createElement("div", { style: { marginTop: "18px", marginBottom: "4px", fontSize: "12px", fontWeight: 700, letterSpacing: "1px", color: "#c9a86a", textTransform: "uppercase" } }, title);
     const idleOptions = [[3e5, "5 \u5206\u949F"], [6e5, "10 \u5206\u949F"], [12e5, "20 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [18e5, "30 \u5206\u949F"], [36e5, "60 \u5206\u949F"]];
     const callOptions = [[72e5, "2 \u5C0F\u65F6"], [216e5, "6 \u5C0F\u65F6"], [36e6, "10 \u5C0F\u65F6\uFF08\u9ED8\u8BA4\uFF09"], [864e5, "24 \u5C0F\u65F6"]];
     const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 12e5;
@@ -383,12 +383,12 @@ function apply(ctx) {
       "div",
       null,
       group("\u57FA\u672C\u5F00\u5173"),
-      Row({ label: "\u8BED\u97F3\u6717\u8BFB", desc: "\u52A9\u624B\u56DE\u590D\u81EA\u52A8\u7531 Amadeus \u6717\u8BFB", control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
-      Row({ label: "AI \u804A\u5929", desc: "\u53F3\u680F\u5E95\u90E8\u4E0E Amadeus \u76F4\u63A5\u5BF9\u8BDD\uFF08\u65E5\u8BED\u97F3\u9891 + \u4E2D\u6587\u6587\u5B57\uFF0C\u5E26\u957F\u671F\u8BB0\u5FC6\uFF09", control: Check({ checked: config.chatOn !== false, onChange: (v) => patchConfig({ chatOn: v }) }) }),
+      Row({ label: "\u8BED\u97F3\u6717\u8BFB", desc: "\u52A9\u624B\u56DE\u590D\u81EA\u52A8\u7531 SAKIKO \u6717\u8BFB", control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
+      Row({ label: "AI \u804A\u5929", desc: "\u53F3\u680F\u5E95\u90E8\u4E0E SAKIKO \u76F4\u63A5\u5BF9\u8BDD\uFF08\u65E5\u8BED\u97F3\u9891 + \u4E2D\u6587\u6587\u5B57\uFF0C\u5E26\u957F\u671F\u8BB0\u5FC6\uFF09", control: Check({ checked: config.chatOn !== false, onChange: (v) => patchConfig({ chatOn: v }) }) }),
       Row({ label: "\u4E3B\u52A8\u6765\u7535", desc: "\u5979\u6BCF\u5929\u50CF\u539F\u4F5C\u4E00\u6837\u4E3B\u52A8\u300C\u6253\u7535\u8BDD\u300D\u7ED9\u4F60\uFF08\u6765\u7535\u94C3\u97F3 + \u9707\u5C4F\uFF09", control: Check({ checked: config.callOn !== false, onChange: (v) => patchConfig({ callOn: v }) }) }),
       Row({ label: "\u7A7A\u95F2\u95F2\u804A", desc: "\u957F\u65F6\u95F4\u4E0D\u4E92\u52A8\u65F6\uFF0C\u5979\u4E3B\u52A8\u627E\u8BDD\u9898\u5F00\u53E3\u8BF4\u8BDD", control: Check({ checked: config.idleChatOn !== false, onChange: (v) => patchConfig({ idleChatOn: v }) }) }),
-      Row({ label: "\u7EA2\u8389\u6816\u4EBA\u683C\u6CE8\u5165", desc: "\u8BA9 Agent \u4EE5 Amadeus\uFF08\u7EA2\u8389\u6816\uFF09\u53E3\u543B\u56DE\u7B54\uFF0C\u4F5C\u7528\u4E8E\u6240\u6709\u4F1A\u8BDD", control: Check({ checked: config.personaOn === true, onChange: (v) => patchConfig({ personaOn: v }) }) }),
-      Row({ label: "Amadeus \u5168\u5C40\u4E3B\u9898", desc: "\u6574\u5957 GUI \u5F3A\u5236\u6697\u7EA2 Amadeus \u914D\u8272\uFF08\u63D2\u4EF6\u505C\u6B62\u540E\u81EA\u52A8\u8FD8\u539F\uFF09", control: Check({ checked: config.themeOn !== false, onChange: (v) => patchConfig({ themeOn: v }) }) }),
+      Row({ label: "\u7965\u5B50\u4EBA\u683C\u6CE8\u5165", desc: "\u8BA9 Agent \u4EE5\u7965\u5B50\u53E3\u543B\u56DE\u7B54\uFF0C\u4F5C\u7528\u4E8E\u6240\u6709\u4F1A\u8BDD", control: Check({ checked: config.personaOn === true, onChange: (v) => patchConfig({ personaOn: v }) }) }),
+      Row({ label: "SAKIKO \u5168\u5C40\u4E3B\u9898", desc: "\u6574\u5957 GUI \u5F3A\u5236\u6DF1\u84DD SAKIKO \u914D\u8272\uFF08\u63D2\u4EF6\u505C\u6B62\u540E\u81EA\u52A8\u8FD8\u539F\uFF09", control: Check({ checked: config.themeOn !== false, onChange: (v) => patchConfig({ themeOn: v }) }) }),
       group("AI \u804A\u5929\uFF08\u72EC\u7ACB API\uFF0C\u7559\u7A7A\u5219\u7528 DSH \u9ED8\u8BA4\u6A21\u578B\uFF09"),
       Row({ label: "API \u5730\u5740", desc: "OpenAI \u517C\u5BB9\u683C\u5F0F", control: TextInput({ value: config.chatBaseUrl, placeholder: "https://api.deepseek.com/v1", onChange: (v) => patchConfig({ chatBaseUrl: v }) }) }),
       Row({ label: "\u6A21\u578B\u540D", control: TextInput({ value: config.chatModel, placeholder: "deepseek-chat", onChange: (v) => patchConfig({ chatModel: v }) }) }),
@@ -412,7 +412,7 @@ function apply(ctx) {
       import_react.default.createElement(
         "div",
         { style: { marginTop: "16px" } },
-        import_react.default.createElement("button", { className: "amad-settings-btn", onClick: () => rpcSay("\u30A2\u30DE\u30C7\u30A6\u30B9\u3001\u6E96\u5099\u5B8C\u4E86\u3002") }, "\u{1F4AC} \u6D4B\u8BD5\u8BED\u97F3"),
+        import_react.default.createElement("button", { className: "amad-settings-btn", onClick: () => rpcSay("\u7965\u5B50\u3001\u6E96\u5099\u5B8C\u4E86\u3002") }, "\u{1F4AC} \u6D4B\u8BD5\u8BED\u97F3"),
         import_react.default.createElement("button", { className: "amad-settings-btn", onClick: async () => {
           const r = await rpcTestChat();
           window.alert(r && r.ok ? "AI API OK: " + r.content : "AI API Error: " + (r && r.error ? r.error : "unknown"));
@@ -433,11 +433,11 @@ function apply(ctx) {
         { className: "amad-settings-row", style: { marginTop: "10px" } },
         import_react.default.createElement(
           "span",
-          { style: { fontSize: "12px", color: "#9a8f8b" } },
+          { style: { fontSize: "12px", color: "#a8b6d8" } },
           status.error ? "\u26A0 host \u4E0D\u53EF\u8FBE" : "\u25CF " + (status.tts || "\u2026") + " \xB7 \u961F\u5217 " + status.queue + (status.callPending ? " \xB7 \u{1F4DE} \u6765\u7535\u4E2D" : "")
         )
       ),
-      import_react.default.createElement("div", { className: "amad-warn" }, "\u6CE8\u610F\uFF1A\u53F3\u4FA7\u680F\u4E3A Amadeus \u4E13\u7528\uFF0C\u539F\u300C\u5DE5\u5177\u8BE6\u60C5\u300D\u9762\u677F\u5728\u63D2\u4EF6\u8FD0\u884C\u671F\u95F4\u88AB\u66FF\u4EE3\uFF0C\u505C\u6B62\u63D2\u4EF6\u540E\u6062\u590D\u3002\u7267\u6FD1\u7EA2\u8389\u6816\u89D2\u8272\u7248\u6743\u5F52 MAGES./Nitroplus\uFF1BLive2D \u6A21\u578B\u4E0E\u8BED\u97F3\u7D20\u6750\u4E3A\u7C89\u4E1D\u5236\u4F5C\uFF0C\u4EC5\u4F9B\u4E2A\u4EBA\u5B66\u4E60\uFF0C\u7981\u6B62\u5546\u7528\u3002")
+      import_react.default.createElement("div", { className: "amad-warn" }, "\u6CE8\u610F\uFF1A\u53F3\u4FA7\u680F\u4E3A SAKIKO\uFF08\u4E30\u5DDD\u7965\u5B50\uFF09\u4E13\u7528\uFF0C\u539F\u300C\u5DE5\u5177\u8BE6\u60C5\u300D\u9762\u677F\u5728\u63D2\u4EF6\u8FD0\u884C\u671F\u95F4\u88AB\u66FF\u4EE3\uFF0C\u505C\u6B62\u63D2\u4EF6\u540E\u6062\u590D\u3002\u89D2\u8272\u7248\u6743\u5F52 Bushiroad/BanG Dream! \u9879\u76EE\uFF1BLive2D \u6A21\u578B\u4E3A\u7C89\u4E1D\u5236\u4F5C\uFF0C\u4EC5\u4F9B\u4E2A\u4EBA\u5B66\u4E60\u3002")
     );
   }
   function SidebarToggle(props) {
@@ -448,29 +448,29 @@ function apply(ctx) {
       import_react.default.createElement(RootPoller),
       import_react.default.createElement("button", {
         className: "amad-sb-btn",
-        title: "\u6253\u5F00 Amadeus \u53F3\u4FA7\u680F",
+        title: "\u6253\u5F00 SAKIKO \u53F3\u4FA7\u680F",
         onClick: () => {
           notifyOpen();
           if (layout) layout.openDetails();
         }
-      }, wide ? "Amadeus" : "A")
+      }, wide ? "SAKIKO" : "S")
     );
   }
   slots.inject("details", () => slots.register(
     { name: "details", priority: -1 },
-    () => import_react.default.createElement(AmadeusColumn)
+    () => import_react.default.createElement(SakikoColumn)
   ));
   slots.inject("sidebar.footer.action", () => slots.register(
-    { name: "sidebar.footer.action", id: "amadeus", order: 50, label: "Amadeus" },
+    { name: "sidebar.footer.action", id: "amadeus", order: 50, label: "SAKIKO" },
     (props) => import_react.default.createElement(SidebarToggle, props)
   ));
   slots.inject("settings.section", () => slots.register(
-    { name: "settings.section", id: "amadeus", order: 90, label: "Amadeus" },
+    { name: "settings.section", id: "amadeus", order: 90, label: "SAKIKO" },
     () => import_react.default.createElement(
       "div",
       null,
-      import_react.default.createElement("h2", null, "Amadeus"),
-      import_react.default.createElement(AmadeusSettings)
+      import_react.default.createElement("h2", null, "SAKIKO"),
+      import_react.default.createElement(SakikoSettings)
     )
   ));
   applyTheme(true);
