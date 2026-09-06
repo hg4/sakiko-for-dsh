@@ -357,6 +357,7 @@ export function apply(ctx) {
         group('语音合成'),
         Row({ label: 'TTS 通道', desc: '为保证声线统一，默认不自动切换音色', control: Select({ value: config.provider, options: [['edge', 'Edge TTS（默认，稳定）'], ['voicevox', '本地 VOICEVOX'], ['quest', 'VOICEVOX 公共 API'], ['aqua', '本地 Aqua-TTS / GPT-SoVITS'], ['openai', 'OpenAI 兼容 TTS'], ['auto', '自动（Aqua→VOICEVOX，仅在显式开启时切公共）']], onChange: (v) => patchConfig({ provider: v }) }) }),
         Row({ label: '音色', control: Select({ value: config.voiceName, options: VOICES, onChange: (v) => patchConfig({ voiceName: v }) }) }),
+        Row({ label: '合成档位（aqua）', desc: '本地祥子音色的采样步数：极速更快，精细更稳（当前音色: ' + (config.aquaVoice || 'sakiko') + '）', control: Select({ value: config.aquaPreset || 'balanced', options: [['fast', '极速（6步）'], ['balanced', '标准（10步）'], ['quality', '精细（16步）']], onChange: (v) => patchConfig({ aquaPreset: v }) }) }),
         Row({ label: '语速', control: Select({ value: config.rate, options: RATES.map((r) => [r, r]), onChange: (v) => patchConfig({ rate: v }) }) }),
         Row({ label: '音调', control: Select({ value: config.pitch, options: PITCHES.map((p) => [p, p]), onChange: (v) => patchConfig({ pitch: v }) }) }),
         Row({ label: '情绪强度', desc: '放大/减弱情绪 prosody（0.5~2.0，默认 1.0）', control: Select({ value: String(config.emotionIntensity || 1.0), options: [['0.5', '0.5（克制）'], ['0.75', '0.75'], ['1', '1.0（默认）'], ['1.2', '1.2（稍夸张）'], ['1.5', '1.5（夸张）'], ['2', '2.0（极夸张）']], onChange: (v) => patchConfig({ emotionIntensity: Number(v) }) }) }),
