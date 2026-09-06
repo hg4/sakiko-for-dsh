@@ -401,6 +401,10 @@
     try { window.localStorage.setItem('amadeus.unlocked', '1') } catch (e) { /* ignore */ }
   }
 
+  // Task7 解锁问候台词（docs/sakiko-quotes.md A6-1，A6 主推，标注【原创·依考据风格】可直用）：
+  // 语音解锁后第一句日文朗读——时段中性、不点名、语气明亮（うれしいですわ）。
+  // 原 kurisu「ふふっ、呼んだ？」为 Kurisu 素材台词，已随素材下线，不沿用。
+  var UNLOCK_GREETING_JA = '呼んでくださったのですね。うれしいですわ'
   function unlockAction() {
     if (unlocked) return
     hideUnlock()
@@ -409,10 +413,7 @@
     ensureAudioEl()
     attachAnalyser()
     if (actx && actx.state === 'suspended') { try { actx.resume() } catch (e) { /* ignore */ } }
-    // TODO(Task7 考据台词填充 docs/sakiko-quotes.md)：解锁问候台词待考据后填入，
-    // 项目红线：不得自编台词，未定稿前不播报任何解锁台词。
-    // 原 kurisu 台词「ふふっ、呼んだ？」已随 Amadeus 素材下线，不沿用。
-    // if (UNLOCK_GREETING_JA) enqueue(UNLOCK_GREETING_JA, true, 'happy')
+    if (UNLOCK_GREETING_JA) enqueue(UNLOCK_GREETING_JA, true, 'happy')
   }
   unlockBtn.addEventListener('click', unlockAction)
   screenEl.addEventListener('click', unlockAction)
@@ -1250,12 +1251,22 @@
     window.requestAnimationFrame(loop)
   }
 
-  // TODO(Task7 考据台词填充 docs/sakiko-quotes.md)：触摸台词池内容一律置空，
-  // 项目红线：不得自编台词。原 kurisu 触摸台词已随 Amadeus 素材下线，不沿用。
-  // 空池时 playTap 只做动作/表情反应、不播报台词。
+  // Task7 考据台词填充完成（docs/sakiko-quotes.md A7 节，均为白祥语域）：
+  //  - head（点头/轻拍头＝被摸头）→ A7-1 害羞推辞（原文直用）＋ A7-4 惊讶害羞（原创）；
+  //  - body（摸/拍身体＝被突然触碰）→ A7-2/A7-3 短促惊讶轻呼（节选，作低频短反应）。
+  // A7 全为摸头/点头语义、无专门"摸身体"台词 → 两池按上述语义就近分配（差异见 7b 报告）。
+  // playTap 只朗读 pick.jp 并以 pick.emotion 驱动表情，不生成历史气泡 → 不填 cn
+  // （enqueue 签名带 cn 可选参数，但该路径不消费，按「CN 缺失不用」红线不硬塞）。
+  // 空池保护逻辑保留：若未来候选被抽空，playTap 空池时仍只做动作/表情、不播报台词。
   var TAP_LINES = {
-    head: [],
-    body: []
+    head: [
+      { jp: 'お… おかまいなく', emotion: 'blush' }, // A7-1 摸头·害羞（原文直用 MyGO#3 00:05:06）
+      { jp: 'まあ… 急にどうしましたの？ 照れますわ', emotion: 'blush' } // A7-4 摸头·害羞（原创·依考据风格）
+    ],
+    body: [
+      { jp: 'あら', emotion: 'surprised' }, // A7-2 点头·惊讶（节选 MyGO#3 00:04:43）
+      { jp: 'まあ', emotion: 'surprised' } // A7-3 摸头·惊讶（节选 MyGO#3 00:04:55）
+    ]
   }
 
   function playTap(area) {
