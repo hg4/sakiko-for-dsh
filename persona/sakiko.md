@@ -52,8 +52,8 @@
 
 ## 考据来源文件清单
 
-- `G:\workspace\docs\sakiko-quotes.md`——白祥台词考据表（A 槽位候选／B 范例池／C お嬢様語规则／D 排除清单／待核区）
-- `G:\workspace\豊川祥子_角色档案_考据版.md`——角色档案（官网正文、明示/整理/推断分级、来源 URL 列表）
-- `G:\workspace\docs\superpowers\specs\2026-09-06-sakiko-reskin-design.md`——SAKIKO Reskin 设计文档（§2 决策表、§4.2 人格要求）
-- `G:\workspace\_sakiko_research\pair_*.txt`——动画双源对照字幕（时间码＋日文＋中文，台词原文口径）
+- `sakiko-quotes.md`——白祥台词考据表（A 槽位候选／B 范例池／C お嬢様語规则／D 排除清单／待核区）
+- `豊川祥子_角色档案_考据版.md`——角色档案（官网正文、明示/整理/推断分级、来源 URL 列表）
+- `2026-09-06-sakiko-reskin-design.md`——SAKIKO Reskin 设计文档（§2 决策表、§4.2 人格要求）
+- `_sakiko_research/pair_*.txt`——动画双源对照字幕（时间码＋日文＋中文，台词原文口径）
 - 动画官网角色页・全话梗概（MyGO/AM，见角色档案来源 URL 列表）

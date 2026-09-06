@@ -1,5 +1,5 @@
 /* ============================================================
- * Amadeus iframe panel — 红色翻盖手机（v10 重构版）
+ * SAKIKO iframe panel — 豊川祥子（白祥・CRYCHIC 期）iPhone 直板（v10 重构版）
  *
  * 主要改进：
  *  - Live2D 常驻动画循环：呼吸/眨眼/眼球/头部/身体平滑自然动作
@@ -161,6 +161,9 @@
     resetBootAnim()
     // Task5-R1: 开机浮层期间门控 #keypad（可见性由 panel.css state-boot 规则处理）
     phoneEl.classList.add('state-boot')
+    // Task9a: 浮层门控下若输入框仍聚焦会盲打 → 主动失焦
+    var ae = document.activeElement
+    if (ae && ae.blur) ae.blur()
     typeBootLines()
   }
 
@@ -400,7 +403,13 @@
 
   // ---------------- 解锁 ----------------
   // Task5-R1: 解锁浮层显示/隐藏时成对门控 #keypad
-  function showUnlock() { unlockEl.classList.remove('hidden'); phoneEl.classList.add('state-unlock') }
+  function showUnlock() {
+    unlockEl.classList.remove('hidden')
+    phoneEl.classList.add('state-unlock')
+    // Task9a: 浮层门控下若输入框仍聚焦会盲打 → 主动失焦
+    var ae = document.activeElement
+    if (ae && ae.blur) ae.blur()
+  }
   function hideUnlock() { unlockEl.classList.add('hidden'); phoneEl.classList.remove('state-unlock') }
   function markUnlocked() {
     unlocked = true
@@ -436,6 +445,9 @@
     callOverlay.classList.remove('hidden')
     // Task5-R1: 来电浮层显示期间门控 #keypad
     phoneEl.classList.add('state-call')
+    // Task9a: 浮层门控下若输入框仍聚焦会盲打 → 主动失焦
+    var ae = document.activeElement
+    if (ae && ae.blur) ae.blur()
     ringing = true
     // Task5 来电改模型直出：不再按情绪切换 kurisu 立绘 src（#call-portrait / kurisu/*.png
     // 旧素材已下线）。来电时保持 canvas 模型可见、overlay 半透明显示模型——
