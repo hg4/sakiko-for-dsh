@@ -412,7 +412,7 @@ function apply(ctx) {
       import_react.default.createElement(
         "div",
         { style: { marginTop: "16px" } },
-        import_react.default.createElement("button", { className: "amad-settings-btn", onClick: () => rpcSay("\u7965\u5B50\u3001\u6E96\u5099\u5B8C\u4E86\u3002") }, "\u{1F4AC} \u6D4B\u8BD5\u8BED\u97F3"),
+        import_react.default.createElement("button", { className: "amad-settings-btn", onClick: () => rpcSay("\u7533\u3057\u9045\u308C\u307E\u3057\u305F \u79C1 \u8C4A\u5DDD\u7965\u5B50\u3068\u7533\u3057\u307E\u3059") }, "\u{1F4AC} \u6D4B\u8BD5\u8BED\u97F3"),
         import_react.default.createElement("button", { className: "amad-settings-btn", onClick: async () => {
           const r = await rpcTestChat();
           window.alert(r && r.ok ? "AI API OK: " + r.content : "AI API Error: " + (r && r.error ? r.error : "unknown"));

@@ -374,7 +374,7 @@ export function apply(ctx) {
         Row({ label: '来电间隔', control: Select({ value: pickCall(config.callIntervalMs), options: callOptions, onChange: (v) => patchConfig({ callIntervalMs: Number(v) }) }) }),
 
         React.createElement('div', { style: { marginTop: '16px' } },
-          React.createElement('button', { className: 'amad-settings-btn', onClick: () => rpcSay('祥子、準備完了。') }, '💬 测试语音'),
+          React.createElement('button', { className: 'amad-settings-btn', onClick: () => rpcSay('申し遅れました 私 豊川祥子と申します') }, '💬 测试语音'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: async () => { const r = await rpcTestChat(); window.alert(r && r.ok ? 'AI API OK: ' + r.content : 'AI API Error: ' + (r && r.error ? r.error : 'unknown')) } }, '🔌 测试 AI API'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: rpcRepeat }, '↺ 重播上一条'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: rpcClear }, '🧹 清空队列'),
