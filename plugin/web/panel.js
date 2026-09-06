@@ -13,6 +13,7 @@
 
   var $ = function (id) { return document.getElementById(id) }
   var screenEl = $('screen')
+  var phoneEl = $('phone') // Task5-R1: 浮层门控的 state-* class 挂在机身 #phone 上
   var canvas = $('amadeus-canvas')
   var imgEl = $('amadeus-img')
   var placeholderEl = $('amadeus-placeholder')
@@ -158,6 +159,8 @@
 
   function startBootAnimation() {
     resetBootAnim()
+    // Task5-R1: 开机浮层期间门控 #keypad（可见性由 panel.css state-boot 规则处理）
+    phoneEl.classList.add('state-boot')
     typeBootLines()
   }
 
@@ -175,6 +178,8 @@
       return
     }
     boot.classList.add('off')
+    // Task5-R1: 开机完成（浮层隐藏）→ 解除 #keypad 门控，成对移除 state-boot
+    phoneEl.classList.remove('state-boot')
   }
 
   startBootAnimation()
@@ -394,8 +399,9 @@
   }
 
   // ---------------- 解锁 ----------------
-  function showUnlock() { unlockEl.classList.remove('hidden') }
-  function hideUnlock() { unlockEl.classList.add('hidden') }
+  // Task5-R1: 解锁浮层显示/隐藏时成对门控 #keypad
+  function showUnlock() { unlockEl.classList.remove('hidden'); phoneEl.classList.add('state-unlock') }
+  function hideUnlock() { unlockEl.classList.add('hidden'); phoneEl.classList.remove('state-unlock') }
   function markUnlocked() {
     unlocked = true
     try { window.localStorage.setItem('amadeus.unlocked', '1') } catch (e) { /* ignore */ }
@@ -428,6 +434,8 @@
     currentCallItem = item
     lastInteractionAt = Date.now()
     callOverlay.classList.remove('hidden')
+    // Task5-R1: 来电浮层显示期间门控 #keypad
+    phoneEl.classList.add('state-call')
     ringing = true
     // Task5 来电改模型直出：不再按情绪切换 kurisu 立绘 src（#call-portrait / kurisu/*.png
     // 旧素材已下线）。来电时保持 canvas 模型可见、overlay 半透明显示模型——
@@ -444,6 +452,8 @@
   function stopCall() {
     ringing = false
     callOverlay.classList.add('hidden')
+    // Task5-R1: 来电结束 → 解除 #keypad 门控，成对移除 state-call
+    phoneEl.classList.remove('state-call')
     try { ringAudio.pause(); ringAudio.currentTime = 0 } catch (e) { /* ignore */ }
     try { if (navigator.vibrate) navigator.vibrate(0) } catch (e) { /* ignore */ }
   }

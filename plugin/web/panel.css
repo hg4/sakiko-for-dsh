@@ -490,10 +490,18 @@ button { font-family: inherit; }
   height: 34px;
   flex: none;
   border-radius: 50%;
-  display: block;
-  object-fit: cover;
-  /* 用 S 徽章 SVG 替换旧 logo 位图 */
-  content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cdefs%3E%3CradialGradient id='g' cx='35%25' cy='30%25' r='85%25'%3E%3Cstop offset='0' stop-color='%231d2f57'/%3E%3Cstop offset='1' stop-color='%230b1224'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='20' cy='20' r='19' fill='url(%23g)'/%3E%3Ccircle cx='20' cy='20' r='17.6' fill='none' stroke='%23c9a86a' stroke-width='1.7'/%3E%3Ctext x='20' y='26.5' text-anchor='middle' font-family='Arial, sans-serif' font-size='19' font-weight='700' fill='%23eef2fb'%3ES%3C/text%3E%3C/svg%3E");
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Task5-R1: 已移除旧 SVG content 覆盖 <img> 的非标准技巧（仅 Chromium>=118 支持）。
+     JS 侧 makeAvatar() 现生成 <span class="msg-avatar">S</span> 文本头像，
+     圆徽视觉（圆形、金边、深蓝渐变底、白字 S）改用普通 CSS 呈现。 */
+  background: radial-gradient(circle at 35% 30%, #1d2f57 0%, #0b1224 100%);
+  border: 1.7px solid #c9a86a;
+  color: #eef2fb;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
 }
 .msg .bubble {
   min-width: 0;
@@ -606,3 +614,15 @@ button { font-family: inherit; }
   line-height: 22px;
 }
 #chat-input::placeholder { color: rgba(168, 182, 216, 0.6); }
+
+/* ============ Task5-R1：浮层期间门控聊天区 ============
+   #keypad 是 #screen 的兄弟节点（占机身 45%）；开机动画（#boot）、语音解锁（#unlock）、
+   来电（#call-overlay）浮层只覆盖 #screen（上 55%），期间 #keypad 仍可见可交互。
+   由 panel.js 在浮层显示/隐藏时成对增删 #phone 上的 state-boot / state-unlock / state-call，
+   此处用 visibility 而非 display：保留 #keypad 占位与内部布局，浮层收起后无跳动。 */
+#phone.state-boot #keypad,
+#phone.state-unlock #keypad,
+#phone.state-call #keypad {
+  visibility: hidden;
+  pointer-events: none;
+}
