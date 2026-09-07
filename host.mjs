@@ -976,25 +976,33 @@ export function apply(ctx) {
       scheduleWarmTts()
     }
 
-    // 播报（欢迎语/完成/事件）采用「先合成语音、后同发文字+语音」策略：
-    // 语音进入缓存后 push 队列 → 面板取到条目时音频立即可播，气泡与声音基本同步。
+    // 通用同步出声：所有宿主发起的固定话语（播报/来电/空闲/指令朗读）统一走这里。
+    // 先合成进 TTS 缓存，成功后才把条目推给面板 → 气泡与语音基本同帧；合成失败仅文字（无声=自检信号）。
+    async function speakSynced(jp, cn, emotion, kind, tags) {
+      const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
+      try {
+        await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
+      } catch (e) {
+        console.warn('[amadeus] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e))
+      }
+      if (kind === 'call') {
+        pushCall(jp, emo, cn || '')
+      } else {
+        pushUtterances([jp], kind === 'force', emo, cn || '', tags || {})
+      }
+    }
+
+    // 播报（欢迎语/完成/事件）走 speakSynced：语音就绪后同发气泡+声音。
     async function announce(jp, cn, emotion) {
       const now = Date.now()
-      const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
       const cnText = (typeof cn === 'string' && cn.length > 0) ? cn : jp
       // 播报留痕对话区（无论语音开关都记录；对话区显示中文 cn）
-      memory.history.push({ role: 'assistant', jp, cn: cnText, emotion: emo, announce: true, t: now })
+      memory.history.push({ role: 'assistant', jp, cn: cnText, emotion: emotion || 'neutral', announce: true, t: now })
       if (memory.history.length > 60) maybeCompactHistory()
       if (config.voiceOn !== true) return
       if (now - lastAnnounceAt < 8000) return
       lastAnnounceAt = now
-      // 先确保 TTS 合成完毕（入缓存），失败仅告警、仍下发文本气泡（无语音=自检信号）
-      try {
-        await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
-      } catch (e) {
-        console.warn('[amadeus] 播报合成失败（仅显示文字）:', e && e.message ? e.message : String(e))
-      }
-      pushUtterances([jp], true, emo, cnText, { announce: true })
+      await speakSynced(jp, cnText, emotion || 'neutral', 'force', { announce: true })
     }
 
     // 任务完成：只报一次「完成」（语音说日文、对话区记中文）。
@@ -1311,7 +1319,7 @@ export function apply(ctx) {
         memory.history.push({ role: 'assistant', jp: line.jp, cn: line.cn, emotion: line.emotion, call: true, t: Date.now() })
         if (memory.history.length > 60) maybeCompactHistory()
         scheduleSaveMemory()
-        pushCall(line.jp, line.emotion, line.cn)
+        await speakSynced(line.jp, line.cn, line.emotion, 'call')
         console.log('[amadeus] 主动来电:', line.jp)
       } catch (e) {
         console.error('[amadeus] 主动来电失败:', e && e.message ? e.message : e)
@@ -1343,7 +1351,7 @@ export function apply(ctx) {
         memory.history.push({ role: 'assistant', jp: line.jp, cn: line.cn, emotion: line.emotion, idle: true, t: Date.now() })
         if (memory.history.length > 60) maybeCompactHistory()
         scheduleSaveMemory()
-        pushUtterances([line.jp], false, line.emotion, line.cn, { idle: true })
+        await speakSynced(line.jp, line.cn, line.emotion, 'idle', { idle: true })
         console.log('[amadeus] 空闲闲聊:', line.jp)
       } catch (e) {
         console.error('[amadeus] 空闲闲聊失败:', e && e.message ? e.message : e)
@@ -1817,6 +1825,10 @@ export function apply(ctx) {
       const text = args && typeof args.text === 'string' ? args.text : ''
       const sentences = splitSentences(text)
       if (sentences.length === 0) return { ok: false }
+      // 逐句先合成再入队，保证点到即有声音（不出现队列先行、声音干等）
+      for (const s of sentences) {
+        try { await synthesize(s, config.voiceName, config.rate, config.pitch, emotionFor(s)) } catch (e) { /* 合成失败跳过，面板侧无声=链路自检 */ }
+      }
       pushUtterances(sentences, true, emotionFor(text))
       lastSpokenText = text.trim()
       return { ok: true, count: sentences.length }
@@ -1826,6 +1838,9 @@ export function apply(ctx) {
       let text = lastSpokenText
       if (text.length === 0) text = '申し遅れました 私 豊川祥子と申します'
       const sentences = splitSentences(text)
+      for (const s of sentences) {
+        try { await synthesize(s, config.voiceName, config.rate, config.pitch, emotionFor(s)) } catch (e) { /* ignore */ }
+      }
       pushUtterances(sentences, true, emotionFor(text))
       return { ok: true, count: sentences.length }
     }))
