@@ -1196,6 +1196,10 @@ export function apply(ctx) {
       if (config.narratorLLMSummary !== true) return null
       const now = Date.now()
       if (now - (narrState.lastLLMAt || 0) < NARR_LLM_GAP_MS) return null
+      // 进入即登记 lastLLMAt（先于本函数首个 await）：以“启动时刻”卡 8s 门，
+      // 两个并发 LLM 总结的第二个必在门处被拦；失败返回 null 不回滚已登记时间（宁可少跑 LLM 不多烧 token）。
+      narrState.lastLLMAt = now
+      scheduleSaveNarrator()
       const o = opts && typeof opts === 'object' ? opts : {}
       const userMsg = String(o.userMsg || narrState.lastUserText || '').slice(0, 200)
       const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (narrState.toolNames || {})
@@ -1224,7 +1228,6 @@ export function apply(ctx) {
         const parsed = parseStructured(raw)
         if (typeof parsed.jp !== 'string' || parsed.jp.trim().length === 0) return null
         if (NARR_LLM_EMOTIONS.indexOf(parsed.emotion) < 0) return null
-        narrState.lastLLMAt = Date.now()
         if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrState.lastSummary = parsed.cn.slice(0, 120)
         scheduleSaveNarrator()
         return { jp: parsed.jp, cn: parsed.cn || parsed.jp, emotion: parsed.emotion }
@@ -1291,21 +1294,53 @@ export function apply(ctx) {
     }
 
     // 决定台词 → 留痕 → 出声（speakSynced 队列串行，不叠播）
+    // Fix R1：门检查与占位登记全部同步完成于本函数首个 await 之前——
+    // flushNarrBatch 对 deliverNarration 是 fire-and-forget，两个 deliver 可真实并发；
+    // JS 单线程下，只要 lastSpokeByIntent/lastDoneFamilyAt 的登记先于任一 await，
+    // 并发第二个必在门处被拦（lastLLMAt 的登记在 narrateSummary 入口，同样先于其 await）。
     async function deliverNarration(intent, opts) {
       const now = Date.now()
-      // done/goal 完成语义 8s 互斥：窗口内只响一次（更高语义由同批优先级保证；先到先得近似旧 announce 8s 窗）
-      if (opts.force !== true && (intent === 'done' || intent === 'goal')) {
-        if (now - lastDoneFamilyAt < NARR_INTENT_GAP_MS) return
+      const force = opts.force === true
+      let mySameAt = 0
+      let myFamilyAt = 0
+      // 同步门 + 同步占位登记（模板路径与 LLM 路径共用同一占位语义）
+      if (!force) {
+        if (intent === 'done' || intent === 'goal') {
+          // done/goal 完成语义 8s 互斥（先到先得近似旧 announce 8s 窗；更高语义由同批优先级保证）
+          if (now - lastDoneFamilyAt < NARR_INTENT_GAP_MS) return
+          lastDoneFamilyAt = now
+          myFamilyAt = now
+        }
+        // 同意图 8s 合并：受理即占位（8s 从“受理”起算，而非发声后）
+        const last = lastSpokeByIntent.get(intent)
+        if (typeof last === 'number' && now - last < NARR_INTENT_GAP_MS) return
+        lastSpokeByIntent.set(intent, now)
+        mySameAt = now
       }
       let line = null
       let source = 'template'
-      if ((intent === 'done' || intent === 'milestone') && opts.noLLM !== true) {
-        const llm = await narrateSummary(intent, opts)
+      const llmEligible = (intent === 'done' || intent === 'milestone') && opts.noLLM !== true
+      const llmAttempted = llmEligible
+      if (llmEligible) {
+        const llm = await narrateSummary(intent, opts) // lastLLMAt 于 narrateSummary 入口登记（先于其 await）
         if (llm !== null) { line = llm; source = 'llm' }
       }
       if (line === null) {
         line = pickNarrLine(intent, opts)
         if (line === null) return
+      }
+      // LLM 返回后重核窗口：占位已被更新的同意图/同族发声取代，或窗口已过期（慢 LLM），
+      // 则放弃本次发声（模板兜底同样放弃——若为取代则模板会重复；若为过期则宁缺毋滥）。
+      // milestone 若被随后登记的 done/goal 完成语义接管（turn/end 在里程碑 LLM 在飞时到达）也让位，
+      // 避免“还在进行中”落在“完成”之后（优先级 DONE20 > MILESTONE10 的同一语义）。
+      if (llmAttempted && !force) {
+        const now2 = Date.now()
+        const sameReplaced = lastSpokeByIntent.get(intent) !== mySameAt
+        const familyReplaced = myFamilyAt !== 0 && lastDoneFamilyAt !== myFamilyAt
+        const doneTookOver = (intent !== 'done' && intent !== 'goal') && myFamilyAt === 0 &&
+          lastDoneFamilyAt !== 0 && lastDoneFamilyAt >= mySameAt
+        if (sameReplaced || familyReplaced || doneTookOver) return
+        if (now2 - mySameAt >= NARR_INTENT_GAP_MS) return
       }
       // 留痕对话历史（沿用 announce 语义：无论语音开关都记录）
       const cnText = (typeof line.cn === 'string' && line.cn.length > 0) ? line.cn : line.jp
@@ -1316,10 +1351,6 @@ export function apply(ctx) {
       if (lastNarrSpeaks.length > 8) lastNarrSpeaks.shift()
       scheduleSaveNarrator()
       if (config.voiceOn !== true) return
-      if (opts.force !== true) {
-        lastSpokeByIntent.set(intent, Date.now())
-        if (intent === 'done' || intent === 'goal') lastDoneFamilyAt = Date.now()
-      }
       await speakSynced(line.jp, cnText, line.emotion || 'neutral', 'force', { announce: true, narrate: intent })
     }
 
