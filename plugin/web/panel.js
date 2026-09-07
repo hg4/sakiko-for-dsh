@@ -420,15 +420,23 @@
   // 语音解锁后第一句日文朗读——时段中性、不点名、语气明亮（うれしいですわ）。
   // 原 kurisu「ふふっ、呼んだ？」为 Kurisu 素材台词，已随素材下线，不沿用。
   var UNLOCK_GREETING_JA = '呼んでくださったのですね。うれしいですわ'
+  var unlockGreeted = false
   function unlockAction() {
-    if (unlocked) return
+    // 点击本身就是新用户手势：无论此前是否解锁都先隐藏浮层并重试播放
     hideUnlock()
-    markUnlocked()
+    var firstUnlock = !unlocked
+    if (firstUnlock) markUnlocked()
     lastInteractionAt = Date.now()
     ensureAudioEl()
     attachAnalyser()
     if (actx && actx.state === 'suspended') { try { actx.resume() } catch (e) { /* ignore */ } }
-    if (UNLOCK_GREETING_JA) enqueue(UNLOCK_GREETING_JA, true, 'happy')
+    if (!unlockGreeted) {
+      unlockGreeted = true
+      if (UNLOCK_GREETING_JA) enqueue(UNLOCK_GREETING_JA, true, 'happy')
+    } else {
+      // 已解锁但自动播放被拦（unlocked=true 也会弹浮层）：点击恢复播放入队语音
+      pump()
+    }
   }
   unlockBtn.addEventListener('click', unlockAction)
   screenEl.addEventListener('click', unlockAction)
