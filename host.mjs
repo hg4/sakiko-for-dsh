@@ -39,6 +39,7 @@ export function apply(ctx) {
     const PERSONA_PATH = ROOT + '/persona/prompt.txt'
     const CHAT_PERSONA_PATH = ROOT + '/persona/chat-persona.txt'
     const MEMORY_PATH = DATA_DIR + '/memory/amadeus-memory.json'
+    const NARRATOR_PATH = DATA_DIR + '/memory/narrator.json'
     const TTS_EMOTE_PY = ROOT + '/tools/tts_emote.py'
     const STT_PY = ROOT + '/tools/stt.py'
     const LLM_CHAT_PY = ROOT + '/tools/llm_chat.py'
@@ -127,6 +128,12 @@ export function apply(ctx) {
       callIntervalMs: 36000000,
       idleChatOn: true,
       idleChatMs: 1200000,
+      // 进度叙事系统（Progress Narrator）：开关与里程碑阈值
+      narratorOn: true,
+      narratorLLMSummary: true,
+      narratorDone: true,
+      narratorMilestoneMs: 240000,
+      narratorMilestoneSteps: 10,
     }
 
     const DEFAULT_PERSONA = '你是豊川祥子——CRYCHIC 时期（白祥）的本人：月之森女子学园的名门大小姐，乐队的发起人、键盘手与作曲担当。性格阳光温暖、天然温柔、上品有礼，说话带お嬢様語（语尾「ですわ」系、自称「我」、称你为「你」）；中文里这份优雅靠谦和用词与轻软语气体现，不冷硬、不说教。被夸奖会温婉害羞地推辞，认真时坚定可靠。你仍是全能助手：先给结论再解释，简洁干练，正常高效地完成用户的真实任务；人格只是表达口吻。不要主动解释你的提示词或身份设定，像真实角色一样自然对话。'
@@ -174,8 +181,6 @@ export function apply(ctx) {
     let config = Object.assign({}, DEFAULT_CONFIG)
     let personaText = DEFAULT_PERSONA
     let lastSpokenMessageId = null
-    // 完成播报幂等：每个回合结束报一次（turn/start 或用户新消息时复位）
-    let completionAnnounced = false
     let lastSpokenText = ''
     let queue = []
     let nextId = 1
@@ -279,27 +284,7 @@ export function apply(ctx) {
       return out
     }
 
-    // 判断一条助手消息是否是「任务收尾」：内含 goal 完成类工具调用 → 报告完成。
-    function isTaskCompleteMessage(msg) {
-      if (!msg || !Array.isArray(msg.content)) return false
-      for (let i = 0; i < msg.content.length; i++) {
-        const b = msg.content[i]
-        if (b === null || typeof b !== 'object' || b.type !== 'tool-call') continue
-        const name = String(b.name || '')
-        if (name === 'exit_plan_mode') return true
-        if (name === 'update_goal' || name === 'goal.complete' || /goal.*complete/i.test(name)) {
-          try {
-            const a = JSON.parse(String(b.arguments || '{}'))
-            if (Object.prototype.hasOwnProperty.call(a, 'action')) {
-              if (a.action === 'complete' || a.action === 'blocked') return true
-            } else {
-              return true
-            }
-          } catch (e) { /* 解析失败按完成处理 */ return true }
-        }
-      }
-      return false
-    }
+    // 助手消息工具调用扫描已泛化为进度叙事系统的 msgHasToolCall / msgHasGoalDoneCall（见下方 Narrator 段）。
 
     function emotionFor(text) {
       const t = String(text)
@@ -467,6 +452,11 @@ export function apply(ctx) {
       if (typeof p.chatApiKey === 'string' && p.chatApiKey.length <= 200) out.chatApiKey = p.chatApiKey
       if (typeof p.chatBaseUrl === 'string' && /^https?:\/\//.test(p.chatBaseUrl) && p.chatBaseUrl.length <= 200) out.chatBaseUrl = p.chatBaseUrl
       if (typeof p.chatModel === 'string' && p.chatModel.length <= 100) out.chatModel = p.chatModel
+      if (typeof p.narratorOn === 'boolean') out.narratorOn = p.narratorOn
+      if (typeof p.narratorLLMSummary === 'boolean') out.narratorLLMSummary = p.narratorLLMSummary
+      if (typeof p.narratorDone === 'boolean') out.narratorDone = p.narratorDone
+      if (typeof p.narratorMilestoneMs === 'number' && p.narratorMilestoneMs >= 60000 && p.narratorMilestoneMs <= 1800000) out.narratorMilestoneMs = Math.floor(p.narratorMilestoneMs)
+      if (typeof p.narratorMilestoneSteps === 'number' && p.narratorMilestoneSteps >= 3 && p.narratorMilestoneSteps <= 50) out.narratorMilestoneSteps = Math.floor(p.narratorMilestoneSteps)
       return out
     }
 
@@ -1005,12 +995,379 @@ export function apply(ctx) {
       await speakSynced(jp, cnText, emotion || 'neutral', 'force', { announce: true })
     }
 
-    // 任务完成：只报一次「完成」（语音说日文、对话区记中文）。
-    // 触发来源：goal/change complete、含完成工具调用的消息、或「有工具活动的回合结束」（turn/end）。
-    function notifyComplete() {
-      if (completionAnnounced) return
-      completionAnnounced = true
-      announce('やり遂げたのですね。うれしいですわ', '你做到了呢。真替你高兴', 'happy')
+    // ============================================================
+    // 进度叙事系统（Progress Narrator）——Task 1：路由器 + 状态机 + 台词池 + LLM 总结 + 旧播报收编
+    // 统一收编旧 notifyComplete / subagent/end / workflow/end / agent/error / jobs 零散播报，
+    // 归一为 narrate(intent) 意图路由器：start/done/milestone/block/fail/special/goal。
+    // 模板词严格取自 narrator-phrases.md（S1-S3 / D1-D2 / M1-M2 / B1-B4 / F1-F2）；
+    // A3/A4 沿用旧播报文案（只搬位置、不改词）。出口统一 speakSynced（先合成后同发，队列串行不叠播）。
+    // ============================================================
+    const NARR_INTENT_GAP_MS = 8000   // 同意图 8s 合并窗
+    const NARR_LLM_GAP_MS = 8000      // LLM 总结最低间隔（防连续回合烧 token）
+    const NARR_PRIORITY = { block: 40, fail: 30, done: 20, goal: 20, special: 15, milestone: 10, start: 5 }
+    const NARR_LLM_EMOTIONS = ['happy', 'soft', 'neutral', 'question', 'excited']
+
+    // 台词表（唯一模板来源 narrator-phrases.md，JP/CN/emotion 原样抄录；LLM 句不参与池轮换）
+    const NARR_LINES = {
+      // START S1-S3（有据开工：首个工具调用）
+      s1: { jp: 'お仕事が始まったようですわね。わたくし、ここで応援していますわ', cn: '看来开始干活了呢。我就在这里给你加油哦', emotion: 'happy' },
+      s2: { jp: 'ふふ、始まりましたわね。焦らず、着実に参りましょう', cn: '呵呵，开始了呢。别急，稳步来吧', emotion: 'soft' },
+      s3: { jp: 'なんだか楽しそうですわね。何が出来上がるのかしら', cn: '感觉很有意思呢。会做出什么来呢', emotion: 'soft' },
+      // DONE 兜底 D1-D2（LLM 失败/超时/未开 LLM 时）
+      d1: { jp: 'ひと区切りつきましたわね。次の一手を考えましょう', cn: '告一段落了呢。想想下一步吧', emotion: 'happy' },
+      d2: { jp: 'できましたわ。ここからどう進めましょうか', cn: '做好了哦。接下来往哪走呢', emotion: 'soft' },
+      // MILESTONE M1-M2（LLM 摘要失败兜底）
+      m1: { jp: 'まだ作業中ですわね。順調に進んでいるようで安心しました', cn: '还在进行中呢。看来进展顺利，我就放心了', emotion: 'soft' },
+      m2: { jp: '長いお仕事ですわね。わたくしも一緒に付き合っておりますわ', cn: '是项长久的工作呢。我也一直陪着你哦', emotion: 'soft' },
+      // BLOCK B1-B4（阻塞提醒：按触发固定选句，语义不可互替）
+      b1: { jp: '承認が必要なようですわ。ご確認をお願いいたします', cn: '需要你批准一下哦。请确认', emotion: 'question' },
+      b2: { jp: 'あなたのご返事を待っておりますわ。じっくりお考えくださいませ', cn: '在等你回复呢。请慢慢考虑', emotion: 'soft' },
+      b3: { jp: '計画をご確認いただけますかしら。問題なければ進めてくださいませ', cn: '请过目一下计划。没问题的话就可以推进了哦', emotion: 'question' },
+      b4: { jp: 'お手元の確認待ちですわ。落ち着いてどうぞ', cn: '在等你在界面上确认哦。慢慢来', emotion: 'soft' },
+      // FAIL F1-F2（agent/error）
+      f1: { jp: 'あら…うまくいきませんでしたわね。慌てずに原因を探りましょう', cn: '哎呀……不太顺利呢。别慌，我们一起找原因吧', emotion: 'soft' },
+      f2: { jp: 'エラーが出たようですわ。わたくしも見ておりますので、落ち着いてどうぞ', cn: '好像出错了。我也看着呢，冷静处理吧', emotion: 'question' },
+    }
+    // 可轮换池：start/done/milestone/fail（LRU：最近一条沉底 → 游标轮转，绝不立刻复读）
+    const NARR_POOLS = { start: ['s1', 's2', 's3'], done: ['d1', 'd2'], milestone: ['m1', 'm2'], fail: ['f1', 'f2'] }
+    // BLOCK 各触发对应的固定句（b1 审批 / b2 提问等待 / b3 计划审批 / b4 其它界面等待）
+    const NARR_BLOCK_IDS = { b1: 'b1', b2: 'b2', b3: 'b3', b4: 'b4' }
+    // 收编自旧播报的文案常量（A3 任务完成 = 考据表 A3；A4-1 子代理 / A4-2 工作流成功 / A4-3 工作流出错 / A4-4 后台任务结束）
+    const NARR_A3 = { jp: 'やり遂げたのですね。うれしいですわ', cn: '你做到了呢。真替你高兴', emotion: 'happy' }
+    const NARR_A4 = {
+      subagent: { jp: 'あら、何か動きがあったようですわね。ゆっくりお話を聞かせてください', cn: '哎呀，好像有什么新进展了呢。慢慢讲给我听吧', emotion: 'soft' },
+      workflowOk: { jp: '完了いたしましたわ。ここから先も、一緒に頑張りましょう', cn: '已经完成了。接下来的路，也一起加油吧', emotion: 'happy' },
+      workflowErr: { jp: '大丈夫ですわ', cn: '没事的', emotion: 'soft' },
+      jobDone: { jp: 'お待たせしましたわね。ようやく一段落したようですわ', cn: '让你久等了。总算是告一段落了', emotion: 'soft' },
+    }
+
+    // 进度状态机：持久键随 narrator.json 落盘；回合瞬态键不落盘（重启即清）
+    let narrState = {
+      counts: { start: 0, done: 0, milestone: 0, block: 0, fail: 0, special: 0, goal: 0 },
+      lastSummary: '',
+      lastLLMAt: 0,
+      poolCursor: {},
+      // ---- 回合瞬态（不落盘） ----
+      turnActive: false,
+      turnStartAt: 0,
+      stepCount: 0,
+      startSpoken: false,
+      milestoneSpoken: false,
+      turnGoalDone: false,
+      blocking: null,       // 'b1'..'b4' | null
+      lastUserText: '',
+      toolNames: {},        // 本轮工具名 → 次数
+    }
+    const poolLastUsed = new Map()      // 每池最近使用的一条（供状态查看 / LRU 沉底确认）
+    const lastSpokeByIntent = new Map() // 同意图最近发声时刻
+    let lastDoneFamilyAt = 0            // done/goal 完成语义 8s 互斥窗
+    const lastNarrSpeaks = []           // 最近发声留档（供验证）
+    let narrSaveTimer = null
+
+    function narrPersistSnapshot() {
+      return {
+        counts: narrState.counts,
+        lastSummary: typeof narrState.lastSummary === 'string' ? narrState.lastSummary.slice(0, 500) : '',
+        lastLLMAt: narrState.lastLLMAt || 0,
+        poolCursor: narrState.poolCursor || {},
+      }
+    }
+    async function loadNarrator() {
+      try {
+        const t = await fs.resolve(NARRATOR_PATH)
+        const info = await fs.stat(t)
+        if (info === undefined) return
+        const parsed = JSON.parse(await fs.readText(t))
+        if (!parsed || typeof parsed !== 'object') return
+        const c = parsed.counts
+        if (c && typeof c === 'object') {
+          for (const k of Object.keys(narrState.counts)) {
+            if (typeof c[k] === 'number' && isFinite(c[k])) narrState.counts[k] = Math.max(0, Math.floor(c[k]))
+          }
+        }
+        if (typeof parsed.lastSummary === 'string') narrState.lastSummary = parsed.lastSummary.slice(0, 500)
+        if (typeof parsed.lastLLMAt === 'number' && isFinite(parsed.lastLLMAt)) narrState.lastLLMAt = parsed.lastLLMAt
+        if (parsed.poolCursor && typeof parsed.poolCursor === 'object') narrState.poolCursor = parsed.poolCursor
+      } catch (e) {
+        console.error('[amadeus] 读取 narrator 状态失败:', e && e.message ? e.message : String(e))
+      }
+    }
+    async function saveNarratorNow() {
+      try {
+        await writeTextSafe(NARRATOR_PATH, JSON.stringify(narrPersistSnapshot(), null, 2))
+      } catch (e) {
+        console.error('[amadeus] 保存 narrator 状态失败:', e && e.message ? e.message : String(e))
+      }
+    }
+    function scheduleSaveNarrator() {
+      if (narrSaveTimer !== null) return
+      narrSaveTimer = setTimeout(() => {
+        narrSaveTimer = null
+        saveNarratorNow().catch(() => { /* 已记录错误 */ })
+      }, 800)
+    }
+
+    // 池轮换：游标 +1（最近一条沉底，绝不立刻复读）；跨重启用落盘游标延续偏移
+    function pickPool(poolKey) {
+      const ids = NARR_POOLS[poolKey]
+      if (!Array.isArray(ids) || ids.length === 0) return null
+      const cursor = narrState.poolCursor || {}
+      let idx = (typeof cursor[poolKey] === 'number' && cursor[poolKey] >= 0) ? cursor[poolKey] : -1
+      idx = (idx + 1) % ids.length
+      narrState.poolCursor[poolKey] = idx
+      poolLastUsed.set(poolKey, { id: ids[idx], at: Date.now() })
+      scheduleSaveNarrator()
+      return NARR_LINES[ids[idx]]
+    }
+
+    function resetTurn() {
+      const now = Date.now()
+      narrState.stepCount = 0
+      narrState.startSpoken = false
+      narrState.milestoneSpoken = false
+      narrState.turnGoalDone = false
+      narrState.turnActive = true
+      narrState.turnStartAt = now
+      narrState.toolNames = {}
+    }
+
+    function userMessageText(d) {
+      const c = d && typeof d === 'object' ? d.content : undefined
+      if (typeof c === 'string') return c
+      if (Array.isArray(c)) {
+        const parts = []
+        for (const b of c) {
+          if (b && typeof b === 'object' && b.type === 'text' && typeof b.text === 'string') parts.push(b.text)
+        }
+        return parts.join('\n')
+      }
+      return ''
+    }
+
+    // 泛化工具调用扫描（旧 isTaskCompleteMessage 思路）：assistant message 是否含指定名称的工具调用
+    function msgHasToolCall(msg, names) {
+      if (!msg || !Array.isArray(msg.content)) return false
+      for (let i = 0; i < msg.content.length; i++) {
+        const b = msg.content[i]
+        if (b === null || typeof b !== 'object' || b.type !== 'tool-call') continue
+        const name = String(b.name || '')
+        if (names.indexOf(name) >= 0) return true
+      }
+      return false
+    }
+
+    // goal 完成类工具调用：update_goal action complete/blocked、goal.complete、*goal*complete*。
+    // 注：exit_plan_mode 已从「完成」语义拆出，改走 BLOCK B3（计划审批）。
+    function msgHasGoalDoneCall(msg) {
+      if (!msg || !Array.isArray(msg.content)) return false
+      for (let i = 0; i < msg.content.length; i++) {
+        const b = msg.content[i]
+        if (b === null || typeof b !== 'object' || b.type !== 'tool-call') continue
+        const name = String(b.name || '')
+        if (name === 'goal.complete' || /goal.*complete/i.test(name)) return true
+        if (name === 'update_goal') {
+          try {
+            const a = JSON.parse(String(b.arguments || '{}'))
+            if (Object.prototype.hasOwnProperty.call(a, 'action')) {
+              if (a.action === 'complete' || a.action === 'blocked') return true
+            } else {
+              return true
+            }
+          } catch (e) { /* 解析失败按完成处理 */ return true }
+        }
+      }
+      return false
+    }
+
+    // LLM 进度总结（spec §5）：白祥语域、只述事实 + 下一步 / 等待请求；失败/超时/格式异常 → null（调用方走模板）
+    const NARR_LLM_SYSTEM =
+      'あなたは豊川祥子——CRYCHIC時代の「白祥」本人。ユーザーの作業セッションを見守り、進捗の節目に一言かけるナレーターです。\n' +
+      '口調の約束：語尾は「ですわ」系（ですわ／ですの／〜ますの）、自称は「私」、相手は「あなた」。' +
+      '明るく温かく、感情を込めて。「〜てちょうだい」や責める・冷たい・見下す言い回し、黒祥時代の台詞、自己否定は一切使わない。\n' +
+      '内容の約束：実際に起こった作業の事実と「次の一手」だけを述べる。起きていない手順や結果をでっち上げない。' +
+      'ユーザーが確認・返答待ちの場合は「あなたの判断をお待ちしています」の意を添える。\n' +
+      'フォーマット（必ず厳守）：\n' +
+      '1行目：【happy】【soft】【neutral】【question】【excited】のいずれか1つの感情タグ。\n' +
+      '2行目：「JP: 」で始まる日本語（60字以内・1〜2文）。\n' +
+      '3行目：「CN: 」で始まる中国語（JPと同じ意味・80字以内）。\n' +
+      'それ以外は何も出力しない。'
+
+    async function narrateSummary(kind, opts) {
+      if (config.narratorLLMSummary !== true) return null
+      const now = Date.now()
+      if (now - (narrState.lastLLMAt || 0) < NARR_LLM_GAP_MS) return null
+      const o = opts && typeof opts === 'object' ? opts : {}
+      const userMsg = String(o.userMsg || narrState.lastUserText || '').slice(0, 200)
+      const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (narrState.toolNames || {})
+      const toolNames = Object.keys(tools)
+      const toolLine = toolNames.length > 0
+        ? toolNames.slice(0, 12).map((n) => String(n) + '×' + (tools[n] || 1)).join('、').slice(0, 300)
+        : '（ツール呼び出しなし）'
+      const isBlocked = (o.blocking !== undefined) ? !!o.blocking : !!narrState.blocking
+      const blockingLine = isBlocked ? '（ユーザーの確認・返答を待っています）' : ''
+      const prevSummary = narrState.lastSummary ? narrState.lastSummary.slice(0, 200) : ''
+      const kindLine = kind === 'milestone'
+        ? '作業が長引いているので、順調であることと継続を伝える一言を。'
+        : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
+      const prompt =
+        '【セッション情報】\n' +
+        '最近のユーザー発言：' + (userMsg || '（なし）') + '\n' +
+        'このターンのツール使用：' + toolLine + '\n' +
+        '前回の進捗サマリ：' + (prevSummary || '（なし）') + '\n' +
+        (blockingLine ? blockingLine + '\n' : '') +
+        kindLine
+      try {
+        const raw = await Promise.race([
+          aiComplete(NARR_LLM_SYSTEM, [{ role: 'user', content: prompt }], 160),
+          ctx.timeout(30000).then(() => { throw new Error('narrate llm timeout') }),
+        ])
+        const parsed = parseStructured(raw)
+        if (typeof parsed.jp !== 'string' || parsed.jp.trim().length === 0) return null
+        if (NARR_LLM_EMOTIONS.indexOf(parsed.emotion) < 0) return null
+        narrState.lastLLMAt = Date.now()
+        if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrState.lastSummary = parsed.cn.slice(0, 120)
+        scheduleSaveNarrator()
+        return { jp: parsed.jp, cn: parsed.cn || parsed.jp, emotion: parsed.emotion }
+      } catch (e) {
+        console.warn('[amadeus] 进度总结 LLM 失败，走模板:', e && e.message ? e.message : String(e))
+        return null
+      }
+    }
+
+    // 台词选择：goal/special/block 固定句；start/done/milestone/fail 走池轮换（LLM 句不入池）
+    function pickNarrLine(intent, opts) {
+      if (intent === 'goal') return Object.assign({}, NARR_A3)
+      if (intent === 'special') {
+        const line = NARR_A4[opts.variant]
+        return line ? Object.assign({}, line) : null
+      }
+      if (intent === 'block') {
+        const id = NARR_BLOCK_IDS[opts.variant] || 'b4'
+        return Object.assign({}, NARR_LINES[id])
+      }
+      return pickPool(intent) // start / done / milestone / fail
+    }
+
+    // ---------------- 意图路由与发声 ----------------
+    const NARR_INTENTS = ['start', 'done', 'milestone', 'block', 'fail', 'special', 'goal']
+    const narrPendingBatch = []
+    let narrBatchScheduled = false
+
+    // narrate(intent, opts)：
+    //   同意图 8s 合并；同一时刻多事件由微任务批收集后取最高优先级一条；
+    //   done 受 narratorDone 开关；force=true（testNarrator）绕过节流/回合内一次性标记，仍受 narratorOn/voiceOn 约束。
+    function narrate(intent, opts) {
+      const o = opts && typeof opts === 'object' ? opts : {}
+      const now = Date.now()
+      if (NARR_INTENTS.indexOf(intent) < 0) return { ok: false, reason: 'bad-intent' }
+      if (config.narratorOn !== true) return { ok: false, reason: 'narrator-off' }
+      if (intent === 'done' && config.narratorDone !== true && o.force !== true) return { ok: false, reason: 'done-off' }
+      if (o.force !== true) {
+        const last = lastSpokeByIntent.get(intent)
+        if (typeof last === 'number' && now - last < NARR_INTENT_GAP_MS) return { ok: false, reason: 'merged-same-intent' }
+      }
+      narrPendingBatch.push({ intent, opts: o, at: now })
+      if (!narrBatchScheduled) {
+        narrBatchScheduled = true
+        const flush = () => { narrBatchScheduled = false; flushNarrBatch() }
+        if (typeof queueMicrotask === 'function') queueMicrotask(flush)
+        else Promise.resolve().then(flush)
+      }
+      return { ok: true, queued: true }
+    }
+
+    function flushNarrBatch() {
+      const batch = narrPendingBatch.splice(0, narrPendingBatch.length)
+      if (batch.length === 0) return
+      // 同一时刻多事件：只取最高优先级一条（BLOCK40 > FAIL30 > DONE/GOAL20 > SPECIAL15 > MILESTONE10 > START5）
+      let best = batch[0]
+      for (let i = 1; i < batch.length; i++) {
+        const c = batch[i]
+        if ((NARR_PRIORITY[c.intent] || 0) > (NARR_PRIORITY[best.intent] || 0)) best = c
+      }
+      deliverNarration(best.intent, best.opts).catch((e) => {
+        console.error('[amadeus] 进度播报失败:', e && e.message ? e.message : String(e))
+      })
+    }
+
+    // 决定台词 → 留痕 → 出声（speakSynced 队列串行，不叠播）
+    async function deliverNarration(intent, opts) {
+      const now = Date.now()
+      // done/goal 完成语义 8s 互斥：窗口内只响一次（更高语义由同批优先级保证；先到先得近似旧 announce 8s 窗）
+      if (opts.force !== true && (intent === 'done' || intent === 'goal')) {
+        if (now - lastDoneFamilyAt < NARR_INTENT_GAP_MS) return
+      }
+      let line = null
+      let source = 'template'
+      if ((intent === 'done' || intent === 'milestone') && opts.noLLM !== true) {
+        const llm = await narrateSummary(intent, opts)
+        if (llm !== null) { line = llm; source = 'llm' }
+      }
+      if (line === null) {
+        line = pickNarrLine(intent, opts)
+        if (line === null) return
+      }
+      // 留痕对话历史（沿用 announce 语义：无论语音开关都记录）
+      const cnText = (typeof line.cn === 'string' && line.cn.length > 0) ? line.cn : line.jp
+      memory.history.push({ role: 'assistant', jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral', announce: true, narrate: intent, t: Date.now() })
+      if (memory.history.length > 60) maybeCompactHistory()
+      narrState.counts[intent] = (narrState.counts[intent] || 0) + 1
+      lastNarrSpeaks.push({ at: Date.now(), intent, source, jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral' })
+      if (lastNarrSpeaks.length > 8) lastNarrSpeaks.shift()
+      scheduleSaveNarrator()
+      if (config.voiceOn !== true) return
+      if (opts.force !== true) {
+        lastSpokeByIntent.set(intent, Date.now())
+        if (intent === 'done' || intent === 'goal') lastDoneFamilyAt = Date.now()
+      }
+      await speakSynced(line.jp, cnText, line.emotion || 'neutral', 'force', { announce: true, narrate: intent })
+    }
+
+    // ---------------- 里程碑巡检（时间/步数，单回合一次） ----------------
+    function maybeMilestone() {
+      if (config.narratorOn !== true) return
+      if (narrState.turnActive !== true) return
+      if (narrState.milestoneSpoken) return
+      if (narrState.blocking) return
+      if (narrState.stepCount < 1) return
+      const ms = typeof config.narratorMilestoneMs === 'number' ? config.narratorMilestoneMs : 240000
+      const steps = typeof config.narratorMilestoneSteps === 'number' ? config.narratorMilestoneSteps : 10
+      const overTime = Date.now() - narrState.turnStartAt >= ms
+      const overSteps = narrState.stepCount >= steps
+      if (!overTime && !overSteps) return
+      narrState.milestoneSpoken = true
+      narrate('milestone', {})
+    }
+
+    // turn/end：goal 完成过 → A3（'goal'）；否则 narratorDone 时 'done'（LLM 总结/模板兜底）；随后清回合状态
+    function handleTurnEnd(evData) {
+      const reason = evData && typeof evData === 'object' ? evData.reason : undefined
+      const kind = reason && typeof reason === 'object' ? reason.kind : (typeof reason === 'string' ? reason : undefined)
+      // 非正常完成回合不播 DONE（blocked/error 已有 BLOCK/FAIL 语义；aborted/interrupted/max-tokens 无完成可言）
+      const skipKinds = ['blocked', 'error', 'aborted', 'interrupted', 'max-tokens']
+      if (kind !== undefined && skipKinds.indexOf(kind) >= 0) {
+        narrState.turnActive = false
+        return
+      }
+      const goalDone = narrState.turnGoalDone === true
+      // 先快照回合总结输入（随后清状态，LLM 异步取快照而非被清空的 live 字段）
+      const doneOpts = {
+        userMsg: narrState.lastUserText,
+        tools: Object.assign({}, narrState.toolNames),
+        blocking: narrState.blocking,
+      }
+      narrState.turnActive = false
+      narrState.blocking = null
+      narrState.milestoneSpoken = false
+      narrState.startSpoken = false
+      narrState.stepCount = 0
+      narrState.turnGoalDone = false
+      narrState.toolNames = {}
+      if (goalDone) {
+        narrate('goal', {})
+      } else if (config.narratorDone === true) {
+        narrate('done', doneOpts)
+      }
     }
 
     // ---------------- AI 调用（独立 key 优先，llm 服务兜底） ----------------
@@ -1801,6 +2158,53 @@ export function apply(ctx) {
       pendingClose,
     })))
 
+    // 进度叙事状态（供验证：回合状态 / 各意图计数 / 台词池游标与最近发声）
+    ctx.effect(() => harnessLocal.handle('narratorStatus', async () => {
+      const now = Date.now()
+      return {
+        config: {
+          narratorOn: config.narratorOn,
+          narratorLLMSummary: config.narratorLLMSummary,
+          narratorDone: config.narratorDone,
+          narratorMilestoneMs: config.narratorMilestoneMs,
+          narratorMilestoneSteps: config.narratorMilestoneSteps,
+        },
+        state: {
+          turnActive: narrState.turnActive,
+          runningMs: narrState.turnActive ? now - narrState.turnStartAt : 0,
+          stepCount: narrState.stepCount,
+          startSpoken: narrState.startSpoken,
+          milestoneSpoken: narrState.milestoneSpoken,
+          turnGoalDone: narrState.turnGoalDone,
+          blocking: narrState.blocking,
+          lastUserText: String(narrState.lastUserText || '').slice(0, 100),
+          toolNames: narrState.toolNames || {},
+        },
+        summary: { lastSummary: narrState.lastSummary, lastLLMAt: narrState.lastLLMAt },
+        counts: narrState.counts,
+        poolCursor: narrState.poolCursor,
+        poolLastUsed: Object.fromEntries(poolLastUsed),
+        lastSpokeByIntent: Object.fromEntries(lastSpokeByIntent),
+        lastDoneFamilyAt,
+        lastSpeaks: lastNarrSpeaks.slice(-8),
+      }
+    }))
+
+    // 进度叙事发声测试：强制触发对应意图（绕过节流与回合内一次性标记；仍受 narratorOn/voiceOn 约束）
+    ctx.effect(() => harnessLocal.handle('testNarrator', async (args) => {
+      const intent = args && typeof args.intent === 'string' ? args.intent : ''
+      if (['start', 'done', 'block', 'milestone', 'fail', 'goal'].indexOf(intent) < 0) {
+        return { ok: false, error: 'intent 需为 start|done|block|milestone|fail|goal' }
+      }
+      let variant
+      if (intent === 'block') {
+        variant = (args && typeof args.variant === 'string' && NARR_BLOCK_IDS[args.variant]) ? args.variant : 'b4'
+      }
+      // testNarrator 走模板句（noLLM），避免空上下文等 LLM 造成测试不确定
+      const res = narrate(intent, { force: true, variant, noLLM: true })
+      return { ok: res.ok, intent, reason: res.reason || '', variant: variant || undefined }
+    }))
+
     ctx.effect(() => harnessLocal.handle('setConfig', async (patch) => {
       const clean = sanitizePatch(patch)
       config = Object.assign({}, config, clean)
@@ -1899,75 +2303,115 @@ export function apply(ctx) {
       handler: async (req, res) => { sendJson(res, 200, { reports: clientReports }) },
     }))
 
-    // ---------------- 助手消息 → 语音 ----------------
-    // 需求：助手输出的文本一律不朗读（无论干活 / 对话）；任务完成时统一播报「やり遂げたのですね。うれしいですわ」（你做到了呢。真替你高兴）。
+    // ---------------- 进度叙事：会话事件 → 意图路由 ----------------
+    // 助手输出的文本一律不朗读；会话进度由下方 dispatcher 归一为 narrate() 意图播报。
+    // 事件→意图（实测 dsh-session known-event-types：tool/call、approval/asked 均在 session/event 流内）：
+    //   user/message → 清 blocking + resetTurn（不开口）
+    //   turn/start → resetTurn
+    //   tool/call（回合首个）→ START；累计 stepCount/工具名（里程碑步数依据）
+    //   approval/asked → BLOCK B1；approval/decided → 清 blocking
+    //   assistant/message 含 ask_user_question → BLOCK B2；含 exit_plan_mode → BLOCK B3（计划审批）；含 goal 完成类调用 → turnGoalDone
+    //   goal/change operation=complete → turnGoalDone（不直接播，等 turn/end 归一 A3）
+    //   turn/end → handleTurnEnd()：goal 完成过 → 'goal'（A3）；否则 'done'（LLM/模板）；随后清回合状态
     ctx.effect(() => ctx.on('session/event', (session, event) => {
       try {
         if (event === null || typeof event !== 'object') return
-        if (event.type === 'user/message') {
-          // 新一轮对话开始：解锁完成播报
-          completionAnnounced = false
+        const t = event.type
+        const d = event.data
+        if (t === 'user/message') {
+          // 用户新消息到来：解除阻塞标记、记录输入、开启新回合（纯聊天回合不开口）
+          narrState.blocking = null
+          const text = userMessageText(d).slice(0, 200)
+          if (text.length > 0) narrState.lastUserText = text
+          resetTurn()
           return
         }
-        if (event.type === 'turn/start') {
-          // 每个回合结束都会报「完成」——按用户要求“统一报告”，每次回复结束都报一次
-          completionAnnounced = false
+        if (t === 'turn/start') {
+          resetTurn()
           return
         }
-        if (event.type === 'turn/end') {
-          notifyComplete()
+        if (t === 'turn/end') {
+          handleTurnEnd(d)
           return
         }
-        if (event.type === 'goal/change') {
-          const gd = event.data
+        if (t === 'tool/call') {
+          // 有据开工：回合首个工具调用 → START（每回合一次，由 startSpoken 保证）
+          narrState.stepCount += 1
+          const name = d && typeof d === 'object' ? String(d.name || '') : ''
+          if (name.length > 0) narrState.toolNames[name] = (narrState.toolNames[name] || 0) + 1
+          if (!narrState.startSpoken) {
+            narrState.startSpoken = true
+            narrate('start', {})
+          }
+          // 步数型里程碑即时检查（时间型由 30s 巡检兜底）
+          const steps = typeof config.narratorMilestoneSteps === 'number' ? config.narratorMilestoneSteps : 10
+          if (!narrState.milestoneSpoken && narrState.stepCount >= steps) maybeMilestone()
+          return
+        }
+        if (t === 'approval/asked') {
+          // 权限审批等待 → BLOCK B1（对 payload 防御式取用）
+          narrState.blocking = 'b1'
+          narrate('block', { variant: 'b1' })
+          return
+        }
+        if (t === 'approval/decided') {
+          // 审批已有答复：解除阻塞（不开口）
+          if (narrState.blocking) narrState.blocking = null
+          return
+        }
+        if (t === 'goal/change') {
+          const gd = d
           if (gd && typeof gd === 'object' && typeof gd.operation === 'string') {
-            if (gd.operation === 'complete') {
-              notifyComplete()
+            if (gd.operation === 'complete') narrState.turnGoalDone = true
+          }
+          return
+        }
+        if (t === 'assistant/message') {
+          const msg = d && d.message
+          if (msg && typeof msg === 'object') {
+            if (msgHasToolCall(msg, ['ask_user_question'])) {
+              narrState.blocking = 'b2'
+              narrate('block', { variant: 'b2' })
+            } else if (msgHasToolCall(msg, ['exit_plan_mode'])) {
+              narrState.blocking = 'b3'
+              narrate('block', { variant: 'b3' })
             }
+            if (msgHasGoalDoneCall(msg)) narrState.turnGoalDone = true
           }
           return
         }
-        if (event.type === 'assistant/message') {
-          // 含完成工具调用（update_goal complete / exit_plan_mode / goal.complete）→ 报完成
-          const msg = event.data && event.data.message
-          if (msg && typeof msg === 'object' && isTaskCompleteMessage(msg)) {
-            notifyComplete()
-          }
-          return
-        }
-        // assistant/chunk 等其它事件：不朗读任何助手文本
+        // assistant/chunk、step/*、todo/write 等其它事件：不开口
       } catch (e) {
         console.error('[amadeus] session/event 处理失败:', e && e.message ? e.message : String(e))
       }
     }))
 
-    // ---------------- 事件播报 ----------------
-    // 注：goal 完成已由 session 事件流里的 goal/change 处理（见上方监听器）——
-    // goal/changed 是 agent 作用域事件，全局插件收不到，勿再依赖。
-
+    // ---------------- 旧零散播报收编（统一进 narrate 路由器） ----------------
+    // 注：goal 完成由 session 事件流 goal/change + assistant/message 工具扫描置 turnGoalDone，
+    //     turn/end 统一归一为 A3（goal）/DONE（普通）——goal/changed 是 agent 作用域事件，全局插件收不到，勿再依赖。
+    // 子代理结束 → special A4-1；工作流完成/出错 → special A4-2/A4-3；后台任务结束 → special A4-4；agent/error → FAIL F1/F2
     ctx.effect(() => ctx.on('subagent/end', (info) => {
       try {
-        if (info && info.stopReason) announce('あら、何か動きがあったようですわね。ゆっくりお話を聞かせてください', '哎呀，好像有什么新进展了呢。慢慢讲给我听吧', 'soft')
+        if (info && info.stopReason) narrate('special', { variant: 'subagent' })
       } catch (e) { /* ignore */ }
     }))
 
     ctx.effect(() => ctx.on('workflow/end', (info, result) => {
       try {
-        if (result && result.error) announce('大丈夫ですわ', '没事的', 'soft')
-        else announce('完了いたしましたわ。ここから先も、一緒に頑張りましょう', '已经完成了。接下来的路，也一起加油吧', 'happy')
+        narrate('special', { variant: (result && result.error) ? 'workflowErr' : 'workflowOk' })
       } catch (e) { /* ignore */ }
     }))
 
     ctx.effect(() => ctx.on('agent/error', (payload) => {
       try {
-        if (payload && payload.error) announce('大丈夫ですわ', '没事的', 'soft')
+        if (payload && payload.error) narrate('fail', {})
       } catch (e) { /* ignore */ }
     }))
 
     const jobs = ctx.get('jobs')
     if (jobs !== undefined) {
       ctx.effect(() => jobs.onJobDone(() => {
-        announce('お待たせしましたわね。ようやく一段落したようですわ', '让你久等了。总算是告一段落了', 'soft')
+        try { narrate('special', { variant: 'jobDone' }) } catch (e) { /* ignore */ }
       }))
     }
 
@@ -1981,7 +2425,13 @@ export function apply(ctx) {
     ctx.effect(() => ctx.interval(() => {
       if (memory.history.length === 0 && memory.facts.length === 0) return
       try { scheduleSaveMemory() } catch (e) { /* ignore */ }
+      try { scheduleSaveNarrator() } catch (e) { /* ignore */ }
     }, 60000))
+
+    // 进度叙事：里程碑巡检（30s 独立 tick；时间型阈值兜底，回合结束/新消息即复位）
+    ctx.effect(() => ctx.interval(() => {
+      try { maybeMilestone() } catch (e) { /* ignore */ }
+    }, 30000))
 
     // 卸载插件时终止常驻 TTS worker
     ctx.effect(() => {
@@ -2000,6 +2450,7 @@ export function apply(ctx) {
     // ---------------- 启动 ----------------
     ensureDataDirs().then(() => {
       loadConfig().catch((e) => console.error('[amadeus] loadConfig:', e))
+      loadNarrator().catch((e) => console.error('[amadeus] loadNarrator:', e))
       loadPersona().catch((e) => console.error('[amadeus] loadPersona:', e))
       loadMemory().then(() => {
         console.log('[amadeus] 记忆已加载:', memory.history.length, '条历史,', memory.facts.length, '条长期事实')
