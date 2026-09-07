@@ -976,7 +976,9 @@ export function apply(ctx) {
       scheduleWarmTts()
     }
 
-    function announce(jp, cn, emotion) {
+    // 播报（欢迎语/完成/事件）采用「先合成语音、后同发文字+语音」策略：
+    // 语音进入缓存后 push 队列 → 面板取到条目时音频立即可播，气泡与声音基本同步。
+    async function announce(jp, cn, emotion) {
       const now = Date.now()
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
       const cnText = (typeof cn === 'string' && cn.length > 0) ? cn : jp
@@ -986,7 +988,13 @@ export function apply(ctx) {
       if (config.voiceOn !== true) return
       if (now - lastAnnounceAt < 8000) return
       lastAnnounceAt = now
-      pushUtterances([jp], true, emotion, cnText, { announce: true })
+      // 先确保 TTS 合成完毕（入缓存），失败仅告警、仍下发文本气泡（无语音=自检信号）
+      try {
+        await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
+      } catch (e) {
+        console.warn('[amadeus] 播报合成失败（仅显示文字）:', e && e.message ? e.message : String(e))
+      }
+      pushUtterances([jp], true, emo, cnText, { announce: true })
     }
 
     // 任务完成：只报一次「完成」（语音说日文、对话区记中文）。
