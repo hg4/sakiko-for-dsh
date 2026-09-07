@@ -145,6 +145,10 @@ export function apply(ctx) {
 
     const IDLE_SYSTEM = 'あなたは豊川祥子——CRYCHIC時代の「白祥」本人。ユーザーがしばらく会話していない。明るく温かいお嬢様として、ふと話しかける一言を考える。話題は日常のこと、音楽（ライブやカラオケ、練習の話）など自然で明るいもの。\n口調の約束：語尾は「ですわ」系（ですわ／ですの／〜ますの）で明るく柔らかく。自称は「私」。相手は「あなた」。笑うときは「ふふっ」。「〜てちょうだい」や、責める・冷たい・見下す言い回しは一切使わない。\nフォーマット：\n1行目：【neutral】【soft】【question】【happy】【excited】のいずれかの感情タグ。\n2行目：「JP: 」で始まる日本語のセリフ（最大60文字）。\n3行目：「CN: 」で始まる中国語（同じ意味、最大80文字）。'
 
+    // 入口自检欢迎语（考据表 A5-1，原创·依考据风格）：每次宿主启动约 15s 后播报一次。
+    // 能听到 = WebUI + 音色链路在线；听不到 = 音色服务未就绪/合成失败，便于自检。
+    const STARTUP_GREETING = { jp: 'おはようございます。豊川祥子ですわ。今日もよろしくお願いいたします', cn: '早上好。我是丰川祥子。今天也请多关照', emotion: 'happy' }
+
     const MIME = {
       '.html': 'text/html; charset=utf-8',
       '.js': 'text/javascript; charset=utf-8',
@@ -1980,5 +1984,18 @@ export function apply(ctx) {
     })
     // 预热常驻 TTS worker（后台拉起，首句即可复用；不支持时静默回退）
     ensureTtsWorker().catch((e) => console.warn('[amadeus] TTS worker 预热失败:', e && e.message ? e.message : String(e)))
+    // 入口自检欢迎语：启动 15s 后播报一次（仅语音开启时；announce 会留痕到对话区）
+    let startupGreetingSent = false
+    ctx.timeout(() => {
+      try {
+        if (startupGreetingSent) return
+        startupGreetingSent = true
+        if (config.voiceOn !== true) return
+        announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion)
+        console.log('[amadeus] 启动欢迎语已播报:', STARTUP_GREETING.jp)
+      } catch (e) {
+        console.error('[amadeus] 启动欢迎语失败:', e && e.message ? e.message : String(e))
+      }
+    }, 15000)
     console.log('[amadeus] SAKIKO host 已就绪。配置:', JSON.stringify({ voiceOn: config.voiceOn, chatOn: config.chatOn, callOn: config.callOn, idleChatOn: config.idleChatOn }))
 }
