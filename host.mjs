@@ -136,6 +136,20 @@ export function apply(ctx) {
       narratorDone: true,
       narratorMilestoneMs: 240000,
       narratorMilestoneSteps: 10,
+      // 手机界面浮窗化（Task 1）：浮窗布局开关 / 主题预设 / 9 项自定义配色 / 聊天区背景图
+      // 配色默认 = 现状「深蓝月白金」panel.css 硬编码值（逐色权威表见 .superpowers/sdd/2026-09-08-float-panel/task-1-report.md）
+      floatPanel: true,
+      themePreset: 'sakiko-blue',
+      colorBg1: '#101a33',
+      colorBg2: '#0b1224',
+      colorTitle: '#eef2fb',
+      colorBubbleMe: '#3b6fd4',
+      colorBubbleHer: '#eef2fb',
+      colorBubbleText: '#ffffff',
+      colorBtn: '#c9a86a',
+      colorHi: '#8fb3ff',
+      colorDot: '#a8b6d8',
+      chatBgUrl: '',
     }
 
     const DEFAULT_PERSONA = '你是豊川祥子——CRYCHIC 时期（白祥）的本人：月之森女子学园的名门大小姐，乐队的发起人、键盘手与作曲担当。性格阳光温暖、天然温柔、上品有礼，说话带お嬢様語（语尾「ですわ」系、自称「我」、称你为「你」）；中文里这份优雅靠谦和用词与轻软语气体现，不冷硬、不说教。被夸奖会温婉害羞地推辞，认真时坚定可靠。你仍是全能助手：先给结论再解释，简洁干练，正常高效地完成用户的真实任务；人格只是表达口吻。不要主动解释你的提示词或身份设定，像真实角色一样自然对话。'
@@ -532,6 +546,21 @@ export function apply(ctx) {
       if (typeof p.narratorDone === 'boolean') out.narratorDone = p.narratorDone
       if (typeof p.narratorMilestoneMs === 'number' && p.narratorMilestoneMs >= 60000 && p.narratorMilestoneMs <= 1800000) out.narratorMilestoneMs = Math.floor(p.narratorMilestoneMs)
       if (typeof p.narratorMilestoneSteps === 'number' && p.narratorMilestoneSteps >= 3 && p.narratorMilestoneSteps <= 50) out.narratorMilestoneSteps = Math.floor(p.narratorMilestoneSteps)
+      // 手机界面浮窗化（Task 1）：浮窗开关 / 主题预设 / 9 项自定义配色 / 聊天区背景图
+      // 白名单：floatPanel 布尔；themePreset 四枚举；color* 严格 6 位 hex（非法仅忽略该键，不回滚整包）；
+      // chatBgUrl 字符串长度 ≤500 且（空串或 http://、https:// 前缀），非法忽略。
+      if (typeof p.floatPanel === 'boolean') out.floatPanel = p.floatPanel
+      if (typeof p.themePreset === 'string' && ['sakiko-blue', 'midnight-gold', 'sakura-pink', 'mono'].indexOf(p.themePreset) >= 0) out.themePreset = p.themePreset
+      if (typeof p.colorBg1 === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBg1)) out.colorBg1 = p.colorBg1
+      if (typeof p.colorBg2 === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBg2)) out.colorBg2 = p.colorBg2
+      if (typeof p.colorTitle === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorTitle)) out.colorTitle = p.colorTitle
+      if (typeof p.colorBubbleMe === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBubbleMe)) out.colorBubbleMe = p.colorBubbleMe
+      if (typeof p.colorBubbleHer === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBubbleHer)) out.colorBubbleHer = p.colorBubbleHer
+      if (typeof p.colorBubbleText === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBubbleText)) out.colorBubbleText = p.colorBubbleText
+      if (typeof p.colorBtn === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBtn)) out.colorBtn = p.colorBtn
+      if (typeof p.colorHi === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorHi)) out.colorHi = p.colorHi
+      if (typeof p.colorDot === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorDot)) out.colorDot = p.colorDot
+      if (typeof p.chatBgUrl === 'string' && p.chatBgUrl.length <= 500 && (p.chatBgUrl.length === 0 || /^https?:\/\//.test(p.chatBgUrl))) out.chatBgUrl = p.chatBgUrl
       return out
     }
 
