@@ -46,8 +46,8 @@ export function apply(ctx) {
       ".amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}" +
       ".amad-sb-btn:hover{background:rgba(128,128,128,.15);}" +
       ".amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}" +
-      // ---------------- 浮窗壳（FloatShell）样式（Ruling P5：无外框 chrome，仅手机本体） ----------------
-      ".amad-float-shell{pointer-events:auto;position:fixed;display:block;border:1px solid rgba(143,179,255,.18);border-radius:16px;background:#070d1a;box-shadow:0 12px 44px rgba(0,0,0,.5);overflow:hidden;user-select:none;}" +
+      // ---------------- 浮窗壳（FloatShell）样式（Ruling P5：无外框 chrome，仅手机本体；P5 补充：壳透明化，仅留投影贴手机边缘） ----------------
+      ".amad-float-shell{pointer-events:auto;position:fixed;display:block;border:0;border-radius:0;background:transparent;box-shadow:0 14px 40px rgba(0,0,0,.42);overflow:hidden;user-select:none;}" +
       ".amad-float-body{position:absolute;inset:0;display:block;}" +
       ".amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}" +
       ".amad-float-strip{position:absolute;top:0;left:0;right:0;height:10px;cursor:move;touch-action:none;z-index:6;pointer-events:auto;}" +

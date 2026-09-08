@@ -1,15 +1,12 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; overflow: hidden; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
 body {
   font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    radial-gradient(ellipse 90% 70% at 50% -10%, rgba(143, 179, 255, 0.14), transparent 70%),
-    radial-gradient(ellipse 60% 45% at 50% 112%, rgba(201, 168, 106, 0.07), transparent 70%),
-    #070d1a;
+  background: transparent;
 }
 button { font-family: inherit; }
 
