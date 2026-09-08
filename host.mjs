@@ -1320,6 +1320,8 @@ export function apply(ctx) {
       let line = null
       let source = 'template'
       const llmEligible = (intent === 'done' || intent === 'milestone') && opts.noLLM !== true
+      // llmAttempted = 本交付经过了 await（可能 LLM 真实在飞，也可能 LLM 门关闭快速回退模板），
+      // 因此期间存在被其它并发交付取代的可能 → 需要返回后重核。
       const llmAttempted = llmEligible
       if (llmEligible) {
         const llm = await narrateSummary(intent, opts) // lastLLMAt 于 narrateSummary 入口登记（先于其 await）
@@ -1329,18 +1331,18 @@ export function apply(ctx) {
         line = pickNarrLine(intent, opts)
         if (line === null) return
       }
-      // LLM 返回后重核窗口：占位已被更新的同意图/同族发声取代，或窗口已过期（慢 LLM），
-      // 则放弃本次发声（模板兜底同样放弃——若为取代则模板会重复；若为过期则宁缺毋滥）。
-      // milestone 若被随后登记的 done/goal 完成语义接管（turn/end 在里程碑 LLM 在飞时到达）也让位，
-      // 避免“还在进行中”落在“完成”之后（优先级 DONE20 > MILESTONE10 的同一语义）。
+      // LLM 返回后重核：8s 合并窗只用于“去重”，不用于“时效丢弃”——慢 LLM 晚到必达。
+      // 仅当本次占位已被更新的发声取代才放弃（模板兜底同样放弃，避免与接管者重复）：
+      //   sameReplaced   = 同意图槽被更新的发声占用（force/testNarrator 或过期后新事件）；
+      //   familyReplaced = done/goal 族被更新的完成语义占用；
+      //   doneTookOver   = milestone 在飞期间 done/goal 登记了族窗（turn/end 已接管“回合结束”语义，
+      //                    优先级 DONE20 > MILESTONE10，避免“还在进行中”落在“完成”之后）。
       if (llmAttempted && !force) {
-        const now2 = Date.now()
         const sameReplaced = lastSpokeByIntent.get(intent) !== mySameAt
         const familyReplaced = myFamilyAt !== 0 && lastDoneFamilyAt !== myFamilyAt
         const doneTookOver = (intent !== 'done' && intent !== 'goal') && myFamilyAt === 0 &&
           lastDoneFamilyAt !== 0 && lastDoneFamilyAt >= mySameAt
         if (sameReplaced || familyReplaced || doneTookOver) return
-        if (now2 - mySameAt >= NARR_INTENT_GAP_MS) return
       }
       // 留痕对话历史（沿用 announce 语义：无论语音开关都记录）
       const cnText = (typeof line.cn === 'string' && line.cn.length > 0) ? line.cn : line.jp
