@@ -46,6 +46,8 @@ export function apply(ctx) {
     const MEM_SAVE_PY = ROOT + '/tools/mem_save.py'
     const TTS_SERVER_PY = ROOT + '/tools/tts_server.py'
     const TMP_DIR = DATA_DIR + '/tmp'
+    const LOG_DIR = DATA_DIR + '/logs'
+    const TIMELINE_PATH = LOG_DIR + '/timeline.jsonl'
 
     const MAX_TTS_BYTES = 2000000
     // ---------------- 静态版 RPC 桥（harness → /amadeus/rpc） ----------------
@@ -350,7 +352,7 @@ export function apply(ctx) {
 
     // 数据目录（config/memory/tmp）不存在时用系统命令补建（fs 服务无 mkdir）
     async function ensureDataDirs() {
-      const dirs = [DATA_DIR, DATA_DIR + '/config', DATA_DIR + '/memory', DATA_DIR + '/tmp']
+      const dirs = [DATA_DIR, DATA_DIR + '/config', DATA_DIR + '/memory', DATA_DIR + '/tmp', DATA_DIR + '/logs']
       for (const d of dirs) {
         try {
           const t = await fs.resolve(d)
@@ -372,6 +374,79 @@ export function apply(ctx) {
           console.error('[amadeus] 创建数据目录失败:', d, e && e.message ? e.message : String(e))
         }
       }
+    }
+
+    // ---------------- 播报时间线日志（timeline log，持久化 JSONL） ----------------
+    // 常开轻量：每次播报全链路（合成→推送→客户端气泡/播放/结束）落一行 JSON，
+    // 供排查/调参与音画同步量化（不靠人工听辨）。写盘复用 writeTextSafe（fs 服务
+    // 无 append/rename）：追加 = 读旧档拼新行整体写回；超限轮转：旧档整体覆写 .1。
+    let tlChain = Promise.resolve()   // 追加写串行链，防并发读改写交错
+    let tlRecent = []                 // 内存环：最近 200 条已解析行（/amadeus/logs 直读）
+    const TL_MAX_LEN = 2000000        // 轮转阈值 ≈2MB（UTF-16 长度近似，见 tlLog）
+
+    function tlTrunc(v, n) {
+      const s = String(v === undefined || v === null ? '' : v)
+      return s.length > n ? s.slice(0, n) : s
+    }
+    // tags 只取 announce/narrate 两个可控字段并入日志（其它 tags 不入日志，避免夹带敏感数据）
+    function tlTagFields(tags) {
+      const o = {}
+      if (tags && typeof tags === 'object') {
+        if (tags.announce === true) o.announce = true
+        if (tags.narrate !== undefined) o.narrate = tags.narrate
+      }
+      return o
+    }
+
+    function tlLog(fields) {
+      const line = JSON.stringify(Object.assign({ t: new Date().toISOString() }, fields || {}))
+      tlChain = tlChain.then(async () => {
+        let prev = ''
+        try {
+          const p = await fs.resolve(TIMELINE_PATH)
+          const info = await fs.stat(p)
+          if (info !== undefined) {
+            const cur = await fs.readText(p)
+            if (typeof cur === 'string' && cur.length > 0) prev = cur
+          }
+        } catch (e) { /* 文件/目录尚不存在 → 首次写入；logs 目录由 ensureDataDirs 补建 */ }
+        let body = prev.length > 0 ? prev + '\n' + line : line
+        if (body.length > TL_MAX_LEN) {
+          // 轮转：当前档整体覆写到 .1（保留 1 份旧档），主档从本行重新开始
+          if (prev.length > 0) {
+            try { await writeTextSafe(TIMELINE_PATH + '.1', prev) } catch (e) {
+              console.error('[amadeus] 时间线轮转失败:', e && e.message ? e.message : String(e))
+            }
+          }
+          body = line
+        }
+        await writeTextSafe(TIMELINE_PATH, body)
+        try {
+          const parsed = JSON.parse(line)
+          tlRecent.push(parsed)
+          if (tlRecent.length > 200) tlRecent.shift()
+        } catch (e) { /* 理论不可达（JSON.stringify 产物） */ }
+      }).catch((e) => {
+        console.error('[amadeus] 时间线写盘失败:', e && e.message ? e.message : String(e))
+      })
+    }
+
+    // 启动时从文件回读最近 200 条进内存环（重启后 /amadeus/logs 仍能即时看到旧档尾）
+    async function loadTimelineRecent() {
+      try {
+        const p = await fs.resolve(TIMELINE_PATH)
+        const info = await fs.stat(p)
+        if (info === undefined) return
+        const text = await fs.readText(p)
+        if (typeof text !== 'string' || text.length === 0) return
+        const tail = text.split('\n')
+        const from = tail.length > 200 ? tail.length - 200 : 0
+        for (let i = from; i < tail.length; i++) {
+          const s = tail[i].trim()
+          if (s.length === 0) continue
+          try { tlRecent.push(JSON.parse(s)) } catch (e) { /* 跳过坏行 */ }
+        }
+      } catch (e) { /* 无文件/损坏 → 空环 */ }
     }
 
     // ---------------- 配置 ----------------
@@ -946,34 +1021,44 @@ export function apply(ctx) {
         nextId += 1
         maxIssuedId = Math.max(maxIssuedId, nextId - 1)
         if (queue.length > 60) queue.shift()
+        tlLog({ ev: 'push', id: item.id, kind: 'say', text: tlTrunc(item.text, 160), cn: tlTrunc(item.cn, 120), force: !!force, emotion: e, tags: tlTagFields(item) })
       }
       scheduleWarmTts()
     }
 
     function pushCn(cn, emotion) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
-      queue.push({ id: nextId, kind: 'cn', text: '', cn: String(cn || ''), force: false, emotion: emo, expr: '', ts: Date.now() })
+      const item = { id: nextId, kind: 'cn', text: '', cn: String(cn || ''), force: false, emotion: emo, expr: '', ts: Date.now() }
+      queue.push(item)
       nextId += 1
       maxIssuedId = Math.max(maxIssuedId, nextId - 1)
+      tlLog({ ev: 'push', id: item.id, kind: 'cn', text: '', cn: tlTrunc(item.cn, 120), force: false, emotion: emo })
     }
 
     function pushCall(text, emotion, cn) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
-      queue.push({ id: nextId, kind: 'call', text, cn: cn || '', force: true, emotion: emo, expr: EMOTION_EXPR[emo] || '', ts: Date.now() })
+      const item = { id: nextId, kind: 'call', text, cn: cn || '', force: true, emotion: emo, expr: EMOTION_EXPR[emo] || '', ts: Date.now() }
+      queue.push(item)
       nextId += 1
       maxIssuedId = Math.max(maxIssuedId, nextId - 1)
       callPending = true
       scheduleWarmTts()
+      tlLog({ ev: 'push', id: item.id, kind: 'call', text: tlTrunc(item.text, 160), cn: tlTrunc(item.cn, 120), force: true, emotion: emo })
     }
 
     // 通用同步出声：所有宿主发起的固定话语（播报/来电/空闲/指令朗读）统一走这里。
     // 先合成进 TTS 缓存，成功后才把条目推给面板 → 气泡与语音基本同帧；合成失败仅文字（无声=自检信号）。
     async function speakSynced(jp, cn, emotion, kind, tags) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
+      // 时间线：合成前记录意图与文本（截断）；完成记耗时，失败也留痕（无声=自检信号）
+      tlLog({ ev: 'synth_start', kind: String(kind || ''), text: tlTrunc(jp, 160), cn: tlTrunc(cn, 120), emotion: emo, tags: tlTagFields(tags) })
+      const t0 = Date.now()
       try {
         await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
+        tlLog({ ev: 'synth_done', ms: Date.now() - t0 })
       } catch (e) {
         console.warn('[amadeus] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e))
+        tlLog({ ev: 'synth_fail', ms: Date.now() - t0 })
       }
       if (kind === 'call') {
         pushCall(jp, emo, cn || '')
@@ -2322,6 +2407,13 @@ export function apply(ctx) {
           if (msg.length > 0) {
             clientReports.push({ t: new Date().toISOString(), msg })
             if (clientReports.length > 60) clientReports.shift()
+            // 时间线客户端事件（音画同步量化）：面板上报 tl:bubble|play|end:<id>，
+            // 解析后照常进 clientReports（兼容），同时落时间线日志。
+            const tm = /^tl:(bubble|play|end):(\d+)$/.exec(msg)
+            if (tm) {
+              const tlEv = { bubble: 'client_bubble', play: 'client_play', end: 'client_end' }[tm[1]]
+              tlLog({ ev: tlEv, id: Number(tm[2]) })
+            }
           }
           sendJson(res, 200, { ok: true })
         } catch (e) {
@@ -2333,7 +2425,7 @@ export function apply(ctx) {
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/amadeus/logs',
-      handler: async (req, res) => { sendJson(res, 200, { reports: clientReports }) },
+      handler: async (req, res) => { sendJson(res, 200, { reports: clientReports, timeline: tlRecent }) },
     }))
 
     // ---------------- 进度叙事：会话事件 → 意图路由 ----------------
@@ -2482,6 +2574,7 @@ export function apply(ctx) {
 
     // ---------------- 启动 ----------------
     ensureDataDirs().then(() => {
+      loadTimelineRecent().catch((e) => console.error('[amadeus] loadTimelineRecent:', e))
       loadConfig().catch((e) => console.error('[amadeus] loadConfig:', e))
       loadNarrator().catch((e) => console.error('[amadeus] loadNarrator:', e))
       loadPersona().catch((e) => console.error('[amadeus] loadPersona:', e))

@@ -204,7 +204,7 @@
 
   try { unlocked = window.localStorage.getItem('amadeus.unlocked') === '1' } catch (e) { unlocked = false }
 
-  function enqueue(text, force, emotion, expr, cn) {
+  function enqueue(text, force, emotion, expr, cn, id) {
     var t = String(text || '').replace(/\s+/g, ' ').trim()
     if (t.length === 0) return
     if (!force && cfg.voiceOn !== true) return
@@ -212,7 +212,10 @@
     lastQueued = t
     var emo = EXPR[emotion] !== undefined ? emotion : 'neutral'
     if (queue.length > 30) queue.shift()
-    queue.push({ text: t, cn: cn || '', emotion: emo, expr: expr || EXPR[emo] || '' })
+    var qi = { text: t, cn: cn || '', emotion: emo, expr: expr || EXPR[emo] || '' }
+    // 时间线：透传 host 队列 id（若有），播报 play/end 上报才能与 host push 事件对齐
+    if (typeof id === 'number') qi.id = id
+    queue.push(qi)
     prefetchNext()
     pump()
   }
@@ -378,7 +381,11 @@
       var obj = await fetchAudioWithWords(item.text, item.emotion)
       await playAudioUrl(obj.url, function () {
         startSpeaking(item, obj.words)
+        // 时间线：audioEl.play() promise resolve（真正出声）后才上报，id 与 host push 对齐
+        if (typeof item.id === 'number') report('tl:play:' + item.id)
       })
+      // 时间线：onended 触发（playAudioUrl resolve）后上报结束
+      if (typeof item.id === 'number') report('tl:end:' + item.id)
       stopSpeaking()
     } catch (e1) {
       var msg = e1 && e1.message ? e1.message : String(e1)
@@ -487,8 +494,12 @@
     stopCall()
     ackCallRemote()
     if (item) {
-      enqueue(item.text, true, item.emotion || 'neutral', item.expr || '', item.cn || '')
-      if (item.cn) addHistory({ role: 'assistant', cn: item.cn, call: true })
+      enqueue(item.text, true, item.emotion || 'neutral', item.expr || '', item.cn || '', item.id)
+      if (item.cn) {
+        addHistory({ role: 'assistant', cn: item.cn, call: true })
+        // 时间线：来电接听气泡已插入 DOM，id 与 host push 对齐
+        if (typeof item.id === 'number') report('tl:bubble:' + item.id)
+      }
     }
   })
   callDeny.addEventListener('click', function () {
@@ -1598,7 +1609,7 @@
     if (on) updateChip('● thinking…', false)
   }
 
-  function revealHistory(text) {
+  function revealHistory(text, id) {
     var s = String(text || '')
     if (s.length === 0) return
     if (!historyEl) return
@@ -1610,6 +1621,8 @@
     if (empty) empty.remove()
     historyEl.appendChild(m.wrap)
     historyEl.scrollTop = historyEl.scrollHeight
+    // 时间线：气泡已插入 DOM（cn 逐字浮现前），id 与 host push 对齐
+    if (typeof id === 'number') report('tl:bubble:' + id)
     var i = 0
     if (typeTimer !== null) { window.clearInterval(typeTimer); typeTimer = null }
     typeTimer = window.setInterval(function () {
@@ -1924,12 +1937,14 @@
           if (u.kind === 'call') {
             handleCallItem(u)
           } else if (u.kind === 'cn') {
-            revealHistory(u.cn || '')
+            revealHistory(u.cn || '', u.id)
           } else {
-            enqueue(u.text, u.force === true, u.emotion || 'neutral', u.expr || '', u.cn || '')
+            enqueue(u.text, u.force === true, u.emotion || 'neutral', u.expr || '', u.cn || '', u.id)
             // 非对话产生的回答（任务播报 / 空闲闲聊）：同步进对话区
             if (u.announce === true || u.idle === true) {
               addHistory({ role: 'assistant', cn: u.cn || u.text, announce: u.announce === true, idle: u.idle === true, t: Date.now() })
+              // 时间线：say 气泡已插入 DOM，id 与 host push 对齐
+              if (typeof u.id === 'number') report('tl:bubble:' + u.id)
             }
           }
         }
