@@ -204,7 +204,7 @@
 
   try { unlocked = window.localStorage.getItem('amadeus.unlocked') === '1' } catch (e) { unlocked = false }
 
-  function enqueue(text, force, emotion, expr, cn, id) {
+  function enqueue(text, force, emotion, expr, cn, id, bubble) {
     var t = String(text || '').replace(/\s+/g, ' ').trim()
     if (t.length === 0) return
     if (!force && cfg.voiceOn !== true) return
@@ -215,9 +215,27 @@
     var qi = { text: t, cn: cn || '', emotion: emo, expr: expr || EXPR[emo] || '' }
     // 时间线：透传 host 队列 id（若有），播报 play/end 上报才能与 host push 事件对齐
     if (typeof id === 'number') qi.id = id
+    // 气泡元数据（任务播报 announce/idle、来电接听 call）随条目入队：取到条目时不再直接
+    // 插气泡，改由 pump 在该句真正开始播放（play() resolve 回调内）或终局失败兜底时插入
+    if (bubble) qi.bubble = bubble
     queue.push(qi)
     prefetchNext()
     pump()
+  }
+
+  // 渲染该条目的历史气泡（一次性）：成功出声时在 play() resolve 回调内调用；
+  // 主音频终局失败（拉取失败 / autoplay 拦截后无声 / 播放错误…）在各失败出口补调用，
+  // 保证文字不丢。bubbleDone 标记防解锁重试/兜底与成功回调重复插入。
+  function renderItemBubble(item) {
+    if (!item || item.bubbleDone || !item.bubble) return
+    item.bubbleDone = true
+    if (item.bubble.call) {
+      addHistory({ role: 'assistant', cn: item.bubble.cn, call: true })
+    } else {
+      addHistory({ role: 'assistant', cn: item.bubble.cn, announce: item.bubble.announce === true, idle: item.bubble.idle === true, t: Date.now() })
+    }
+    // 时间线：气泡已插入 DOM（与 tl:play 同回调、播放开始瞬间），id 与 host push 对齐
+    if (typeof item.id === 'number') report('tl:bubble:' + item.id)
   }
 
   function ensureAudioEl() {
@@ -381,6 +399,9 @@
       var obj = await fetchAudioWithWords(item.text, item.emotion)
       await playAudioUrl(obj.url, function () {
         startSpeaking(item, obj.words)
+        // 气泡渲染时机 = 该句真正开始出声（audioEl.play() promise resolve 回调内）：
+        // 插完 DOM 立即上报 tl:bubble，与紧随的 tl:play 同回调对齐（连发时逐句 气泡+声音 同步）
+        renderItemBubble(item)
         // 时间线：audioEl.play() promise resolve（真正出声）后才上报，id 与 host push 对齐
         if (typeof item.id === 'number') report('tl:play:' + item.id)
       })
@@ -389,6 +410,10 @@
       stopSpeaking()
     } catch (e1) {
       var msg = e1 && e1.message ? e1.message : String(e1)
+      // 主音频管线已终局失败（拉取失败 / autoplay 拦截 / 播放错误…）：立即补气泡，文字不丢。
+      // 条目已出队，解锁重试只会作用于仍在队列中的条目——若该条目之后真正出声，
+      // 则经成功回调插气泡（此处先到则标记防重，成功回调不再重复插）。
+      renderItemBubble(item)
       if (cfg.voiceStability === false) {
         try {
           await speakBrowser(item.text)
@@ -494,12 +519,10 @@
     stopCall()
     ackCallRemote()
     if (item) {
-      enqueue(item.text, true, item.emotion || 'neutral', item.expr || '', item.cn || '', item.id)
-      if (item.cn) {
-        addHistory({ role: 'assistant', cn: item.cn, call: true })
-        // 时间线：来电接听气泡已插入 DOM，id 与 host push 对齐
-        if (typeof item.id === 'number') report('tl:bubble:' + item.id)
-      }
+      // 来电接听气泡同样迁移到播放开始瞬间：气泡元数据随条目入队，
+      // 由 pump 在该句真正开始播放（成功回调）或终局失败兜底时插入（仅一次）
+      enqueue(item.text, true, item.emotion || 'neutral', item.expr || '', item.cn || '', item.id,
+        item.cn ? { cn: item.cn, call: true } : null)
     }
   })
   callDeny.addEventListener('click', function () {
@@ -1939,13 +1962,12 @@
           } else if (u.kind === 'cn') {
             revealHistory(u.cn || '', u.id)
           } else {
-            enqueue(u.text, u.force === true, u.emotion || 'neutral', u.expr || '', u.cn || '', u.id)
-            // 非对话产生的回答（任务播报 / 空闲闲聊）：同步进对话区
-            if (u.announce === true || u.idle === true) {
-              addHistory({ role: 'assistant', cn: u.cn || u.text, announce: u.announce === true, idle: u.idle === true, t: Date.now() })
-              // 时间线：say 气泡已插入 DOM，id 与 host push 对齐
-              if (typeof u.id === 'number') report('tl:bubble:' + u.id)
-            }
+            // 任务播报 / 空闲闲聊（announce/idle）：不再取到即插气泡——气泡元数据随条目
+            // 入队（enqueue 末参 bubble），由 pump 在该句真正开始播放（或终局失败兜底）时插入
+            var bubbleMeta = (u.announce === true || u.idle === true)
+              ? { cn: u.cn || u.text, announce: u.announce === true, idle: u.idle === true }
+              : null
+            enqueue(u.text, u.force === true, u.emotion || 'neutral', u.expr || '', u.cn || '', u.id, bubbleMeta)
           }
         }
         if (items.length === 0 && data.cursor > cursor) cursor = data.cursor
