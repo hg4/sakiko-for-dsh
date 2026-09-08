@@ -379,6 +379,8 @@ function apply(ctx) {
     const callOptions = [[72e5, "2 \u5C0F\u65F6"], [216e5, "6 \u5C0F\u65F6"], [36e6, "10 \u5C0F\u65F6\uFF08\u9ED8\u8BA4\uFF09"], [864e5, "24 \u5C0F\u65F6"]];
     const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 12e5;
     const pickCall = (v) => callOptions.find((o) => o[0] === v) ? v : 36e6;
+    const narratorOptions = [[12e4, "2 \u5206\u949F"], [24e4, "4 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [36e4, "6 \u5206\u949F"], [6e5, "10 \u5206\u949F"]];
+    const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 24e4;
     return import_react.default.createElement(
       "div",
       null,
@@ -410,6 +412,11 @@ function apply(ctx) {
       group("\u4E3B\u52A8\u4E92\u52A8\u8282\u594F"),
       Row({ label: "\u7A7A\u95F2\u591A\u4E45\u5F00\u53E3", control: Select({ value: pickIdle(config.idleChatMs), options: idleOptions, onChange: (v) => patchConfig({ idleChatMs: Number(v) }) }) }),
       Row({ label: "\u6765\u7535\u95F4\u9694", control: Select({ value: pickCall(config.callIntervalMs), options: callOptions, onChange: (v) => patchConfig({ callIntervalMs: Number(v) }) }) }),
+      group("\u8FDB\u5EA6\u64AD\u62A5"),
+      Row({ label: "\u8FDB\u5EA6\u64AD\u62A5", desc: "\u7965\u5B50\u64AD\u62A5\u4EFB\u52A1\u8FDB\u5C55\uFF1A\u5F00\u5DE5\u3001\u5B8C\u6210\u3001\u91CC\u7A0B\u7891\u4E0E\u963B\u585E", control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),
+      Row({ label: "LLM \u56DE\u5408\u603B\u7ED3", desc: "\u6BCF\u56DE\u5408\u5B8C\u6210\u65F6\u7531 LLM \u603B\u7ED3\u505A\u4E86\u4EC0\u4E48+\u4E0B\u4E00\u6B65\uFF08\u5931\u8D25\u81EA\u52A8\u9000\u56DE\u6A21\u677F\u53E5\uFF09", control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),
+      Row({ label: "\u6BCF\u56DE\u5408\u5B8C\u6210\u64AD\u62A5", desc: "\u5173\u95ED\u540E\u53EA\u4FDD\u7559\u91CC\u7A0B\u7891\u4E0E\u963B\u585E\u7B49\u5173\u952E\u8282\u70B9", control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
+      Row({ label: "\u91CC\u7A0B\u7891\u95F4\u9694", desc: "\u5355\u56DE\u5408\u8DD1\u6EE1\u8BE5\u65F6\u957F\u5373\u64AD\u62A5\u4E00\u6B21\u8FDB\u5C55", control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
       import_react.default.createElement(
         "div",
         { style: { marginTop: "16px" } },

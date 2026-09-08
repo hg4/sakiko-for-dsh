@@ -340,6 +340,8 @@ export function apply(ctx) {
       const callOptions = [[7200000, '2 小时'], [21600000, '6 小时'], [36000000, '10 小时（默认）'], [86400000, '24 小时']]
       const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 1200000
       const pickCall = (v) => callOptions.find((o) => o[0] === v) ? v : 36000000
+      const narratorOptions = [[120000, '2 分钟'], [240000, '4 分钟（默认）'], [360000, '6 分钟'], [600000, '10 分钟']]
+      const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 240000
       return React.createElement('div', null,
         group('基本开关'),
         Row({ label: '语音朗读', desc: '助手回复自动由 SAKIKO 朗读', control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
@@ -373,6 +375,12 @@ export function apply(ctx) {
         group('主动互动节奏'),
         Row({ label: '空闲多久开口', control: Select({ value: pickIdle(config.idleChatMs), options: idleOptions, onChange: (v) => patchConfig({ idleChatMs: Number(v) }) }) }),
         Row({ label: '来电间隔', control: Select({ value: pickCall(config.callIntervalMs), options: callOptions, onChange: (v) => patchConfig({ callIntervalMs: Number(v) }) }) }),
+
+        group('进度播报'),
+        Row({ label: '进度播报', desc: '祥子播报任务进展：开工、完成、里程碑与阻塞', control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),
+        Row({ label: 'LLM 回合总结', desc: '每回合完成时由 LLM 总结做了什么+下一步（失败自动退回模板句）', control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),
+        Row({ label: '每回合完成播报', desc: '关闭后只保留里程碑与阻塞等关键节点', control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
+        Row({ label: '里程碑间隔', desc: '单回合跑满该时长即播报一次进展', control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
 
         React.createElement('div', { style: { marginTop: '16px' } },
           React.createElement('button', { className: 'amad-settings-btn', onClick: () => rpcSay('申し遅れました 私 豊川祥子と申します') }, '💬 测试语音'),
