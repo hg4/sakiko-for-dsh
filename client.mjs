@@ -46,16 +46,19 @@ export function apply(ctx) {
       ".amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}" +
       ".amad-sb-btn:hover{background:rgba(128,128,128,.15);}" +
       ".amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}" +
-      // ---------------- 浮窗壳（FloatShell）样式 ----------------
-      ".amad-float-shell{pointer-events:auto;position:fixed;display:flex;flex-direction:column;border:1px solid rgba(58,79,127,.9);border-radius:16px;background:linear-gradient(160deg,rgba(19,32,63,.97),rgba(11,18,36,.99));box-shadow:0 18px 60px rgba(0,0,0,.55);overflow:hidden;color:var(--dsw-alias-label-primary,#eef2fb);user-select:none;}" +
-      ".amad-float-head{flex:none;height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;user-select:none;cursor:move;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.12);touch-action:none;}" +
-      ".amad-float-title{font-weight:700;letter-spacing:2px;font-size:13px;margin-right:auto;color:var(--dsw-alias-label-primary,#eef2fb);}" +
-      ".amad-float-hide{flex:none;border:0;background:rgba(255,255,255,.08);color:var(--dsw-alias-label-secondary,#a8b6d8);width:22px;height:22px;border-radius:6px;font-size:13px;line-height:1;cursor:pointer;padding:0;pointer-events:auto;}" +
-      ".amad-float-hide:hover{background:rgba(255,255,255,.2);color:#eef2fb;}" +
-      ".amad-float-body{flex:1;min-height:0;position:relative;display:block;}" +
+      // ---------------- 浮窗壳（FloatShell）样式（Ruling P5：无外框 chrome，仅手机本体） ----------------
+      ".amad-float-shell{pointer-events:auto;position:fixed;display:block;border:1px solid rgba(143,179,255,.18);border-radius:16px;background:#070d1a;box-shadow:0 12px 44px rgba(0,0,0,.5);overflow:hidden;user-select:none;}" +
+      ".amad-float-body{position:absolute;inset:0;display:block;}" +
       ".amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}" +
-      ".amad-float-grip{pointer-events:auto;position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.45) 55%);border-bottom-right-radius:15px;}" +
-      ".amad-float-grip:hover{background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.75) 55%);}" +
+      ".amad-float-strip{position:absolute;top:0;left:0;right:0;height:10px;cursor:move;touch-action:none;z-index:6;pointer-events:auto;}" +
+      ".amad-float-strip:hover{background:rgba(255,255,255,.08);}" +
+      ".amad-float-chrome{position:absolute;top:16px;left:10px;display:flex;gap:6px;z-index:7;opacity:0;transition:opacity .15s;pointer-events:none;}" +
+      ".amad-float-shell:hover .amad-float-chrome{opacity:1;pointer-events:auto;}" +
+      ".amad-float-btn{width:20px;height:20px;border-radius:50%;border:1px solid rgba(238,242,251,.28);background:rgba(10,16,32,.6);color:#eef2fb;font-size:12px;line-height:1;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);}" +
+      ".amad-float-btn:hover{background:rgba(143,179,255,.35);color:#fff;}" +
+      "@media (hover: hover){.amad-float-shell:hover .amad-float-chrome{opacity:1;pointer-events:auto;}.amad-float-shell:hover .amad-float-grip{opacity:1;pointer-events:auto;}}@media (hover: none){.amad-float-chrome{opacity:.55;pointer-events:auto;}.amad-float-grip{opacity:.5;pointer-events:auto;}}" +
+      ".amad-float-grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:6;opacity:0;transition:opacity .15s;pointer-events:none;background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.6) 55%);border-bottom-right-radius:8px;}" +
+      ".amad-float-grip:hover{opacity:1;background:linear-gradient(135deg,rgba(255,255,255,0) 45%,rgba(255,255,255,.9) 45%);}" +
       ".amad-float-dot{pointer-events:auto;position:fixed;right:24px;bottom:24px;width:48px;height:48px;border-radius:50%;border:1px solid rgba(143,179,255,.55);background:linear-gradient(160deg,rgba(30,46,92,.95),rgba(15,24,48,.98));color:#8fb3ff;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);user-select:none;}" +
       ".amad-float-dot:hover{background:linear-gradient(160deg,rgba(45,66,122,.95),rgba(22,36,70,.98));color:#eef2fb;}"
     )
@@ -388,6 +391,8 @@ export function apply(ctx) {
         lastSentCfg = s
         try { own.current.contentWindow.postMessage({ type: 'amadeus/config', value: cfg }, '*') } catch (e) { /* iframe 未就绪 */ }
       }
+      // Important-1：config 未到且 src 未 latch 前不渲染 iframe，避免默认 src 整帧重载造成 Live2D 双初始化/欢迎语双播
+      if (!config && !panelSrcSet) return null
       return React.createElement('iframe', {
         className: props.cls || 'amad-frame',
         src: panelSrc,
@@ -489,39 +494,45 @@ export function apply(ctx) {
         saveFloatState(s)
         notifyOpen()
       }
+      const onReset = () => {
+        // ⤢：还原默认窗口大小与位置（Ruling P2 默认 400×700 / 右下角 24）
+        const d = defaultFloatState()
+        const s = setFloatState({ x: d.x, y: d.y, w: d.w, h: d.h, collapsed: false })
+        saveFloatState(s)
+      }
+
+      const shellStyle = {
+        left: f.x + 'px',
+        top: f.y + 'px',
+        width: f.w + 'px',
+        height: f.h + 'px',
+        zIndex: FLOAT_Z,
+        display: f.collapsed ? 'none' : 'block',
+      }
 
       return React.createElement('div', { className: 'amad-float-root' },
-        React.createElement('div', {
-          className: 'amad-float-shell',
-          style: {
-            left: f.x + 'px',
-            top: f.y + 'px',
-            width: f.w + 'px',
-            height: f.h + 'px',
-            zIndex: FLOAT_Z,
-            display: f.collapsed ? 'none' : 'flex',
-          },
-        },
-          React.createElement('div', {
-            className: 'amad-float-head',
-            onPointerDown: (ev) => startDrag('move', ev),
-          },
-            React.createElement('span', { className: 'amad-float-title' }, 'SAKIKO'),
+        React.createElement('div', { className: 'amad-float-shell', style: shellStyle },
+          React.createElement('div', { className: 'amad-float-strip', onPointerDown: (ev) => startDrag('move', ev) }),
+          React.createElement('div', { className: 'amad-float-body' },
+            React.createElement(SakikoFrame, { cls: 'amad-float-frame' }),
+          ),
+          React.createElement('div', { className: 'amad-float-chrome' },
             React.createElement('button', {
-              className: 'amad-float-hide',
-              title: '收起',
+              className: 'amad-float-btn',
+              title: '收起 SAKIKO',
               'aria-label': '收起 SAKIKO',
               onPointerDown: (ev) => ev.stopPropagation(),
               onClick: onHide,
             }, '—'),
+            React.createElement('button', {
+              className: 'amad-float-btn',
+              title: '还原默认大小与位置',
+              'aria-label': '还原默认大小与位置',
+              onPointerDown: (ev) => ev.stopPropagation(),
+              onClick: onReset,
+            }, '⤢'),
           ),
-          React.createElement('div', { className: 'amad-float-body' },
-            React.createElement(SakikoFrame, { cls: 'amad-float-frame' }),
-          ),
-          React.createElement('div', {
-            className: 'amad-float-grip',
-            onPointerDown: (ev) => startDrag('resize', ev),
-          }),
+          React.createElement('div', { className: 'amad-float-grip', onPointerDown: (ev) => startDrag('resize', ev) }),
         ),
         f.collapsed
           ? React.createElement('button', {

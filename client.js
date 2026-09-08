@@ -58,7 +58,7 @@ function apply(ctx) {
     };
   }
   const removeCss = domCss(
-    ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}.amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(19,32,63,.55),rgba(20,33,60,.22));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}.amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}.amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#eef2fb);font-size:13px;}.amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}.amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}.amad-btn:hover{background:rgba(255,255,255,.18);}.amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}.amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#7688ad);border-top:1px solid rgba(255,255,255,.08);flex:none;}.amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}.amad-settings-label{font-weight:600;}.amad-settings-desc{font-size:12px;color:#a8b6d8;margin-top:2px;}.amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}.amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}.amad-settings-btn:hover{background:rgba(128,128,128,.15);}.amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}.amad-sb-btn:hover{background:rgba(128,128,128,.15);}.amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}.amad-float-shell{pointer-events:auto;position:fixed;display:flex;flex-direction:column;border:1px solid rgba(58,79,127,.9);border-radius:16px;background:linear-gradient(160deg,rgba(19,32,63,.97),rgba(11,18,36,.99));box-shadow:0 18px 60px rgba(0,0,0,.55);overflow:hidden;color:var(--dsw-alias-label-primary,#eef2fb);user-select:none;}.amad-float-head{flex:none;height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;user-select:none;cursor:move;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.12);touch-action:none;}.amad-float-title{font-weight:700;letter-spacing:2px;font-size:13px;margin-right:auto;color:var(--dsw-alias-label-primary,#eef2fb);}.amad-float-hide{flex:none;border:0;background:rgba(255,255,255,.08);color:var(--dsw-alias-label-secondary,#a8b6d8);width:22px;height:22px;border-radius:6px;font-size:13px;line-height:1;cursor:pointer;padding:0;pointer-events:auto;}.amad-float-hide:hover{background:rgba(255,255,255,.2);color:#eef2fb;}.amad-float-body{flex:1;min-height:0;position:relative;display:block;}.amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}.amad-float-grip{pointer-events:auto;position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.45) 55%);border-bottom-right-radius:15px;}.amad-float-grip:hover{background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.75) 55%);}.amad-float-dot{pointer-events:auto;position:fixed;right:24px;bottom:24px;width:48px;height:48px;border-radius:50%;border:1px solid rgba(143,179,255,.55);background:linear-gradient(160deg,rgba(30,46,92,.95),rgba(15,24,48,.98));color:#8fb3ff;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);user-select:none;}.amad-float-dot:hover{background:linear-gradient(160deg,rgba(45,66,122,.95),rgba(22,36,70,.98));color:#eef2fb;}"
+    ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}.amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(19,32,63,.55),rgba(20,33,60,.22));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}.amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}.amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#eef2fb);font-size:13px;}.amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}.amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}.amad-btn:hover{background:rgba(255,255,255,.18);}.amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}.amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#7688ad);border-top:1px solid rgba(255,255,255,.08);flex:none;}.amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}.amad-settings-label{font-weight:600;}.amad-settings-desc{font-size:12px;color:#a8b6d8;margin-top:2px;}.amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}.amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}.amad-settings-btn:hover{background:rgba(128,128,128,.15);}.amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}.amad-sb-btn:hover{background:rgba(128,128,128,.15);}.amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}.amad-float-shell{pointer-events:auto;position:fixed;display:block;border:1px solid rgba(143,179,255,.18);border-radius:16px;background:#070d1a;box-shadow:0 12px 44px rgba(0,0,0,.5);overflow:hidden;user-select:none;}.amad-float-body{position:absolute;inset:0;display:block;}.amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}.amad-float-strip{position:absolute;top:0;left:0;right:0;height:10px;cursor:move;touch-action:none;z-index:6;pointer-events:auto;}.amad-float-strip:hover{background:rgba(255,255,255,.08);}.amad-float-chrome{position:absolute;top:16px;left:10px;display:flex;gap:6px;z-index:7;opacity:0;transition:opacity .15s;pointer-events:none;}.amad-float-shell:hover .amad-float-chrome{opacity:1;pointer-events:auto;}.amad-float-btn{width:20px;height:20px;border-radius:50%;border:1px solid rgba(238,242,251,.28);background:rgba(10,16,32,.6);color:#eef2fb;font-size:12px;line-height:1;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);}.amad-float-btn:hover{background:rgba(143,179,255,.35);color:#fff;}@media (hover: hover){.amad-float-shell:hover .amad-float-chrome{opacity:1;pointer-events:auto;}.amad-float-shell:hover .amad-float-grip{opacity:1;pointer-events:auto;}}@media (hover: none){.amad-float-chrome{opacity:.55;pointer-events:auto;}.amad-float-grip{opacity:.5;pointer-events:auto;}}.amad-float-grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;touch-action:none;z-index:6;opacity:0;transition:opacity .15s;pointer-events:none;background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.6) 55%);border-bottom-right-radius:8px;}.amad-float-grip:hover{opacity:1;background:linear-gradient(135deg,rgba(255,255,255,0) 45%,rgba(255,255,255,.9) 45%);}.amad-float-dot{pointer-events:auto;position:fixed;right:24px;bottom:24px;width:48px;height:48px;border-radius:50%;border:1px solid rgba(143,179,255,.55);background:linear-gradient(160deg,rgba(30,46,92,.95),rgba(15,24,48,.98));color:#8fb3ff;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);user-select:none;}.amad-float-dot:hover{background:linear-gradient(160deg,rgba(45,66,122,.95),rgba(22,36,70,.98));color:#eef2fb;}"
   );
   ctx.effect(() => removeCss);
   const theme = ctx.get("theme");
@@ -405,6 +405,7 @@ function apply(ctx) {
       } catch (e) {
       }
     };
+    if (!config && !panelSrcSet) return null;
     return import_react.default.createElement("iframe", {
       className: props.cls || "amad-frame",
       src: panelSrc,
@@ -501,45 +502,59 @@ function apply(ctx) {
       saveFloatState(s);
       notifyOpen();
     };
+    const onReset = () => {
+      const d = defaultFloatState();
+      const s = setFloatState({ x: d.x, y: d.y, w: d.w, h: d.h, collapsed: false });
+      saveFloatState(s);
+    };
+    const shellStyle = {
+      left: f.x + "px",
+      top: f.y + "px",
+      width: f.w + "px",
+      height: f.h + "px",
+      zIndex: FLOAT_Z,
+      display: f.collapsed ? "none" : "block"
+    };
     return import_react.default.createElement(
       "div",
       { className: "amad-float-root" },
       import_react.default.createElement(
         "div",
-        {
-          className: "amad-float-shell",
-          style: {
-            left: f.x + "px",
-            top: f.y + "px",
-            width: f.w + "px",
-            height: f.h + "px",
-            zIndex: FLOAT_Z,
-            display: f.collapsed ? "none" : "flex"
-          }
-        },
+        { className: "amad-float-shell", style: shellStyle },
+        import_react.default.createElement("div", {
+          className: "amad-float-strip",
+          onPointerDown: (ev) => startDrag("move", ev)
+        }),
         import_react.default.createElement(
           "div",
-          {
-            className: "amad-float-head",
-            onPointerDown: (ev) => startDrag("move", ev)
-          },
-          import_react.default.createElement("span", { className: "amad-float-title" }, "SAKIKO"),
+          { className: "amad-float-body" },
+          import_react.default.createElement(SakikoFrame, { cls: "amad-float-frame" })
+        ),
+        import_react.default.createElement(
+          "div",
+          { className: "amad-float-chrome" },
           import_react.default.createElement(
             "button",
             {
-              className: "amad-float-hide",
-              title: "\u6536\u8D77",
+              className: "amad-float-btn",
+              title: "\u6536\u8D77 SAKIKO",
               "aria-label": "\u6536\u8D77 SAKIKO",
               onPointerDown: (ev) => ev.stopPropagation(),
               onClick: onHide
             },
             "\u2014"
+          ),
+          import_react.default.createElement(
+            "button",
+            {
+              className: "amad-float-btn",
+              title: "\u8FD8\u539F\u9ED8\u8BA4\u5927\u5C0F\u4E0E\u4F4D\u7F6E",
+              "aria-label": "\u8FD8\u539F\u9ED8\u8BA4\u5927\u5C0F\u4E0E\u4F4D\u7F6E",
+              onPointerDown: (ev) => ev.stopPropagation(),
+              onClick: onReset
+            },
+            "\u2922"
           )
-        ),
-        import_react.default.createElement(
-          "div",
-          { className: "amad-float-body" },
-          import_react.default.createElement(SakikoFrame, { cls: "amad-float-frame" })
         ),
         import_react.default.createElement("div", {
           className: "amad-float-grip",
