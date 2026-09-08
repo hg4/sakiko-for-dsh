@@ -58,7 +58,7 @@ function apply(ctx) {
     };
   }
   const removeCss = domCss(
-    ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}.amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(19,32,63,.55),rgba(20,33,60,.22));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}.amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}.amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#eef2fb);font-size:13px;}.amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}.amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}.amad-btn:hover{background:rgba(255,255,255,.18);}.amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}.amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#7688ad);border-top:1px solid rgba(255,255,255,.08);flex:none;}.amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}.amad-settings-label{font-weight:600;}.amad-settings-desc{font-size:12px;color:#a8b6d8;margin-top:2px;}.amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}.amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}.amad-settings-btn:hover{background:rgba(128,128,128,.15);}.amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}.amad-sb-btn:hover{background:rgba(128,128,128,.15);}.amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}"
+    ".amad-col{display:flex;flex-direction:column;height:100%;min-height:440px;background:var(--dsw-alias-bg-base,transparent);border-left:1px solid var(--dsw-alias-border-l1,transparent);}.amad-header{display:flex;align-items:center;gap:6px;padding:8px 10px;user-select:none;background:linear-gradient(90deg,rgba(19,32,63,.55),rgba(20,33,60,.22));border-bottom:1px solid rgba(255,255,255,.1);flex:none;}.amad-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;}.amad-title{font-weight:700;letter-spacing:2px;color:var(--dsw-alias-label-primary,#eef2fb);font-size:13px;}.amad-sub{font-size:10px;color:var(--dsw-alias-label-secondary,#a8b6d8);margin-right:auto;}.amad-btn{border:0;background:rgba(255,255,255,.08);color:inherit;width:24px;height:24px;border-radius:6px;font-size:12px;cursor:pointer;line-height:1;padding:0;flex:none;}.amad-btn:hover{background:rgba(255,255,255,.18);}.amad-frame{flex:1;min-height:300px;width:100%;border:0;display:block;background:transparent;}.amad-footer{padding:4px 10px;font-size:10px;color:var(--dsw-alias-label-secondary,#7688ad);border-top:1px solid rgba(255,255,255,.08);flex:none;}.amad-settings-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 4px;border-bottom:1px solid rgba(128,128,128,.18);}.amad-settings-label{font-weight:600;}.amad-settings-desc{font-size:12px;color:#a8b6d8;margin-top:2px;}.amad-settings select{border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:4px 8px;background:transparent;color:inherit;}.amad-settings-btn{border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit;border-radius:6px;padding:5px 12px;cursor:pointer;margin-right:8px;}.amad-settings-btn:hover{background:rgba(128,128,128,.15);}.amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}.amad-sb-btn:hover{background:rgba(128,128,128,.15);}.amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}.amad-float-shell{pointer-events:auto;position:fixed;display:flex;flex-direction:column;border:1px solid rgba(58,79,127,.9);border-radius:16px;background:linear-gradient(160deg,rgba(19,32,63,.97),rgba(11,18,36,.99));box-shadow:0 18px 60px rgba(0,0,0,.55);overflow:hidden;color:var(--dsw-alias-label-primary,#eef2fb);user-select:none;}.amad-float-head{flex:none;height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;user-select:none;cursor:move;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.12);touch-action:none;}.amad-float-title{font-weight:700;letter-spacing:2px;font-size:13px;margin-right:auto;color:var(--dsw-alias-label-primary,#eef2fb);}.amad-float-hide{flex:none;border:0;background:rgba(255,255,255,.08);color:var(--dsw-alias-label-secondary,#a8b6d8);width:22px;height:22px;border-radius:6px;font-size:13px;line-height:1;cursor:pointer;padding:0;pointer-events:auto;}.amad-float-hide:hover{background:rgba(255,255,255,.2);color:#eef2fb;}.amad-float-body{flex:1;min-height:0;position:relative;display:block;}.amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}.amad-float-grip{pointer-events:auto;position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.45) 55%);border-bottom-right-radius:15px;}.amad-float-grip:hover{background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.75) 55%);}.amad-float-dot{pointer-events:auto;position:fixed;right:24px;bottom:24px;width:48px;height:48px;border-radius:50%;border:1px solid rgba(143,179,255,.55);background:linear-gradient(160deg,rgba(30,46,92,.95),rgba(15,24,48,.98));color:#8fb3ff;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);user-select:none;}.amad-float-dot:hover{background:linear-gradient(160deg,rgba(45,66,122,.95),rgba(22,36,70,.98));color:#eef2fb;}"
   );
   ctx.effect(() => removeCss);
   const theme = ctx.get("theme");
@@ -151,6 +151,7 @@ function apply(ctx) {
           lastConfigJson = cfgJson;
           configStore.set(cfg);
           applyTheme(cfg ? cfg.themeOn !== false : true);
+          layoutModeSync(cfg);
         }
         const st = { tts: res.tts || "", queue: res.queue || 0, cache: res.cache || 0, error: "", callPending: res.callPending === true, pendingClose: typeof res.pendingClose === "number" ? res.pendingClose : null };
         const stJson = JSON.stringify(st);
@@ -160,14 +161,22 @@ function apply(ctx) {
         }
         if (res.callPending === true && !lastCallPending) {
           lastCallPending = true;
-          openDetailsSafe();
+          if (isFloatOn()) {
+            if (floatStore.get().collapsed) expandFloatShell();
+          } else {
+            openDetailsSafe();
+          }
         }
         if (res.callPending !== true) lastCallPending = false;
         if (typeof res.pendingClose === "number" && res.pendingClose !== lastPendingClose) {
           lastPendingClose = res.pendingClose;
-          try {
-            if (layout) layout.closeDetails();
-          } catch (e) {
+          if (isFloatOn()) {
+            if (!floatStore.get().collapsed) collapseFloatShell();
+          } else {
+            try {
+              if (layout) layout.closeDetails();
+            } catch (e) {
+            }
           }
           hostLocal.call("ackClose", {}).catch(() => {
           });
@@ -186,7 +195,10 @@ function apply(ctx) {
   async function patchConfig(patch) {
     try {
       const next = await hostLocal.call("setConfig", patch);
-      if (next && typeof next === "object") configStore.set(next);
+      if (next && typeof next === "object") {
+        configStore.set(next);
+        layoutModeSync(next);
+      }
       return next;
     } catch (e) {
       console.error("[amadeus] setConfig failed", e);
@@ -236,9 +248,25 @@ function apply(ctx) {
   }
   function openDetailsSafe() {
     if (layout === void 0) return;
+    if (isFloatOn()) return;
     try {
       layout.openDetails();
     } catch (e) {
+    }
+  }
+  let lastLayoutMode = null;
+  function layoutModeSync(cfg) {
+    if (!cfg) return;
+    const floatMode = cfg.floatPanel !== false;
+    if (floatMode === lastLayoutMode) return;
+    lastLayoutMode = floatMode;
+    if (floatMode) {
+      try {
+        if (layout) layout.closeDetails();
+      } catch (e) {
+      }
+    } else {
+      openDetailsSafe();
     }
   }
   rpcReport("client apply start");
@@ -270,14 +298,78 @@ function apply(ctx) {
     }, []);
     return null;
   }
-  function SakikoColumn() {
+  const FLOAT_KEY = "amadeus.float";
+  const FLOAT_DEF_W = 400;
+  const FLOAT_DEF_H = 700;
+  const FLOAT_MIN_W = 320;
+  const FLOAT_MIN_H = 480;
+  const FLOAT_GAP = 24;
+  function floatViewport() {
+    return { vw: window.innerWidth || 0, vh: window.innerHeight || 0 };
+  }
+  function clampFloatRect(rect) {
+    const { vw, vh } = floatViewport();
+    const minW = Math.min(FLOAT_MIN_W, vw);
+    const minH = Math.min(FLOAT_MIN_H, vh);
+    const w = Math.round(Math.min(Math.max(rect.w, minW), vw));
+    const h = Math.round(Math.min(Math.max(rect.h, minH), vh));
+    const x = Math.round(Math.min(Math.max(rect.x, 0), Math.max(0, vw - w)));
+    const y = Math.round(Math.min(Math.max(rect.y, 0), Math.max(0, vh - h)));
+    return { x: x, y: y, w: w, h: h };
+  }
+  function defaultFloatState() {
+    const { vw, vh } = floatViewport();
+    const w = Math.min(FLOAT_DEF_W, vw);
+    const h = Math.min(FLOAT_DEF_H, vh);
+    const r = clampFloatRect({ x: vw - w - FLOAT_GAP, y: vh - h - FLOAT_GAP, w: w, h: h });
+    return { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: false };
+  }
+  function loadFloatState() {
+    let raw = null;
+    try {
+      raw = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
+    } catch (e) {
+      raw = null;
+    }
+    const fallback = defaultFloatState();
+    if (!raw || typeof raw !== "object") return fallback;
+    const num = (v) => typeof v === "number" && Number.isFinite(v);
+    if (!num(raw.x) || !num(raw.y) || !num(raw.w) || !num(raw.h)) return fallback;
+    if (raw.w < FLOAT_MIN_W || raw.h < FLOAT_MIN_H) return fallback;
+    const r = clampFloatRect({ x: raw.x, y: raw.y, w: raw.w, h: raw.h });
+    return { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: raw.collapsed === true };
+  }
+  function saveFloatState(state) {
+    try {
+      localStorage.setItem(FLOAT_KEY, JSON.stringify({ x: state.x, y: state.y, w: state.w, h: state.h, collapsed: state.collapsed === true }));
+    } catch (e) {
+    }
+  }
+  const floatStore = createStore(loadFloatState());
+  function setFloatState(patch) {
+    const cur = floatStore.get();
+    const merged = Object.assign({}, cur, patch);
+    const r = clampFloatRect(merged);
+    const next = { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: merged.collapsed === true };
+    floatStore.set(next);
+    return next;
+  }
+  function isFloatOn() {
+    const cfg = configStore.get();
+    return !cfg || cfg.floatPanel !== false;
+  }
+  function expandFloatShell() {
+    const s = setFloatState({ collapsed: false });
+    saveFloatState(s);
+  }
+  function collapseFloatShell() {
+    const s = setFloatState({ collapsed: true });
+    saveFloatState(s);
+  }
+  function SakikoFrame(props) {
     const config = useStore(configStore);
-    const status = useStore(statusStore);
-    import_react.default.useEffect(() => {
-      rpcReport("column mounted");
-      return () => rpcReport("column unmounted");
-    }, []);
-    if (!panelSrcSet && config) {
+    const own = import_react.default.useRef(null);
+    if (config && !panelSrcSet) {
       panelSrcSet = true;
       panelSrc = iframeSrc(config);
     }
@@ -298,23 +390,184 @@ function apply(ctx) {
         }
       }
     }, [config]);
+    const onLoad = () => {
+      const cfg = configStore.get();
+      if (!cfg || !own.current || !own.current.contentWindow) return;
+      let s = "";
+      try {
+        s = JSON.stringify(cfg);
+      } catch (e) {
+        return;
+      }
+      lastSentCfg = s;
+      try {
+        own.current.contentWindow.postMessage({ type: "amadeus/config", value: cfg }, "*");
+      } catch (e) {
+      }
+    };
+    return import_react.default.createElement("iframe", {
+      className: props.cls || "amad-frame",
+      src: panelSrc,
+      title: "Sakiko Live2D",
+      allow: "microphone; camera; autoplay",
+      onLoad: onLoad,
+      ref: (el) => {
+        if (el) {
+          own.current = el;
+          iframeEl = el;
+        } else {
+          if (iframeEl === own.current) iframeEl = null;
+          own.current = null;
+        }
+      }
+    });
+  }
+  function SakikoColumn() {
+    const config = useStore(configStore);
+    const status = useStore(statusStore);
+    import_react.default.useEffect(() => {
+      rpcReport("column mounted");
+      return () => rpcReport("column unmounted");
+    }, []);
+    if (!config || config.floatPanel !== false) return null;
     return import_react.default.createElement(
       "div",
       { className: "amad-col" },
-      import_react.default.createElement("iframe", {
-        className: "amad-frame",
-        src: panelSrc,
-        title: "Sakiko Live2D",
-        allow: "microphone; camera; autoplay",
-        ref: (el) => {
-          iframeEl = el;
-        }
-      }),
+      import_react.default.createElement(SakikoFrame, null),
       import_react.default.createElement(
         "div",
         { className: "amad-footer" },
         import_react.default.createElement("span", null, status.error ? "\u26A0 host \u4E0D\u53EF\u8FBE" : "\u25CF " + (status.tts || "\u2026") + " \xB7 \u961F\u5217 " + status.queue + (status.callPending ? " \xB7 \u{1F4DE} \u6765\u7535\u4E2D" : ""))
       )
+    );
+  }
+  const FLOAT_Z = 2147483000;
+  function FloatShell() {
+    const f = useStore(floatStore);
+    const dragRef = import_react.default.useRef(null);
+    const [interacting, setInteracting] = import_react.default.useState(null);
+    import_react.default.useEffect(() => {
+      if (!interacting) return;
+      const base = dragRef.current;
+      if (!base) return;
+      const onMove = (ev) => {
+        const dx = ev.clientX - base.sx;
+        const dy = ev.clientY - base.sy;
+        if (base.kind === "move") {
+          setFloatState({ x: base.x + dx, y: base.y + dy });
+        } else {
+          const vw = window.innerWidth || 0;
+          const vh = window.innerHeight || 0;
+          const minW = Math.min(FLOAT_MIN_W, vw);
+          const minH = Math.min(FLOAT_MIN_H, vh);
+          const x0 = Math.min(base.x, Math.max(0, vw - minW));
+          const y0 = Math.min(base.y, Math.max(0, vh - minH));
+          const w = Math.round(Math.min(Math.max(base.w + dx, minW), Math.max(minW, vw - x0)));
+          const h = Math.round(Math.min(Math.max(base.h + dy, minH), Math.max(minH, vh - y0)));
+          setFloatState({ x: x0, y: y0, w: w, h: h });
+        }
+      };
+      const onUp = () => {
+        setInteracting(null);
+        dragRef.current = null;
+        saveFloatState(floatStore.get());
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+      return () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+      };
+    }, [interacting]);
+    const startDrag = (kind, ev) => {
+      if (ev.button !== 0 && ev.pointerType === "mouse") return;
+      const s = floatStore.get();
+      dragRef.current = { kind: kind, sx: ev.clientX, sy: ev.clientY, x: s.x, y: s.y, w: s.w, h: s.h };
+      setInteracting(kind);
+      try {
+        ev.currentTarget.setPointerCapture(ev.pointerId);
+      } catch (e) {
+      }
+      ev.preventDefault();
+    };
+    const onHide = () => {
+      const s = setFloatState({ collapsed: true });
+      saveFloatState(s);
+    };
+    const onExpand = () => {
+      const s = setFloatState({ collapsed: false });
+      saveFloatState(s);
+      notifyOpen();
+    };
+    return import_react.default.createElement(
+      "div",
+      { className: "amad-float-root" },
+      import_react.default.createElement(
+        "div",
+        {
+          className: "amad-float-shell",
+          style: {
+            left: f.x + "px",
+            top: f.y + "px",
+            width: f.w + "px",
+            height: f.h + "px",
+            zIndex: FLOAT_Z,
+            display: f.collapsed ? "none" : "flex"
+          }
+        },
+        import_react.default.createElement(
+          "div",
+          {
+            className: "amad-float-head",
+            onPointerDown: (ev) => startDrag("move", ev)
+          },
+          import_react.default.createElement("span", { className: "amad-float-title" }, "SAKIKO"),
+          import_react.default.createElement(
+            "button",
+            {
+              className: "amad-float-hide",
+              title: "\u6536\u8D77",
+              "aria-label": "\u6536\u8D77 SAKIKO",
+              onPointerDown: (ev) => ev.stopPropagation(),
+              onClick: onHide
+            },
+            "\u2014"
+          )
+        ),
+        import_react.default.createElement(
+          "div",
+          { className: "amad-float-body" },
+          import_react.default.createElement(SakikoFrame, { cls: "amad-float-frame" })
+        ),
+        import_react.default.createElement("div", {
+          className: "amad-float-grip",
+          onPointerDown: (ev) => startDrag("resize", ev)
+        })
+      ),
+      f.collapsed
+        ? import_react.default.createElement(
+            "button",
+            {
+              className: "amad-float-dot",
+              title: "\u5C55\u5F00 SAKIKO",
+              "aria-label": "\u5C55\u5F00 SAKIKO",
+              onClick: onExpand
+            },
+            "S"
+          )
+        : null
+    );
+  }
+  function FloatHost() {
+    const config = useStore(configStore);
+    const floatOn = !config || config.floatPanel !== false;
+    return import_react.default.createElement(
+      "div",
+      { className: "amad-float-host", style: { pointerEvents: "none" } },
+      import_react.default.createElement(RootPoller),
+      floatOn ? import_react.default.createElement(FloatShell) : null
     );
   }
   const VOICES = [
@@ -449,20 +702,17 @@ function apply(ctx) {
     );
   }
   function SidebarToggle(props) {
+    const config = useStore(configStore);
     const wide = !!(props && props.wide);
-    return import_react.default.createElement(
-      "div",
-      null,
-      import_react.default.createElement(RootPoller),
-      import_react.default.createElement("button", {
-        className: "amad-sb-btn",
-        title: "\u6253\u5F00 SAKIKO \u53F3\u4FA7\u680F",
-        onClick: () => {
-          notifyOpen();
-          if (layout) layout.openDetails();
-        }
-      }, wide ? "SAKIKO" : "S")
-    );
+    if (!config || config.floatPanel !== false) return null;
+    return import_react.default.createElement("button", {
+      className: "amad-sb-btn",
+      title: "\u6253\u5F00 SAKIKO \u53F3\u4FA7\u680F",
+      onClick: () => {
+        notifyOpen();
+        if (layout) layout.openDetails();
+      }
+    }, wide ? "SAKIKO" : "S");
   }
   slots.inject("details", () => slots.register(
     { name: "details", priority: -1 },
@@ -471,6 +721,10 @@ function apply(ctx) {
   slots.inject("sidebar.footer.action", () => slots.register(
     { name: "sidebar.footer.action", id: "amadeus", order: 50, label: "SAKIKO" },
     (props) => import_react.default.createElement(SidebarToggle, props)
+  ));
+  slots.inject("shell.overlay", () => slots.register(
+    { name: "shell.overlay", id: "amadeus", order: 60, label: "SAKIKO" },
+    () => import_react.default.createElement(FloatHost)
   ));
   slots.inject("settings.section", () => slots.register(
     { name: "settings.section", id: "amadeus", order: 90, label: "SAKIKO" },

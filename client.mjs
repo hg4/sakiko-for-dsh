@@ -45,7 +45,19 @@ export function apply(ctx) {
       ".amad-settings-btn:hover{background:rgba(128,128,128,.15);}" +
       ".amad-sb-btn{border:0;background:transparent;color:inherit;cursor:pointer;font-size:12px;padding:6px 10px;border-radius:6px;display:flex;align-items:center;gap:6px;}" +
       ".amad-sb-btn:hover{background:rgba(128,128,128,.15);}" +
-      ".amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}"
+      ".amad-warn{margin-top:14px;font-size:12px;color:#e0a06a;}" +
+      // ---------------- 浮窗壳（FloatShell）样式 ----------------
+      ".amad-float-shell{pointer-events:auto;position:fixed;display:flex;flex-direction:column;border:1px solid rgba(58,79,127,.9);border-radius:16px;background:linear-gradient(160deg,rgba(19,32,63,.97),rgba(11,18,36,.99));box-shadow:0 18px 60px rgba(0,0,0,.55);overflow:hidden;color:var(--dsw-alias-label-primary,#eef2fb);user-select:none;}" +
+      ".amad-float-head{flex:none;height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;user-select:none;cursor:move;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.12);touch-action:none;}" +
+      ".amad-float-title{font-weight:700;letter-spacing:2px;font-size:13px;margin-right:auto;color:var(--dsw-alias-label-primary,#eef2fb);}" +
+      ".amad-float-hide{flex:none;border:0;background:rgba(255,255,255,.08);color:var(--dsw-alias-label-secondary,#a8b6d8);width:22px;height:22px;border-radius:6px;font-size:13px;line-height:1;cursor:pointer;padding:0;pointer-events:auto;}" +
+      ".amad-float-hide:hover{background:rgba(255,255,255,.2);color:#eef2fb;}" +
+      ".amad-float-body{flex:1;min-height:0;position:relative;display:block;}" +
+      ".amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}" +
+      ".amad-float-grip{pointer-events:auto;position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.45) 55%);border-bottom-right-radius:15px;}" +
+      ".amad-float-grip:hover{background:linear-gradient(135deg,rgba(255,255,255,0) 55%,rgba(255,255,255,.75) 55%);}" +
+      ".amad-float-dot{pointer-events:auto;position:fixed;right:24px;bottom:24px;width:48px;height:48px;border-radius:50%;border:1px solid rgba(143,179,255,.55);background:linear-gradient(160deg,rgba(30,46,92,.95),rgba(15,24,48,.98));color:#8fb3ff;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);user-select:none;}" +
+      ".amad-float-dot:hover{background:linear-gradient(160deg,rgba(45,66,122,.95),rgba(22,36,70,.98));color:#eef2fb;}"
     )
     ctx.effect(() => removeCss)
 
@@ -140,6 +152,7 @@ export function apply(ctx) {
             lastConfigJson = cfgJson
             configStore.set(cfg)
             applyTheme(cfg ? cfg.themeOn !== false : true)
+            layoutModeSync(cfg)
           }
           const st = { tts: res.tts || '', queue: res.queue || 0, cache: res.cache || 0, error: '', callPending: res.callPending === true, pendingClose: typeof res.pendingClose === 'number' ? res.pendingClose : null }
           const stJson = JSON.stringify(st)
@@ -147,16 +160,24 @@ export function apply(ctx) {
             lastStatusJson = stJson
             statusStore.set(st)
           }
-          // 来电 → 自动展开右侧栏
+          // 来电 → 浮窗模式展开浮窗；legacy 自动展开右侧栏
           if (res.callPending === true && !lastCallPending) {
             lastCallPending = true
-            openDetailsSafe()
+            if (isFloatOn()) {
+              if (floatStore.get().collapsed) expandFloatShell()
+            } else {
+              openDetailsSafe()
+            }
           }
           if (res.callPending !== true) lastCallPending = false
-          // 面板请求关闭 SAKIKO 系统 → 收起右侧栏并确认
+          // 面板请求关闭 SAKIKO 系统 → 浮窗模式收起为圆标 / legacy 收起右侧栏并确认
           if (typeof res.pendingClose === 'number' && res.pendingClose !== lastPendingClose) {
             lastPendingClose = res.pendingClose
-            try { if (layout) layout.closeDetails() } catch (e) { /* ignore */ }
+            if (isFloatOn()) {
+              if (!floatStore.get().collapsed) collapseFloatShell()
+            } else {
+              try { if (layout) layout.closeDetails() } catch (e) { /* ignore */ }
+            }
             hostLocal.call('ackClose', {}).catch(() => {})
           }
           if (typeof res.pendingClose !== 'number') lastPendingClose = null
@@ -174,7 +195,10 @@ export function apply(ctx) {
     async function patchConfig(patch) {
       try {
         const next = await hostLocal.call('setConfig', patch)
-        if (next && typeof next === 'object') configStore.set(next)
+        if (next && typeof next === 'object') {
+          configStore.set(next)
+          layoutModeSync(next)
+        }
         return next
       } catch (e) {
         console.error('[amadeus] setConfig failed', e)
@@ -206,8 +230,24 @@ export function apply(ctx) {
 
     function openDetailsSafe() {
       if (layout === undefined) return
+      if (isFloatOn()) return // 浮窗模式：不打开右侧详情列
       try { layout.openDetails() } catch (e) { /* ignore */ }
     }
+
+    // 布局模式切换（floatPanel 变化时跟随）：浮窗模式收拢右侧列，legacy 模式自动展开
+    let lastLayoutMode = null
+    function layoutModeSync(cfg) {
+      if (!cfg) return
+      const floatMode = cfg.floatPanel !== false
+      if (floatMode === lastLayoutMode) return
+      lastLayoutMode = floatMode
+      if (floatMode) {
+        try { if (layout) layout.closeDetails() } catch (e) { /* ignore */ }
+      } else {
+        openDetailsSafe()
+      }
+    }
+
 
     rpcReport('client apply start')
 
@@ -238,21 +278,97 @@ export function apply(ctx) {
       return null
     }
 
-    // ---------------- 右侧栏 SAKIKO 列 ----------------
-    function SakikoColumn() {
+    // ---------------- 浮窗壳（FloatShell）几何 / localStorage 记忆 ----------------
+    const FLOAT_KEY = 'amadeus.float'
+    const FLOAT_DEF_W = 400
+    const FLOAT_DEF_H = 700
+    const FLOAT_MIN_W = 320
+    const FLOAT_MIN_H = 480
+    const FLOAT_GAP = 24
+
+    function floatViewport() {
+      return { vw: window.innerWidth || 0, vh: window.innerHeight || 0 }
+    }
+
+    function clampFloatRect(rect) {
+      const { vw, vh } = floatViewport()
+      const minW = Math.min(FLOAT_MIN_W, vw)
+      const minH = Math.min(FLOAT_MIN_H, vh)
+      const w = Math.round(Math.min(Math.max(rect.w, minW), vw))
+      const h = Math.round(Math.min(Math.max(rect.h, minH), vh))
+      const x = Math.round(Math.min(Math.max(rect.x, 0), Math.max(0, vw - w)))
+      const y = Math.round(Math.min(Math.max(rect.y, 0), Math.max(0, vh - h)))
+      return { x: x, y: y, w: w, h: h }
+    }
+
+    function defaultFloatState() {
+      const { vw, vh } = floatViewport()
+      const w = Math.min(FLOAT_DEF_W, vw)
+      const h = Math.min(FLOAT_DEF_H, vh)
+      const r = clampFloatRect({ x: vw - w - FLOAT_GAP, y: vh - h - FLOAT_GAP, w: w, h: h })
+      return { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: false }
+    }
+
+    function loadFloatState() {
+      let raw = null
+      try {
+        raw = JSON.parse(localStorage.getItem(FLOAT_KEY) || 'null')
+      } catch (e) {
+        raw = null
+      }
+      const fallback = defaultFloatState()
+      if (!raw || typeof raw !== 'object') return fallback
+      const num = (v) => typeof v === 'number' && Number.isFinite(v)
+      if (!num(raw.x) || !num(raw.y) || !num(raw.w) || !num(raw.h)) return fallback
+      if (raw.w < FLOAT_MIN_W || raw.h < FLOAT_MIN_H) return fallback
+      const r = clampFloatRect({ x: raw.x, y: raw.y, w: raw.w, h: raw.h })
+      return { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: raw.collapsed === true }
+    }
+
+    function saveFloatState(state) {
+      try {
+        localStorage.setItem(FLOAT_KEY, JSON.stringify({ x: state.x, y: state.y, w: state.w, h: state.h, collapsed: state.collapsed === true }))
+      } catch (e) {
+        /* localStorage 不可用时静默 */
+      }
+    }
+
+    const floatStore = createStore(loadFloatState())
+
+    function setFloatState(patch) {
+      const cur = floatStore.get()
+      const merged = Object.assign({}, cur, patch)
+      const r = clampFloatRect(merged)
+      const next = { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: merged.collapsed === true }
+      floatStore.set(next)
+      return next
+    }
+
+    function isFloatOn() {
+      const cfg = configStore.get()
+      return !cfg || cfg.floatPanel !== false
+    }
+
+    function expandFloatShell() {
+      const s = setFloatState({ collapsed: false })
+      saveFloatState(s)
+    }
+
+    function collapseFloatShell() {
+      const s = setFloatState({ collapsed: true })
+      saveFloatState(s)
+    }
+
+
+    // ---------------- 面板 iframe 单一组件（浮窗 / 右侧栏共用；同一时刻仅一处装载） ----------------
+    function SakikoFrame(props) {
       const config = useStore(configStore)
-      const status = useStore(statusStore)
-
-      React.useEffect(() => {
-        rpcReport('column mounted')
-        return () => rpcReport('column unmounted')
-      }, [])
-
-      if (!panelSrcSet && config) {
+      const own = React.useRef(null)
+      if (config && !panelSrcSet) {
         panelSrcSet = true
         panelSrc = iframeSrc(config)
       }
-
+      // config 变化 → postMessage amadeus/config（既有通道）
       React.useEffect(() => {
         if (!config) return
         let s = ''
@@ -263,20 +379,171 @@ export function apply(ctx) {
           try { iframeEl.contentWindow.postMessage({ type: 'amadeus/config', value: config }, '*') } catch (e) { /* iframe 未就绪 */ }
         }
       }, [config])
+      const onLoad = () => {
+        // 挂载 / 重载后推送一次当前 config，避免 src cfg 过期
+        const cfg = configStore.get()
+        if (!cfg || !own.current || !own.current.contentWindow) return
+        let s = ''
+        try { s = JSON.stringify(cfg) } catch (e) { return }
+        lastSentCfg = s
+        try { own.current.contentWindow.postMessage({ type: 'amadeus/config', value: cfg }, '*') } catch (e) { /* iframe 未就绪 */ }
+      }
+      return React.createElement('iframe', {
+        className: props.cls || 'amad-frame',
+        src: panelSrc,
+        title: 'Sakiko Live2D',
+        allow: 'microphone; camera; autoplay',
+        onLoad: onLoad,
+        ref: (el) => {
+          if (el) {
+            own.current = el
+            iframeEl = el
+          } else {
+            if (iframeEl === own.current) iframeEl = null
+            own.current = null
+          }
+        },
+      })
+    }
+
+    // ---------------- 右侧栏 SAKIKO 列（floatPanel=false 的 legacy 布局；float 模式下不渲染 iframe） ----------------
+    function SakikoColumn() {
+      const config = useStore(configStore)
+      const status = useStore(statusStore)
+
+      React.useEffect(() => {
+        rpcReport('column mounted')
+        return () => rpcReport('column unmounted')
+      }, [])
+
+      if (!config || config.floatPanel !== false) return null
 
       return React.createElement('div', { className: 'amad-col' },
-        React.createElement('iframe', {
-          className: 'amad-frame',
-          src: panelSrc,
-          title: 'Sakiko Live2D',
-          allow: 'microphone; camera; autoplay',
-          ref: (el) => { iframeEl = el },
-        }),
+        React.createElement(SakikoFrame, null),
         React.createElement('div', { className: 'amad-footer' },
           React.createElement('span', null, status.error ? '⚠ host 不可达' : ('● ' + (status.tts || '…') + ' · 队列 ' + status.queue + (status.callPending ? ' · 📞 来电中' : ''))),
         ),
       )
     }
+
+    // ---------------- 浮窗壳（floatPanel!==false 的浮窗布局，挂载于 shell.overlay） ----------------
+    const FLOAT_Z = 2147483000
+
+    function FloatShell() {
+      const f = useStore(floatStore)
+      const dragRef = React.useRef(null)
+      const [interacting, setInteracting] = React.useState(null)
+
+      React.useEffect(() => {
+        if (!interacting) return
+        const base = dragRef.current
+        if (!base) return
+        const onMove = (ev) => {
+          const dx = ev.clientX - base.sx
+          const dy = ev.clientY - base.sy
+          if (base.kind === 'move') {
+            setFloatState({ x: base.x + dx, y: base.y + dy })
+          } else {
+            const vw = window.innerWidth || 0
+            const vh = window.innerHeight || 0
+            const minW = Math.min(FLOAT_MIN_W, vw)
+            const minH = Math.min(FLOAT_MIN_H, vh)
+            // 右/下边界跟随手柄：允许的最小 x/y 保证 min 尺寸可容纳
+            const x0 = Math.min(base.x, Math.max(0, vw - minW))
+            const y0 = Math.min(base.y, Math.max(0, vh - minH))
+            const w = Math.round(Math.min(Math.max(base.w + dx, minW), Math.max(minW, vw - x0)))
+            const h = Math.round(Math.min(Math.max(base.h + dy, minH), Math.max(minH, vh - y0)))
+            setFloatState({ x: x0, y: y0, w: w, h: h })
+          }
+        }
+        const onUp = () => {
+          setInteracting(null)
+          dragRef.current = null
+          saveFloatState(floatStore.get())
+        }
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        window.addEventListener('pointercancel', onUp)
+        return () => {
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          window.removeEventListener('pointercancel', onUp)
+        }
+      }, [interacting])
+
+      const startDrag = (kind, ev) => {
+        if (ev.button !== 0 && ev.pointerType === 'mouse') return
+        const s = floatStore.get()
+        dragRef.current = { kind: kind, sx: ev.clientX, sy: ev.clientY, x: s.x, y: s.y, w: s.w, h: s.h }
+        setInteracting(kind)
+        try { ev.currentTarget.setPointerCapture(ev.pointerId) } catch (e) { /* ignore */ }
+        ev.preventDefault()
+      }
+
+      const onHide = () => {
+        const s = setFloatState({ collapsed: true })
+        saveFloatState(s)
+      }
+      const onExpand = () => {
+        const s = setFloatState({ collapsed: false })
+        saveFloatState(s)
+        notifyOpen()
+      }
+
+      return React.createElement('div', { className: 'amad-float-root' },
+        React.createElement('div', {
+          className: 'amad-float-shell',
+          style: {
+            left: f.x + 'px',
+            top: f.y + 'px',
+            width: f.w + 'px',
+            height: f.h + 'px',
+            zIndex: FLOAT_Z,
+            display: f.collapsed ? 'none' : 'flex',
+          },
+        },
+          React.createElement('div', {
+            className: 'amad-float-head',
+            onPointerDown: (ev) => startDrag('move', ev),
+          },
+            React.createElement('span', { className: 'amad-float-title' }, 'SAKIKO'),
+            React.createElement('button', {
+              className: 'amad-float-hide',
+              title: '收起',
+              'aria-label': '收起 SAKIKO',
+              onPointerDown: (ev) => ev.stopPropagation(),
+              onClick: onHide,
+            }, '—'),
+          ),
+          React.createElement('div', { className: 'amad-float-body' },
+            React.createElement(SakikoFrame, { cls: 'amad-float-frame' }),
+          ),
+          React.createElement('div', {
+            className: 'amad-float-grip',
+            onPointerDown: (ev) => startDrag('resize', ev),
+          }),
+        ),
+        f.collapsed
+          ? React.createElement('button', {
+              className: 'amad-float-dot',
+              title: '展开 SAKIKO',
+              'aria-label': '展开 SAKIKO',
+              onClick: onExpand,
+            }, 'S')
+          : null,
+      )
+    }
+
+    // shell.overlay 常驻宿主：轮询始终运行；float 模式渲染浮窗壳
+    function FloatHost() {
+      const config = useStore(configStore)
+      const floatOn = !config || config.floatPanel !== false
+      return React.createElement('div', { className: 'amad-float-host', style: { pointerEvents: 'none' } },
+        React.createElement(RootPoller),
+        floatOn ? React.createElement(FloatShell) : null,
+      )
+    }
+
 
     // ---------------- 设置页 ----------------
     const VOICES = [
@@ -401,17 +668,16 @@ export function apply(ctx) {
       )
     }
 
-    // ---------------- 侧边栏常驻入口 ----------------
+    // ---------------- 侧边栏常驻入口（floatPanel=false 的 legacy 布局） ----------------
     function SidebarToggle(props) {
+      const config = useStore(configStore)
       const wide = !!(props && props.wide)
-      return React.createElement('div', null,
-        React.createElement(RootPoller),
-        React.createElement('button', {
-          className: 'amad-sb-btn',
-          title: '打开 SAKIKO 右侧栏',
-          onClick: () => { notifyOpen(); if (layout) layout.openDetails() },
-        }, wide ? 'SAKIKO' : 'S'),
-      )
+      if (!config || config.floatPanel !== false) return null // 浮窗模式隐藏侧边按钮
+      return React.createElement('button', {
+        className: 'amad-sb-btn',
+        title: '打开 SAKIKO 右侧栏',
+        onClick: () => { notifyOpen(); if (layout) layout.openDetails() },
+      }, wide ? 'SAKIKO' : 'S')
     }
 
     // ---------------- 槽位注册 ----------------
@@ -423,6 +689,11 @@ export function apply(ctx) {
     slots.inject('sidebar.footer.action', () => slots.register(
       { name: 'sidebar.footer.action', id: 'amadeus', order: 50, label: 'SAKIKO' },
       (props) => React.createElement(SidebarToggle, props),
+    ))
+
+    slots.inject('shell.overlay', () => slots.register(
+      { name: 'shell.overlay', id: 'amadeus', order: 60, label: 'SAKIKO' },
+      () => React.createElement(FloatHost),
     ))
 
     slots.inject('settings.section', () => slots.register(
