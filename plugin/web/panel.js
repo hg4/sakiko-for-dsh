@@ -88,7 +88,7 @@
     var d = ev && ev.data
     if (!d || typeof d !== 'object') return
     if (d.type === 'amadeus/config' && d.value && typeof d.value === 'object') {
-      cfg = Object.assign(cfg, filterPending(d.value))
+      cfg = Object.assign(cfg, d.value)
       applyChatVisibility()
       if (themeSig(cfg) !== lastThemeSig) applyTheme()
     }
@@ -193,27 +193,13 @@
     return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + a + ')'
   }
 
-  // 即时预览/待发送中的配置键：poll 用旧 host 配置合并时跳过，防止拖取色器/改布局时预览被回滚（修复 I1）。
-  var pendingCfg = {}
-  // 主题相关配置签名：host poll 仅在实际变化时重跑 applyTheme（修复 M2 幂等浪费）
+  // 主题相关配置签名：host poll 仅在实际变化时重跑 applyTheme（fix M2 幂等浪费）。
+  // panel 内不再有本地预览（设置已搬入 DSH 设置区），故无需 pendingCfg/filterPending。
   function themeSig(c) {
     return [c.themePreset, c.colorBg1, c.colorBg2, c.colorTitle, c.colorBubbleMe, c.colorBubbleHer,
       c.colorBubbleText, c.colorBtn, c.colorHi, c.colorDot, c.chatBgUrl, c.floatPanel].join('~')
   }
   var lastThemeSig = ''
-  // 从 host config 拷贝中剔除 pending 键（无待发项时直接返回原对象）
-  function filterPending(cfgObj) {
-    var has = false, k
-    for (k in pendingCfg) { if (pendingCfg[k]) { has = true; break } }
-    if (!has) return cfgObj
-    var out = {}
-    for (k in cfgObj) out[k] = cfgObj[k]
-    for (k in pendingCfg) if (pendingCfg[k]) delete out[k]
-    return out
-  }
-  function clearPending(patch) {
-    for (var k in patch) delete pendingCfg[k]
-  }
 
   // 计算生效主键：预设 base + 9 用户键（「用户脏键」覆盖；非脏键一律取预设 base）。
   // —— 修复 C1：此前用 validHex 恒非空覆盖，而 getStatus/poll 恒供 9 个合法 hex（DEFAULT_CONFIG）→
@@ -302,265 +288,8 @@
     }
   }
 
-  // ---------------- 面板内设置页（外观与布局组） ----------------
-  var settingsEl = $('settings')
-  var settingsBtn = $('settings-btn')
-  var settingsBack = $('settings-back')
-  var settingsClose = $('settings-close')
-  var presetOpts = $('preset-opts')
-  var colorGrid = $('color-grid')
-  var bgUrlInput = $('setting-bgurl')
-  var floatInput = $('setting-float')
-  var floatTxt = $('setting-float-txt')
-  var resetBtn = $('settings-reset')
-  var colorRowEls = []
-
-  var COLOR_ROW_DEFS = [
-    { key: 'colorBg1', preset: 'bg1', label: '主底色' },
-    { key: 'colorBg2', preset: 'bg2', label: '渐变端' },
-    { key: 'colorTitle', preset: 'title', label: '标题/文字' },
-    { key: 'colorBubbleMe', preset: 'bubbleMe', label: '我方气泡' },
-    { key: 'colorBubbleHer', preset: 'bubbleHer', label: '祥子气泡' },
-    { key: 'colorBubbleText', preset: 'bubbleText', label: '气泡文字' },
-    { key: 'colorBtn', preset: 'btn', label: '按钮强调' },
-    { key: 'colorHi', preset: 'hi', label: '高亮文字' },
-    { key: 'colorDot', preset: 'dot', label: '状态点' }
-  ]
-
-  function buildColorGrid() {
-    if (!colorGrid) return
-    colorGrid.textContent = ''
-    colorRowEls = []
-    for (var i = 0; i < COLOR_ROW_DEFS.length; i++) {
-      (function (def) {
-        var row = document.createElement('div')
-        row.className = 'color-row'
-        var lab = document.createElement('span')
-        lab.className = 'color-label'
-        lab.textContent = def.label
-        var pick = document.createElement('input')
-        pick.type = 'color'
-        pick.value = '#101a33'
-        pick.setAttribute('aria-label', def.label)
-        var hex = document.createElement('input')
-        hex.type = 'text'
-        hex.value = '#101a33'
-        hex.maxLength = 7
-        row.appendChild(lab)
-        row.appendChild(pick)
-        row.appendChild(hex)
-        colorGrid.appendChild(row)
-        // 取色器拖动：即时预览 + 防抖发送；关闭：立即发送
-        pick.addEventListener('input', function () {
-          hex.value = pick.value
-          cfg[def.key] = pick.value
-          pendingCfg[def.key] = true // 防抖发送前该键标记 pending → poll 合并跳过，预览不闪回（I1）
-          applyTheme()
-          sendDebounced(def.key, pick.value)
-        })
-        pick.addEventListener('change', function () {
-          hex.value = pick.value
-          cfg[def.key] = pick.value
-          applyTheme()
-          sendImmediate(def.key, pick.value)
-        })
-        // hex 文本：onChange 先 trim 再发；非法值不应用
-        hex.addEventListener('input', function () {
-          var v = hex.value.trim()
-          if (validHex(v)) {
-            pick.value = v.toLowerCase()
-            cfg[def.key] = v
-            pendingCfg[def.key] = true // 防抖发送前标记 pending，poll 不覆盖预览（I1）
-            applyTheme()
-            sendDebounced(def.key, v)
-          }
-        })
-        hex.addEventListener('change', function () {
-          var v = hex.value.trim()
-          if (validHex(v)) {
-            pick.value = v.toLowerCase()
-            cfg[def.key] = v
-            applyTheme()
-            sendImmediate(def.key, v.toLowerCase())
-          } else {
-            var cur = cfg[def.key]
-            if (validHex(cur)) { hex.value = cur.toLowerCase(); pick.value = cur.toLowerCase() }
-            else { hex.value = '' }
-            updateChip('⚠ 颜色需为 #RRGGBB', true)
-          }
-        })
-        colorRowEls.push({ def: def, pick: pick, hex: hex })
-      })(COLOR_ROW_DEFS[i])
-    }
-  }
-
-  function patchKey(cfgKey, value) {
-    var p = {}
-    p[cfgKey] = value
-    return p
-  }
-
-  // 颜色取色器拖动时防抖发送，避免 150ms poll 用旧 host 配置覆盖本次即时预览；
-  // change/blur 时立即发送（最终落盘）。
-  var sendTimers = {}
-  function sendDebounced(cfgKey, value) {
-    if (sendTimers[cfgKey]) window.clearTimeout(sendTimers[cfgKey])
-    sendTimers[cfgKey] = window.setTimeout(function () {
-      delete sendTimers[cfgKey]
-      sendConfig(patchKey(cfgKey, value))
-    }, 250)
-  }
-  function sendImmediate(cfgKey, value) {
-    if (sendTimers[cfgKey]) { window.clearTimeout(sendTimers[cfgKey]); delete sendTimers[cfgKey] }
-    sendConfig(patchKey(cfgKey, value))
-  }
-
-  function setColorRows() {
-    if (!colorRowEls.length) return
-    var base = effectiveBase().base
-    for (var i = 0; i < colorRowEls.length; i++) {
-      var r = colorRowEls[i]
-      // 回显当前生效主键值（用户覆盖优先，否则用预设 base）
-      var v = base[r.def.preset]
-      v = String(v || '').toLowerCase()
-      r.pick.value = v
-      r.hex.value = v
-    }
-  }
-
-  // 提交 patch：本地即时预览（先应用）→ setConfig（host 校验）→ 返回 config 校对。
-  // 开始即把本批键标记为 pending：host 回包前 poll 合并会跳过这些键，防止拖取色器/改布局时预览被回滚（I1）。
-  function sendConfig(patch) {
-    for (var k in patch) pendingCfg[k] = true
-    try {
-      fetch('/amadeus/rpc?m=setConfig&args=' + encodeURIComponent(JSON.stringify(patch)), { cache: 'no-store' })
-        .then(function (resp) { return resp.json() })
-        .then(function (d) {
-          clearPending(patch) // host 已回包 → 恢复 poll 对这批键的权威控制
-          try {
-            // host 返回整份 config；被白名单忽略的键在回包中仍为旧值 → Object.assign + applyTheme 自动回正。
-            if (d && typeof d === 'object' && !d.error) {
-              cfg = Object.assign(cfg, d)
-              applyChatVisibility()
-              applyTheme()
-              if (settingsEl && settingsEl.classList.contains('open')) syncSettingsUI()
-            }
-          } catch (e) { /* 本地应用异常不阻断（M3：与网络异常分开捕获） */ }
-        })
-        .catch(function () {
-          // 网络/JSON 解析失败：不回滚；解除 pending，让下次 poll/config 以 host 真值回正（M3）
-          clearPending(patch)
-        })
-    } catch (e) { /* ignore */ }
-  }
-
-  function syncSettingsUI() {
-    var presetName = cfg.themePreset
-    if (!THEME_PRESETS[presetName]) presetName = 'sakiko-blue'
-    if (presetOpts) {
-      var radios = presetOpts.querySelectorAll('input[name="themePreset"]')
-      var opts = presetOpts.querySelectorAll('.set-preset-opt')
-      for (var i = 0; i < radios.length; i++) {
-        radios[i].checked = radios[i].value === presetName
-        if (opts[i]) opts[i].className = 'set-preset-opt' + (radios[i].value === presetName ? ' selected' : '')
-      }
-    }
-    setColorRows()
-    if (bgUrlInput) bgUrlInput.value = cfg.chatBgUrl || ''
-    if (floatInput) {
-      floatInput.checked = cfg.floatPanel !== false
-      if (floatTxt) floatTxt.textContent = cfg.floatPanel !== false ? '浮窗' : '右侧栏'
-    }
-  }
-
-  function openSettings() {
-    if (!settingsEl) return
-    syncSettingsUI()
-    settingsEl.classList.add('open')
-    if (settingsBtn) settingsBtn.classList.add('active')
-  }
-  function closeSettings() {
-    if (!settingsEl) return
-    settingsEl.classList.remove('open')
-    if (settingsBtn) settingsBtn.classList.remove('active')
-  }
-
-  if (settingsBtn) settingsBtn.addEventListener('click', function (ev) {
-    ev.stopPropagation()
-    if (settingsEl && settingsEl.classList.contains('open')) closeSettings()
-    else openSettings()
-  })
-  if (settingsBack) settingsBack.addEventListener('click', function (ev) { ev.stopPropagation(); closeSettings() })
-  if (settingsClose) settingsClose.addEventListener('click', function (ev) { ev.stopPropagation(); closeSettings() })
-
-  if (presetOpts) {
-    presetOpts.addEventListener('change', function (ev) {
-      var t = ev.target
-      if (!t || t.name !== 'themePreset') return
-      var val = t.value
-      if (!THEME_PRESETS[val]) return
-      cfg.themePreset = val
-      applyTheme()
-      syncSettingsUI()
-      sendConfig({ themePreset: val })
-    })
-  }
-
-  if (bgUrlInput) {
-    bgUrlInput.addEventListener('change', function () {
-      var v = bgUrlInput.value.trim()
-      if (v === '') {
-        cfg.chatBgUrl = ''
-        applyTheme()
-        syncSettingsUI()
-        sendConfig({ chatBgUrl: '' })
-      } else if (/^https?:\/\//.test(v) && v.indexOf('"') === -1 && v.indexOf("'") === -1) {
-        cfg.chatBgUrl = v
-        applyTheme()
-        syncSettingsUI()
-        sendConfig({ chatBgUrl: v })
-      } else {
-        var cur = cfg.chatBgUrl || ''
-        bgUrlInput.value = cur
-        updateChip('⚠ 背景 URL 需为 http(s):// 且 ≤500 字', true)
-      }
-    })
-  }
-
-  if (floatInput) {
-    floatInput.addEventListener('change', function () {
-      var val = floatInput.checked
-      cfg.floatPanel = val
-      if (floatTxt) floatTxt.textContent = val ? '浮窗' : '右侧栏'
-      applyTheme()
-      syncSettingsUI()
-      sendConfig({ floatPanel: val })
-    })
-  }
-
-  if (resetBtn) {
-    resetBtn.addEventListener('click', function () {
-      var preset = THEME_PRESETS['sakiko-blue']
-      var b = preset.base
-      var patch = {
-        themePreset: 'sakiko-blue',
-        colorBg1: b.bg1, colorBg2: b.bg2, colorTitle: b.title,
-        colorBubbleMe: b.bubbleMe, colorBubbleHer: b.bubbleHer, colorBubbleText: b.bubbleText,
-        colorBtn: b.btn, colorHi: b.hi, colorDot: b.dot,
-        chatBgUrl: '',
-        floatPanel: true
-      }
-      // 先本地回默（预览），再落盘
-      cfg = Object.assign({}, cfg, patch)
-      applyTheme()
-      syncSettingsUI()
-      sendConfig(patch)
-    })
-  }
-
-  buildColorGrid()
-  applyTheme()
-  syncSettingsUI() // 初始化设置页控件回显（含生效主键/预设/布局/背景 URL）
+  // 面板内设置页已迁至 DSH 设置区（P7）：移除 #settings 覆盖层及全部设置 JS（颜色行/发送/防抖/pending）。
+  applyTheme() // T3 主题引擎启动即应用一次
 
   // ---------------- 屏幕时钟 ----------------
   function tickClock() {
@@ -2506,7 +2235,7 @@
     }).then(function (data) {
       pollFailures = 0
       if (data && data.config) {
-        cfg = Object.assign(cfg, filterPending(data.config))
+        cfg = Object.assign(cfg, data.config)
         applyChatVisibility()
         if (themeSig(cfg) !== lastThemeSig) applyTheme()
       }

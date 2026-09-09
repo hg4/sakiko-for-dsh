@@ -615,6 +615,19 @@ export function apply(ctx) {
       })
     }
 
+    // P7：外观与布局——颜色取色器（<input type=color> + 只读 hex 回显）
+    function ColorControl(props) {
+      return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+        React.createElement('input', {
+          type: 'color',
+          value: props.value || '#000000',
+          onChange: (e) => props.onChange(e.target.value),
+          style: { width: '28px', height: '28px', border: 'none', background: 'transparent', padding: 0, cursor: 'pointer' },
+        }),
+        React.createElement('span', { style: { fontSize: '11px', fontFamily: 'monospace', color: 'inherit', opacity: 0.75, minWidth: '52px' } }, String(props.value || '').toUpperCase()),
+      )
+    }
+
     function SakikoSettings() {
       const config = useStore(configStore)
       const status = useStore(statusStore)
@@ -669,6 +682,24 @@ export function apply(ctx) {
         Row({ label: 'LLM 回合总结', desc: '每回合完成时由 LLM 总结做了什么+下一步（失败自动退回模板句）', control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),
         Row({ label: '每回合完成播报', desc: '关闭后只保留里程碑与阻塞等关键节点', control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
         Row({ label: '里程碑间隔', desc: '单回合跑满该时长即播报一次进展', control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
+
+        group('外观与布局'),
+        Row({ label: '主题预设', control: Select({ value: config.themePreset || 'sakiko-blue', options: [['sakiko-blue', '深蓝月白金（默认）'], ['midnight-gold', '暮蓝鎏金'], ['sakura-pink', '樱粉月白'], ['mono', '月灰单色']], onChange: (v) => patchConfig({ themePreset: v }) }) }),
+        Row({ label: '主底渐变1', control: ColorControl({ value: config.colorBg1, onChange: (v) => patchConfig({ colorBg1: v }) }) }),
+        Row({ label: '主底渐变2', control: ColorControl({ value: config.colorBg2, onChange: (v) => patchConfig({ colorBg2: v }) }) }),
+        Row({ label: '标题文字', control: ColorControl({ value: config.colorTitle, onChange: (v) => patchConfig({ colorTitle: v }) }) }),
+        Row({ label: '我方气泡', control: ColorControl({ value: config.colorBubbleMe, onChange: (v) => patchConfig({ colorBubbleMe: v }) }) }),
+        Row({ label: '祥子气泡', control: ColorControl({ value: config.colorBubbleHer, onChange: (v) => patchConfig({ colorBubbleHer: v }) }) }),
+        Row({ label: '气泡文字', control: ColorControl({ value: config.colorBubbleText, onChange: (v) => patchConfig({ colorBubbleText: v }) }) }),
+        Row({ label: '按钮强调', control: ColorControl({ value: config.colorBtn, onChange: (v) => patchConfig({ colorBtn: v }) }) }),
+        Row({ label: '高亮文字', control: ColorControl({ value: config.colorHi, onChange: (v) => patchConfig({ colorHi: v }) }) }),
+        Row({ label: '状态点', control: ColorControl({ value: config.colorDot, onChange: (v) => patchConfig({ colorDot: v }) }) }),
+        Row({ label: '聊天背景图', desc: '留空 = 默认背景；仅支持 http(s)://', control: TextInput({ value: config.chatBgUrl || '', placeholder: 'https://…', onChange: (v) => patchConfig({ chatBgUrl: v.trim() }) }) }),
+        Row({ label: '界面布局', desc: '切换为右侧栏时浮窗消失属预期', control: Select({ value: String(config.floatPanel !== false), options: [['true', '浮窗'], ['false', '右侧栏']], onChange: (v) => patchConfig({ floatPanel: v === 'true' }) }) }),
+        React.createElement('div', { style: { fontSize: '12px', color: '#a8b6d8', padding: '8px 4px 0' } }, '设置即时生效，可边调边看右下角浮窗。'),
+        React.createElement('div', { style: { marginTop: '6px' } },
+          React.createElement('button', { className: 'amad-settings-btn', onClick: () => patchConfig({ themePreset: 'sakiko-blue', colorBg1: '#101a33', colorBg2: '#0b1224', colorTitle: '#eef2fb', colorBubbleMe: '#3b6fd4', colorBubbleHer: '#eef2fb', colorBubbleText: '#ffffff', colorBtn: '#c9a86a', colorHi: '#8fb3ff', colorDot: '#a8b6d8', chatBgUrl: '' }) }, '重置为默认外观'),
+        ),
 
         React.createElement('div', { style: { marginTop: '16px' } },
           React.createElement('button', { className: 'amad-settings-btn', onClick: () => rpcSay('申し遅れました 私 豊川祥子と申します') }, '💬 测试语音'),

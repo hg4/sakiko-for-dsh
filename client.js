@@ -642,6 +642,20 @@ function apply(ctx) {
       style: { flex: 1, minWidth: 0, border: "1px solid rgba(128,128,128,.4)", borderRadius: "6px", padding: "4px 8px", background: "transparent", color: "inherit" }
     });
   }
+
+  function ColorControl(props) {
+    return import_react.default.createElement(
+      "div",
+      { style: { display: "flex", alignItems: "center", gap: "8px" } },
+      import_react.default.createElement("input", {
+        type: "color",
+        value: props.value || "#000000",
+        onChange: (e) => props.onChange(e.target.value),
+        style: { width: "28px", height: "28px", border: "none", background: "transparent", padding: 0, cursor: "pointer" }
+      }),
+      import_react.default.createElement("span", { style: { fontSize: "11px", fontFamily: "monospace", color: "inherit", opacity: 0.75, minWidth: "52px" } }, String(props.value || "").toUpperCase())
+    );
+  }
   function SakikoSettings() {
     const config = useStore(configStore);
     const status = useStore(statusStore);
@@ -695,6 +709,24 @@ function apply(ctx) {
       Row({ label: "LLM \u56DE\u5408\u603B\u7ED3", desc: "\u6BCF\u56DE\u5408\u5B8C\u6210\u65F6\u7531 LLM \u603B\u7ED3\u505A\u4E86\u4EC0\u4E48+\u4E0B\u4E00\u6B65\uFF08\u5931\u8D25\u81EA\u52A8\u9000\u56DE\u6A21\u677F\u53E5\uFF09", control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),
       Row({ label: "\u6BCF\u56DE\u5408\u5B8C\u6210\u64AD\u62A5", desc: "\u5173\u95ED\u540E\u53EA\u4FDD\u7559\u91CC\u7A0B\u7891\u4E0E\u963B\u585E\u7B49\u5173\u952E\u8282\u70B9", control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
       Row({ label: "\u91CC\u7A0B\u7891\u95F4\u9694", desc: "\u5355\u56DE\u5408\u8DD1\u6EE1\u8BE5\u65F6\u957F\u5373\u64AD\u62A5\u4E00\u6B21\u8FDB\u5C55", control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
+      group("\u5916\u89C2\u4E0E\u5E03\u5C40"),
+      Row({ label: "\u4E3B\u9898\u9884\u8BBE", control: Select({ value: config.themePreset || "sakiko-blue", options: [["sakiko-blue", "\u6DF1\u84DD\u6708\u767D\u91D1\uFF08\u9ED8\u8BA4\uFF09"], ["midnight-gold", "\u66AE\u84DD\u938F\u91D1"], ["sakura-pink", "\u6A31\u7C89\u6708\u767D"], ["mono", "\u6708\u7070\u5355\u8272"]], onChange: (v) => patchConfig({ themePreset: v }) }) }),
+      Row({ label: "\u4E3B\u5E95\u6E10\u53D81", control: ColorControl({ value: config.colorBg1, onChange: (v) => patchConfig({ colorBg1: v }) }) }),
+      Row({ label: "\u4E3B\u5E95\u6E10\u53D82", control: ColorControl({ value: config.colorBg2, onChange: (v) => patchConfig({ colorBg2: v }) }) }),
+      Row({ label: "\u6807\u9898\u6587\u5B57", control: ColorControl({ value: config.colorTitle, onChange: (v) => patchConfig({ colorTitle: v }) }) }),
+      Row({ label: "\u6211\u65B9\u6C14\u6CE1", control: ColorControl({ value: config.colorBubbleMe, onChange: (v) => patchConfig({ colorBubbleMe: v }) }) }),
+      Row({ label: "\u7965\u5B50\u6C14\u6CE1", control: ColorControl({ value: config.colorBubbleHer, onChange: (v) => patchConfig({ colorBubbleHer: v }) }) }),
+      Row({ label: "\u6C14\u6CE1\u6587\u5B57", control: ColorControl({ value: config.colorBubbleText, onChange: (v) => patchConfig({ colorBubbleText: v }) }) }),
+      Row({ label: "\u6309\u94AE\u5F3A\u8C03", control: ColorControl({ value: config.colorBtn, onChange: (v) => patchConfig({ colorBtn: v }) }) }),
+      Row({ label: "\u9AD8\u4EAE\u6587\u5B57", control: ColorControl({ value: config.colorHi, onChange: (v) => patchConfig({ colorHi: v }) }) }),
+      Row({ label: "\u72B6\u6001\u70B9", control: ColorControl({ value: config.colorDot, onChange: (v) => patchConfig({ colorDot: v }) }) }),
+      Row({ label: "\u804A\u5929\u80CC\u666F\u56FE", desc: "\u7559\u7A7A = \u9ED8\u8BA4\u80CC\u666F\uFF1B\u4EC5\u652F\u6301 http(s)://", control: TextInput({ value: config.chatBgUrl || "", placeholder: "https://\u2026", onChange: (v) => patchConfig({ chatBgUrl: v.trim() }) }) }),
+      Row({ label: "\u754C\u9762\u5E03\u5C40", desc: "\u5207\u6362\u4E3A\u53F3\u4FA7\u680F\u65F6\u6D6E\u7A97\u6D88\u5931\u5C5E\u9884\u671F", control: Select({ value: String(config.floatPanel !== false), options: [["true", "\u6D6E\u7A97"], ["false", "\u53F3\u4FA7\u680F"]], onChange: (v) => patchConfig({ floatPanel: v === "true" }) }) }),
+      import_react.default.createElement("div", { style: { fontSize: "12px", color: "#a8b6d8", padding: "8px 4px 0" } }, "\u8BBE\u7F6E\u5373\u65F6\u751F\u6548\uFF0C\u53EF\u8FB9\u8C03\u8FB9\u770B\u53F3\u4E0B\u89D2\u6D6E\u7A97\u3002"),
+      import_react.default.createElement("div", { style: { marginTop: "6px" } },
+        import_react.default.createElement("button", { className: "amad-settings-btn", onClick: () => patchConfig({ themePreset: "sakiko-blue", colorBg1: "#101a33", colorBg2: "#0b1224", colorTitle: "#eef2fb", colorBubbleMe: "#3b6fd4", colorBubbleHer: "#eef2fb", colorBubbleText: "#ffffff", colorBtn: "#c9a86a", colorHi: "#8fb3ff", colorDot: "#a8b6d8", chatBgUrl: "" }) }, "\u91CD\u7F6E\u4E3A\u9ED8\u8BA4\u5916\u89C2")
+      ),
+
       import_react.default.createElement(
         "div",
         { style: { marginTop: "16px" } },
