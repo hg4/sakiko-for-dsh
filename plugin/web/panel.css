@@ -12,8 +12,10 @@ button { font-family: inherit; }
 
 /* ============ Task3：主题变量（默认 = 现状 深蓝×月白×金 逐值迁移，默认视觉零回归） ============
    变量扁平定义在 :root；panel.js 的 THEME_PRESETS（panel.js 侧）按 data-theme 预设覆盖「主题语义键」，
-   9 个用户自定义键再覆盖对应主键；固定硬件/中性遮罩/功能色集中在本变量块、不随主题。
-   派生 alpha 由 panel.js 依据生效主键重新计算（alpha 0.09/0.35/0.55… 结构逐位保留）。 */
+   9 个用户「脏键」（≠ sakiko 默认值）再覆盖对应主键；固定硬件/中性遮罩/功能色集中在本变量块、不随主题。
+   派生 alpha 由 panel.js 依据生效主键重新计算（alpha 0.09/0.35/0.55… 结构逐位保留）。
+   data-theme 为预设语义选择器，下方 `:root[data-theme=…]` 提供各预设「基色」静态兜底；面板实际渲染以
+   panel.js 的 setProperty 覆盖行（内联样式，优先级高于属性选择器）为权威——二者取值保持一致。 */
 :root {
   /* ---- 主题主语义键（9 项用户可定制；colorTitle 为标题/主亮文字，colorBubbleText 为气泡文字） ---- */
   --p-bg1: #101a33;
@@ -108,6 +110,25 @@ button { font-family: inherit; }
   --p-shadow-g:rgba(0,0,0,0.28); --p-shadow-h:rgba(0,0,0,0.2);
   --p-unlock-face1:#24355f; --p-unlock-face2:#15213f; --p-unlock-faceh1:#2c3f6e; --p-unlock-faceh2:#1b2a4d;
 }
+
+/* ---- data-theme 预设基色静态兜底（M1 接线）：与 panel.js THEME_PRESETS 的 base 取值一致；
+       面板实际渲染以 JS setProperty 覆盖行优先。仅覆盖「主语义键」基色，派生 alpha 由 JS 推算。 ---- */
+:root[data-theme='midnight-gold'] {
+  --p-bg1:#0e1224; --p-bg2:#080b16; --p-title:#f4e8cc; --p-text:#f4e8cc;
+  --p-bubble-me:#c9a159; --p-bubble-her:#f4e8cc; --p-bubble-text:#fffdf6;
+  --p-btn:#d4b25e; --p-hi:#e7c96e; --p-dot:#b7a88b;
+}
+:root[data-theme='sakura-pink'] {
+  --p-bg1:#372633; --p-bg2:#241a24; --p-title:#ffe9f2; --p-text:#ffe9f2;
+  --p-bubble-me:#d98aa8; --p-bubble-her:#ffe9f2; --p-bubble-text:#ffffff;
+  --p-btn:#e6cfa0; --p-hi:#f0b6cf; --p-dot:#d8a8bd;
+}
+:root[data-theme='mono'] {
+  --p-bg1:#1b2025; --p-bg2:#12161a; --p-title:#e6e8ea; --p-text:#e6e8ea;
+  --p-bubble-me:#6b7076; --p-bubble-her:#e6e8ea; --p-bubble-text:#ffffff;
+  --p-btn:#b8bcc0; --p-hi:#aeb4bb; --p-dot:#9aa0a6;
+}
+/* sakiko-blue 默认 = :root 本体，无需重复；未设 data-theme 或非法值均落到 :root 默认。 */
 
 /* @supports 兜底：若运行环境不支持 color-mix 亦不受影响（变量均以字面量给出，无 color-mix 依赖） */
 

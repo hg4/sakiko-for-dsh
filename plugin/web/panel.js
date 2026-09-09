@@ -88,9 +88,9 @@
     var d = ev && ev.data
     if (!d || typeof d !== 'object') return
     if (d.type === 'amadeus/config' && d.value && typeof d.value === 'object') {
-      cfg = Object.assign(cfg, d.value)
+      cfg = Object.assign(cfg, filterPending(d.value))
       applyChatVisibility()
-      applyTheme()
+      if (themeSig(cfg) !== lastThemeSig) applyTheme()
     }
     if (d.type === 'amadeus/say' && typeof d.text === 'string') {
       enqueue(d.text, true, 'neutral')
@@ -163,9 +163,21 @@
     { cfg: 'colorTitle',  preset: 'title',     css: '--p-text' } // 通用主文字 = colorTitle
   ]
   var rootEl = document.documentElement
+  // Color cfg key → preset 语义键名（colorTitle 两行同为 title）
+  var CFG_TO_PRESET = {}
+  for (var _ci = 0; _ci < THEME_COLOR_KEYS.length; _ci++) CFG_TO_PRESET[THEME_COLOR_KEYS[_ci].cfg] = THEME_COLOR_KEYS[_ci].preset
 
   function validHex(v) {
     return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)
+  }
+  // 「用户脏键」判据：cfg 中该色键 ≠ 默认预设 sakiko-blue 的同位值（大小写不敏感）。
+  // 注意：不能用「当前预设 base」比较——否则切到非默认预设后 9 键全被判脏；只能以 sakiko 默认值为基准。
+  // 边界（报告注明）：用户把某色改成恰好等于 sakiko 默认值 → 判为非脏，在非默认预设下不覆盖（保持预设值）。
+  function isDirty(cfgKey) {
+    var v = cfg[cfgKey]
+    if (!validHex(v)) return false
+    var preset = CFG_TO_PRESET[cfgKey]
+    return String(v).toLowerCase() !== String(THEME_PRESETS['sakiko-blue'].base[preset]).toLowerCase()
   }
   function hexRgb(hex) {
     if (!validHex(hex)) return null
@@ -181,7 +193,31 @@
     return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + a + ')'
   }
 
-  // 计算生效主键：预设 base + 9 用户键（非空合法时覆盖）
+  // 即时预览/待发送中的配置键：poll 用旧 host 配置合并时跳过，防止拖取色器/改布局时预览被回滚（修复 I1）。
+  var pendingCfg = {}
+  // 主题相关配置签名：host poll 仅在实际变化时重跑 applyTheme（修复 M2 幂等浪费）
+  function themeSig(c) {
+    return [c.themePreset, c.colorBg1, c.colorBg2, c.colorTitle, c.colorBubbleMe, c.colorBubbleHer,
+      c.colorBubbleText, c.colorBtn, c.colorHi, c.colorDot, c.chatBgUrl, c.floatPanel].join('~')
+  }
+  var lastThemeSig = ''
+  // 从 host config 拷贝中剔除 pending 键（无待发项时直接返回原对象）
+  function filterPending(cfgObj) {
+    var has = false, k
+    for (k in pendingCfg) { if (pendingCfg[k]) { has = true; break } }
+    if (!has) return cfgObj
+    var out = {}
+    for (k in cfgObj) out[k] = cfgObj[k]
+    for (k in pendingCfg) if (pendingCfg[k]) delete out[k]
+    return out
+  }
+  function clearPending(patch) {
+    for (var k in patch) delete pendingCfg[k]
+  }
+
+  // 计算生效主键：预设 base + 9 用户键（「用户脏键」覆盖；非脏键一律取预设 base）。
+  // —— 修复 C1：此前用 validHex 恒非空覆盖，而 getStatus/poll 恒供 9 个合法 hex（DEFAULT_CONFIG）→
+  //    切到非默认预设后主键被写回 sakiko 默认、几乎不变；改判据后才真正随预设切换。
   function effectiveBase() {
     var name = cfg.themePreset
     var preset = THEME_PRESETS[name] || THEME_PRESETS['sakiko-blue']
@@ -192,8 +228,7 @@
     base.btn = p.btn; base.hi = p.hi; base.dot = p.dot
     for (var i = 0; i < THEME_COLOR_KEYS.length; i++) {
       var k = THEME_COLOR_KEYS[i]
-      var v = cfg[k.cfg]
-      if (validHex(v)) base[k.preset] = v
+      if (isDirty(k.cfg)) base[k.preset] = cfg[k.cfg]
     }
     return { preset: preset, base: base }
   }
@@ -242,9 +277,12 @@
     set('--p-dot-55', rgbaHex(b.dot, 0.55)); set('--p-dot-60', rgbaHex(b.dot, 0.6))
     set('--p-dot-72', rgbaHex(b.dot, 0.72))
 
+    // data-theme 为预设语义选择器（panel.css 提供 :root[data-theme=…] 静态基色兜底），
+    // 变量实值由上方 setProperty 覆盖行优先应用（JS 为权威）。
     rootEl.setAttribute('data-theme', cfg.themePreset && THEME_PRESETS[cfg.themePreset] ? cfg.themePreset : 'sakiko-blue')
     applyChatBg()
     applyFloatFill()
+    lastThemeSig = themeSig(cfg) // 供 poll 判断是否需重跑
   }
 
   // 聊天背景图：chatBgUrl 非空 → #history 铺背景 + 半透明遮罩保文字可读；空 → 复原
@@ -316,6 +354,7 @@
         pick.addEventListener('input', function () {
           hex.value = pick.value
           cfg[def.key] = pick.value
+          pendingCfg[def.key] = true // 防抖发送前该键标记 pending → poll 合并跳过，预览不闪回（I1）
           applyTheme()
           sendDebounced(def.key, pick.value)
         })
@@ -331,6 +370,7 @@
           if (validHex(v)) {
             pick.value = v.toLowerCase()
             cfg[def.key] = v
+            pendingCfg[def.key] = true // 防抖发送前标记 pending，poll 不覆盖预览（I1）
             applyTheme()
             sendDebounced(def.key, v)
           }
@@ -388,22 +428,29 @@
     }
   }
 
-  // 提交 patch：本地即时预览（先应用）→ setConfig（host 校验）→ 返回 config 校对
+  // 提交 patch：本地即时预览（先应用）→ setConfig（host 校验）→ 返回 config 校对。
+  // 开始即把本批键标记为 pending：host 回包前 poll 合并会跳过这些键，防止拖取色器/改布局时预览被回滚（I1）。
   function sendConfig(patch) {
+    for (var k in patch) pendingCfg[k] = true
     try {
       fetch('/amadeus/rpc?m=setConfig&args=' + encodeURIComponent(JSON.stringify(patch)), { cache: 'no-store' })
         .then(function (resp) { return resp.json() })
         .then(function (d) {
-          // host 返回整份 config；非法键被白名单忽略 → 返回的 config 该键仍为旧值 → applyTheme 自动回正。
-          // 网络失败/500 {error} 不回滚，等待下次 poll/config 校正。
-          if (d && typeof d === 'object' && !d.error) {
-            cfg = Object.assign(cfg, d)
-            applyChatVisibility()
-            applyTheme()
-            if (settingsEl && settingsEl.classList.contains('open')) syncSettingsUI()
-          }
+          clearPending(patch) // host 已回包 → 恢复 poll 对这批键的权威控制
+          try {
+            // host 返回整份 config；被白名单忽略的键在回包中仍为旧值 → Object.assign + applyTheme 自动回正。
+            if (d && typeof d === 'object' && !d.error) {
+              cfg = Object.assign(cfg, d)
+              applyChatVisibility()
+              applyTheme()
+              if (settingsEl && settingsEl.classList.contains('open')) syncSettingsUI()
+            }
+          } catch (e) { /* 本地应用异常不阻断（M3：与网络异常分开捕获） */ }
         })
-        .catch(function () { /* 网络失败：不回滚，等待下次 poll/config 校正 */ })
+        .catch(function () {
+          // 网络/JSON 解析失败：不回滚；解除 pending，让下次 poll/config 以 host 真值回正（M3）
+          clearPending(patch)
+        })
     } catch (e) { /* ignore */ }
   }
 
@@ -2358,9 +2405,9 @@
     }).then(function (data) {
       pollFailures = 0
       if (data && data.config) {
-        cfg = Object.assign(cfg, data.config)
+        cfg = Object.assign(cfg, filterPending(data.config))
         applyChatVisibility()
-        applyTheme()
+        if (themeSig(cfg) !== lastThemeSig) applyTheme()
       }
       if (data && typeof data.cursor === 'number') {
         var items = data.utterances || []
