@@ -65,6 +65,7 @@
 
       <button id="close-btn" title="关闭 SAKIKO 系统">×</button>
       <button id="calib-btn" title="L2D 校准" hidden>⚙</button>
+      <button id="settings-btn" title="设置">⚙</button>
 
       <div id="boot">
         <div class="boot-logo">
@@ -113,6 +114,51 @@
         <button id="chat-lang" title="识别语言">中</button>
         <input id="chat-input" type="text" placeholder="和 Sakiko 说话…" autocomplete="off">
         <button id="chat-send" title="发送">➤</button>
+      </div>
+    </div>
+
+    <!-- ===== Task3：面板内设置页（外观与布局组；覆层形态，走 /amadeus/rpc?m=setConfig） ===== -->
+    <div id="settings">
+      <div class="settings-head">
+        <button id="settings-back" class="settings-nav" title="返回">‹</button>
+        <div class="settings-h-title">设置</div>
+        <button id="settings-close" class="settings-nav" title="关闭">×</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-group">外观与布局</div>
+
+        <div class="set-item">
+          <div class="set-label">主题预设</div>
+          <div id="preset-opts" class="set-preset-opts">
+            <label class="set-preset-opt"><input type="radio" name="themePreset" value="sakiko-blue">深蓝月白金</label>
+            <label class="set-preset-opt"><input type="radio" name="themePreset" value="midnight-gold">暮蓝鎏金</label>
+            <label class="set-preset-opt"><input type="radio" name="themePreset" value="sakura-pink">樱粉月白</label>
+            <label class="set-preset-opt"><input type="radio" name="themePreset" value="mono">月灰单色</label>
+          </div>
+        </div>
+
+        <div class="set-item">
+          <div class="set-label">自定义配色（覆盖预设）</div>
+          <div id="color-grid" class="color-grid"></div>
+        </div>
+
+        <div class="set-item">
+          <div class="set-label">聊天背景图</div>
+          <input id="setting-bgurl" class="set-input" type="text" placeholder="留空为默认，如 https://…/bg.png" autocomplete="off">
+          <div class="set-hint">仅支持 http(s):// 链接；留空恢复默认背景</div>
+        </div>
+
+        <div class="set-item">
+          <div class="set-label">布局</div>
+          <label class="set-switch">
+            <input type="checkbox" id="setting-float">
+            <span class="set-switch-track"></span>
+            <span id="setting-float-txt" class="set-switch-txt">浮窗</span>
+          </label>
+          <div class="set-hint">浮窗（右下角悬浮手机）或右侧栏（旧布局）</div>
+        </div>
+
+        <button id="settings-reset" class="set-reset">重置为默认</button>
       </div>
     </div>
   </div>

@@ -90,7 +90,7 @@
     if (d.type === 'amadeus/config' && d.value && typeof d.value === 'object') {
       cfg = Object.assign(cfg, d.value)
       applyChatVisibility()
-      applyFloatFill()
+      applyTheme()
     }
     if (d.type === 'amadeus/say' && typeof d.text === 'string') {
       enqueue(d.text, true, 'neutral')
@@ -114,6 +114,406 @@
     else document.body.classList.add('float-fill')
   }
   applyFloatFill()
+
+  // ============================================================
+  // Task3：主题引擎（CSS 变量化 + 3 套预设 + 9 项自定义 + 聊天背景图）
+  // ------------------------------------------------------------
+  // THEME_PRESETS = 预设全量变量集（含渐变次停/发送钮面/氛围光等实色派生）；
+  // 每个预设给定 9 个「主题主键」，派生 alpha 由 applyTheme 依生效主键原地计算，
+  // 从而保留权威表的 alpha/双停结构，且用户覆盖主键后派生色随之联动。
+  //   - 9 用户键覆盖对应主键（colorBg1/2/Title/BubbleMe/BubbleHer/BubbleText/Btn/Hi/Dot）
+  //   - 派生实色（-bubble-me-2 / -btn-send* / -bg-glow）保留为预设字面量（联动策略见报告）
+  var THEME_PRESETS = {
+    'sakiko-blue': {   // 默认 = 现状 深蓝×月白×金（逐值迁移）
+      base: { bg1: '#101a33', bg2: '#0b1224', title: '#eef2fb', bubbleMe: '#3b6fd4', bubbleHer: '#eef2fb', bubbleText: '#ffffff', btn: '#c9a86a', hi: '#8fb3ff', dot: '#a8b6d8' },
+      bubbleMe2: '#1e3f8f',
+      bgGlow: '#1d2f57',
+      send1: '#d9bd7f', send2: '#b9965a', sendH1: '#e6cc92', sendH2: '#c9a86a'
+    },
+    'midnight-gold': { // 暮蓝鎏金：深墨蓝底 + 鎏金标题/强调 + 暖白文字
+      base: { bg1: '#0e1224', bg2: '#080b16', title: '#f4e8cc', bubbleMe: '#c9a159', bubbleHer: '#f4e8cc', bubbleText: '#fffdf6', btn: '#d4b25e', hi: '#e7c96e', dot: '#b7a88b' },
+      bubbleMe2: '#8a6a2e',
+      bgGlow: '#3a2e1c',
+      send1: '#ecd28e', send2: '#c2a052', sendH1: '#f6e2a4', sendH2: '#d4b25e'
+    },
+    'sakura-pink': {   // 樱粉月白：樱粉底 + 月白气泡 + 淡金高亮
+      base: { bg1: '#372633', bg2: '#241a24', title: '#ffe9f2', bubbleMe: '#d98aa8', bubbleHer: '#ffe9f2', bubbleText: '#ffffff', btn: '#e6cfa0', hi: '#f0b6cf', dot: '#d8a8bd' },
+      bubbleMe2: '#b05e82',
+      bgGlow: '#6a4b5e',
+      send1: '#f0ddb4', send2: '#cfae7c', sendH1: '#f8ebc9', sendH2: '#e6cfa0'
+    },
+    'mono': {          // 月灰单色：低饱和灰阶
+      base: { bg1: '#1b2025', bg2: '#12161a', title: '#e6e8ea', bubbleMe: '#6b7076', bubbleHer: '#e6e8ea', bubbleText: '#ffffff', btn: '#b8bcc0', hi: '#aeb4bb', dot: '#9aa0a6' },
+      bubbleMe2: '#494e54',
+      bgGlow: '#2e343a',
+      send1: '#d2d5d8', send2: '#9aa0a6', sendH1: '#e3e5e7', sendH2: '#b8bcc0'
+    }
+  }
+  // 语义键 → 主 CSS 变量 与 用户 cfg 键
+  var THEME_COLOR_KEYS = [
+    { cfg: 'colorBg1',   preset: 'bg1',       css: '--p-bg1' },
+    { cfg: 'colorBg2',   preset: 'bg2',       css: '--p-bg2' },
+    { cfg: 'colorTitle', preset: 'title',     css: '--p-title' },
+    { cfg: 'colorBubbleMe',   preset: 'bubbleMe',   css: '--p-bubble-me' },
+    { cfg: 'colorBubbleHer',  preset: 'bubbleHer',  css: '--p-bubble-her' },
+    { cfg: 'colorBubbleText', preset: 'bubbleText', css: '--p-bubble-text' },
+    { cfg: 'colorBtn',    preset: 'btn',       css: '--p-btn' },
+    { cfg: 'colorHi',     preset: 'hi',        css: '--p-hi' },
+    { cfg: 'colorDot',    preset: 'dot',       css: '--p-dot' },
+    { cfg: 'colorTitle',  preset: 'title',     css: '--p-text' } // 通用主文字 = colorTitle
+  ]
+  var rootEl = document.documentElement
+
+  function validHex(v) {
+    return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)
+  }
+  function hexRgb(hex) {
+    if (!validHex(hex)) return null
+    return {
+      r: parseInt(hex.slice(1, 3), 16),
+      g: parseInt(hex.slice(3, 5), 16),
+      b: parseInt(hex.slice(5, 7), 16)
+    }
+  }
+  function rgbaHex(hex, a) {
+    var c = hexRgb(hex)
+    if (!c) return 'transparent'
+    return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + a + ')'
+  }
+
+  // 计算生效主键：预设 base + 9 用户键（非空合法时覆盖）
+  function effectiveBase() {
+    var name = cfg.themePreset
+    var preset = THEME_PRESETS[name] || THEME_PRESETS['sakiko-blue']
+    var base = {}
+    var p = preset.base
+    base.bg1 = p.bg1; base.bg2 = p.bg2; base.title = p.title
+    base.bubbleMe = p.bubbleMe; base.bubbleHer = p.bubbleHer; base.bubbleText = p.bubbleText
+    base.btn = p.btn; base.hi = p.hi; base.dot = p.dot
+    for (var i = 0; i < THEME_COLOR_KEYS.length; i++) {
+      var k = THEME_COLOR_KEYS[i]
+      var v = cfg[k.cfg]
+      if (validHex(v)) base[k.preset] = v
+    }
+    return { preset: preset, base: base }
+  }
+
+  // 写 CSS 变量 + data-theme；聊天背景与浮窗布局一并应用
+  function applyTheme() {
+    var eff = effectiveBase()
+    var b = eff.base
+    var pr = eff.preset
+    if (!rootEl) return
+    var set = function (name, val) { rootEl.style.setProperty(name, val === undefined ? '' : val) }
+
+    // 主键
+    set('--p-bg1', b.bg1); set('--p-bg2', b.bg2)
+    set('--p-title', b.title); set('--p-text', b.title)
+    set('--p-bubble-me', b.bubbleMe); set('--p-bubble-her', b.bubbleHer)
+    set('--p-bubble-text', b.bubbleText); set('--p-btn', b.btn)
+    set('--p-hi', b.hi); set('--p-dot', b.dot)
+    // 派生实色（预设字面量；用户覆盖主键时此三组不自动推导，见报告联动策略）
+    set('--p-bubble-me-2', pr.bubbleMe2)
+    set('--p-bg-glow', pr.bgGlow)
+    set('--p-btn-send1', pr.send1); set('--p-btn-send2', pr.send2)
+    set('--p-btn-send-h1', pr.sendH1); set('--p-btn-send-h2', pr.sendH2)
+    // 派生 alpha（依生效主键原地计算，保留权威表 alpha 结构）
+    set('--p-bg1-soft', rgbaHex(b.bg1, 0.12)); set('--p-bg1-glass', rgbaHex(b.bg1, 0.5))
+    set('--p-bg1-cam', rgbaHex(b.bg1, 0.9)); set('--p-bg2-glass', rgbaHex(b.bg2, 0.94))
+    set('--p-bg2-0', rgbaHex(b.bg2, 0))
+    set('--p-keypad-bg1', rgbaHex(b.bg1, 0.96)); set('--p-keypad-bg2', rgbaHex(b.bg2, 0.99))
+    set('--p-bubble-me-border', rgbaHex(b.hi, 0.35))
+    set('--p-bubble-her-glass', rgbaHex(b.bubbleHer, 0.09))
+    set('--p-bubble-her-border', rgbaHex(b.bubbleHer, 0.25))
+    set('--p-glass-border', rgbaHex(b.title, 0.18))
+    set('--p-glint-05', rgbaHex(b.title, 0.05)); set('--p-glint-06', rgbaHex(b.title, 0.06))
+    set('--p-glint-07', rgbaHex(b.title, 0.07)); set('--p-glint-10', rgbaHex(b.title, 0.1))
+    set('--p-glint-12', rgbaHex(b.title, 0.12)); set('--p-glint-14', rgbaHex(b.title, 0.14))
+    set('--p-glint-16', rgbaHex(b.title, 0.16)); set('--p-glint-20', rgbaHex(b.title, 0.2))
+    set('--p-glint-30', rgbaHex(b.title, 0.3)); set('--p-glint-80', rgbaHex(b.title, 0.8))
+    set('--p-hi-10', rgbaHex(b.hi, 0.1)); set('--p-hi-12', rgbaHex(b.hi, 0.12))
+    set('--p-hi-20', rgbaHex(b.hi, 0.2)); set('--p-hi-28', rgbaHex(b.hi, 0.28))
+    set('--p-hi-32', rgbaHex(b.hi, 0.32)); set('--p-hi-50', rgbaHex(b.hi, 0.5))
+    set('--p-hi-55', rgbaHex(b.hi, 0.55))
+    set('--p-call-bg', rgbaHex(b.hi, 0.08)); set('--p-call-border', rgbaHex(b.hi, 0.45))
+    set('--p-btn-06', rgbaHex(b.btn, 0.06)); set('--p-btn-25', rgbaHex(b.btn, 0.25))
+    set('--p-btn-28', rgbaHex(b.btn, 0.28)); set('--p-btn-45', rgbaHex(b.btn, 0.45))
+    set('--p-btn-55', rgbaHex(b.btn, 0.55)); set('--p-btn-75', rgbaHex(b.btn, 0.75))
+    set('--p-dot-55', rgbaHex(b.dot, 0.55)); set('--p-dot-60', rgbaHex(b.dot, 0.6))
+    set('--p-dot-72', rgbaHex(b.dot, 0.72))
+
+    rootEl.setAttribute('data-theme', cfg.themePreset && THEME_PRESETS[cfg.themePreset] ? cfg.themePreset : 'sakiko-blue')
+    applyChatBg()
+    applyFloatFill()
+  }
+
+  // 聊天背景图：chatBgUrl 非空 → #history 铺背景 + 半透明遮罩保文字可读；空 → 复原
+  var lastBgUrl = null
+  function applyChatBg() {
+    if (!historyEl) return
+    var url = String(cfg.chatBgUrl || '').trim()
+    if (url === lastBgUrl) return // 记忆：poll 高频调用下避免重复写 DOM
+    lastBgUrl = url
+    if (url && /^https?:\/\//.test(url) && url.indexOf('"') === -1 && url.indexOf("'") === -1) {
+      historyEl.classList.add('has-bg')
+      // 半透明深色遮罩叠于图上，保证气泡/文字可读性（中性深遮罩，各主题通用）
+      historyEl.style.backgroundImage = 'linear-gradient(180deg, rgba(7,13,26,0.5) 0%, rgba(7,13,26,0.8) 100%), url("' + url + '")'
+    } else {
+      historyEl.classList.remove('has-bg')
+      historyEl.style.backgroundImage = ''
+    }
+  }
+
+  // ---------------- 面板内设置页（外观与布局组） ----------------
+  var settingsEl = $('settings')
+  var settingsBtn = $('settings-btn')
+  var settingsBack = $('settings-back')
+  var settingsClose = $('settings-close')
+  var presetOpts = $('preset-opts')
+  var colorGrid = $('color-grid')
+  var bgUrlInput = $('setting-bgurl')
+  var floatInput = $('setting-float')
+  var floatTxt = $('setting-float-txt')
+  var resetBtn = $('settings-reset')
+  var colorRowEls = []
+
+  var COLOR_ROW_DEFS = [
+    { key: 'colorBg1', preset: 'bg1', label: '主底色' },
+    { key: 'colorBg2', preset: 'bg2', label: '渐变端' },
+    { key: 'colorTitle', preset: 'title', label: '标题/文字' },
+    { key: 'colorBubbleMe', preset: 'bubbleMe', label: '我方气泡' },
+    { key: 'colorBubbleHer', preset: 'bubbleHer', label: '祥子气泡' },
+    { key: 'colorBubbleText', preset: 'bubbleText', label: '气泡文字' },
+    { key: 'colorBtn', preset: 'btn', label: '按钮强调' },
+    { key: 'colorHi', preset: 'hi', label: '高亮文字' },
+    { key: 'colorDot', preset: 'dot', label: '状态点' }
+  ]
+
+  function buildColorGrid() {
+    if (!colorGrid) return
+    colorGrid.textContent = ''
+    colorRowEls = []
+    for (var i = 0; i < COLOR_ROW_DEFS.length; i++) {
+      (function (def) {
+        var row = document.createElement('div')
+        row.className = 'color-row'
+        var lab = document.createElement('span')
+        lab.className = 'color-label'
+        lab.textContent = def.label
+        var pick = document.createElement('input')
+        pick.type = 'color'
+        pick.value = '#101a33'
+        pick.setAttribute('aria-label', def.label)
+        var hex = document.createElement('input')
+        hex.type = 'text'
+        hex.value = '#101a33'
+        hex.maxLength = 7
+        row.appendChild(lab)
+        row.appendChild(pick)
+        row.appendChild(hex)
+        colorGrid.appendChild(row)
+        // 取色器拖动：即时预览 + 防抖发送；关闭：立即发送
+        pick.addEventListener('input', function () {
+          hex.value = pick.value
+          cfg[def.key] = pick.value
+          applyTheme()
+          sendDebounced(def.key, pick.value)
+        })
+        pick.addEventListener('change', function () {
+          hex.value = pick.value
+          cfg[def.key] = pick.value
+          applyTheme()
+          sendImmediate(def.key, pick.value)
+        })
+        // hex 文本：onChange 先 trim 再发；非法值不应用
+        hex.addEventListener('input', function () {
+          var v = hex.value.trim()
+          if (validHex(v)) {
+            pick.value = v.toLowerCase()
+            cfg[def.key] = v
+            applyTheme()
+            sendDebounced(def.key, v)
+          }
+        })
+        hex.addEventListener('change', function () {
+          var v = hex.value.trim()
+          if (validHex(v)) {
+            pick.value = v.toLowerCase()
+            cfg[def.key] = v
+            applyTheme()
+            sendImmediate(def.key, v.toLowerCase())
+          } else {
+            var cur = cfg[def.key]
+            if (validHex(cur)) { hex.value = cur.toLowerCase(); pick.value = cur.toLowerCase() }
+            else { hex.value = '' }
+            updateChip('⚠ 颜色需为 #RRGGBB', true)
+          }
+        })
+        colorRowEls.push({ def: def, pick: pick, hex: hex })
+      })(COLOR_ROW_DEFS[i])
+    }
+  }
+
+  function patchKey(cfgKey, value) {
+    var p = {}
+    p[cfgKey] = value
+    return p
+  }
+
+  // 颜色取色器拖动时防抖发送，避免 150ms poll 用旧 host 配置覆盖本次即时预览；
+  // change/blur 时立即发送（最终落盘）。
+  var sendTimers = {}
+  function sendDebounced(cfgKey, value) {
+    if (sendTimers[cfgKey]) window.clearTimeout(sendTimers[cfgKey])
+    sendTimers[cfgKey] = window.setTimeout(function () {
+      delete sendTimers[cfgKey]
+      sendConfig(patchKey(cfgKey, value))
+    }, 250)
+  }
+  function sendImmediate(cfgKey, value) {
+    if (sendTimers[cfgKey]) { window.clearTimeout(sendTimers[cfgKey]); delete sendTimers[cfgKey] }
+    sendConfig(patchKey(cfgKey, value))
+  }
+
+  function setColorRows() {
+    if (!colorRowEls.length) return
+    var base = effectiveBase().base
+    for (var i = 0; i < colorRowEls.length; i++) {
+      var r = colorRowEls[i]
+      // 回显当前生效主键值（用户覆盖优先，否则用预设 base）
+      var v = base[r.def.preset]
+      v = String(v || '').toLowerCase()
+      r.pick.value = v
+      r.hex.value = v
+    }
+  }
+
+  // 提交 patch：本地即时预览（先应用）→ setConfig（host 校验）→ 返回 config 校对
+  function sendConfig(patch) {
+    try {
+      fetch('/amadeus/rpc?m=setConfig&args=' + encodeURIComponent(JSON.stringify(patch)), { cache: 'no-store' })
+        .then(function (resp) { return resp.json() })
+        .then(function (d) {
+          // host 返回整份 config；非法键被白名单忽略 → 返回的 config 该键仍为旧值 → applyTheme 自动回正。
+          // 网络失败/500 {error} 不回滚，等待下次 poll/config 校正。
+          if (d && typeof d === 'object' && !d.error) {
+            cfg = Object.assign(cfg, d)
+            applyChatVisibility()
+            applyTheme()
+            if (settingsEl && settingsEl.classList.contains('open')) syncSettingsUI()
+          }
+        })
+        .catch(function () { /* 网络失败：不回滚，等待下次 poll/config 校正 */ })
+    } catch (e) { /* ignore */ }
+  }
+
+  function syncSettingsUI() {
+    var presetName = cfg.themePreset
+    if (!THEME_PRESETS[presetName]) presetName = 'sakiko-blue'
+    if (presetOpts) {
+      var radios = presetOpts.querySelectorAll('input[name="themePreset"]')
+      var opts = presetOpts.querySelectorAll('.set-preset-opt')
+      for (var i = 0; i < radios.length; i++) {
+        radios[i].checked = radios[i].value === presetName
+        if (opts[i]) opts[i].className = 'set-preset-opt' + (radios[i].value === presetName ? ' selected' : '')
+      }
+    }
+    setColorRows()
+    if (bgUrlInput) bgUrlInput.value = cfg.chatBgUrl || ''
+    if (floatInput) {
+      floatInput.checked = cfg.floatPanel !== false
+      if (floatTxt) floatTxt.textContent = cfg.floatPanel !== false ? '浮窗' : '右侧栏'
+    }
+  }
+
+  function openSettings() {
+    if (!settingsEl) return
+    syncSettingsUI()
+    settingsEl.classList.add('open')
+    if (settingsBtn) settingsBtn.classList.add('active')
+  }
+  function closeSettings() {
+    if (!settingsEl) return
+    settingsEl.classList.remove('open')
+    if (settingsBtn) settingsBtn.classList.remove('active')
+  }
+
+  if (settingsBtn) settingsBtn.addEventListener('click', function (ev) {
+    ev.stopPropagation()
+    if (settingsEl && settingsEl.classList.contains('open')) closeSettings()
+    else openSettings()
+  })
+  if (settingsBack) settingsBack.addEventListener('click', function (ev) { ev.stopPropagation(); closeSettings() })
+  if (settingsClose) settingsClose.addEventListener('click', function (ev) { ev.stopPropagation(); closeSettings() })
+
+  if (presetOpts) {
+    presetOpts.addEventListener('change', function (ev) {
+      var t = ev.target
+      if (!t || t.name !== 'themePreset') return
+      var val = t.value
+      if (!THEME_PRESETS[val]) return
+      cfg.themePreset = val
+      applyTheme()
+      syncSettingsUI()
+      sendConfig({ themePreset: val })
+    })
+  }
+
+  if (bgUrlInput) {
+    bgUrlInput.addEventListener('change', function () {
+      var v = bgUrlInput.value.trim()
+      if (v === '') {
+        cfg.chatBgUrl = ''
+        applyTheme()
+        syncSettingsUI()
+        sendConfig({ chatBgUrl: '' })
+      } else if (/^https?:\/\//.test(v) && v.indexOf('"') === -1 && v.indexOf("'") === -1) {
+        cfg.chatBgUrl = v
+        applyTheme()
+        syncSettingsUI()
+        sendConfig({ chatBgUrl: v })
+      } else {
+        var cur = cfg.chatBgUrl || ''
+        bgUrlInput.value = cur
+        updateChip('⚠ 背景 URL 需为 http(s):// 且 ≤500 字', true)
+      }
+    })
+  }
+
+  if (floatInput) {
+    floatInput.addEventListener('change', function () {
+      var val = floatInput.checked
+      cfg.floatPanel = val
+      if (floatTxt) floatTxt.textContent = val ? '浮窗' : '右侧栏'
+      applyTheme()
+      syncSettingsUI()
+      sendConfig({ floatPanel: val })
+    })
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function () {
+      var preset = THEME_PRESETS['sakiko-blue']
+      var b = preset.base
+      var patch = {
+        themePreset: 'sakiko-blue',
+        colorBg1: b.bg1, colorBg2: b.bg2, colorTitle: b.title,
+        colorBubbleMe: b.bubbleMe, colorBubbleHer: b.bubbleHer, colorBubbleText: b.bubbleText,
+        colorBtn: b.btn, colorHi: b.hi, colorDot: b.dot,
+        chatBgUrl: '',
+        floatPanel: true
+      }
+      // 先本地回默（预览），再落盘
+      cfg = Object.assign({}, cfg, patch)
+      applyTheme()
+      syncSettingsUI()
+      sendConfig(patch)
+    })
+  }
+
+  buildColorGrid()
+  applyTheme()
+  syncSettingsUI() // 初始化设置页控件回显（含生效主键/预设/布局/背景 URL）
 
   // ---------------- 屏幕时钟 ----------------
   function tickClock() {
@@ -1960,7 +2360,7 @@
       if (data && data.config) {
         cfg = Object.assign(cfg, data.config)
         applyChatVisibility()
-        applyFloatFill()
+        applyTheme()
       }
       if (data && typeof data.cursor === 'number') {
         var items = data.utterances || []

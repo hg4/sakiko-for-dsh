@@ -10,6 +10,107 @@ body {
 }
 button { font-family: inherit; }
 
+/* ============ Task3：主题变量（默认 = 现状 深蓝×月白×金 逐值迁移，默认视觉零回归） ============
+   变量扁平定义在 :root；panel.js 的 THEME_PRESETS（panel.js 侧）按 data-theme 预设覆盖「主题语义键」，
+   9 个用户自定义键再覆盖对应主键；固定硬件/中性遮罩/功能色集中在本变量块、不随主题。
+   派生 alpha 由 panel.js 依据生效主键重新计算（alpha 0.09/0.35/0.55… 结构逐位保留）。 */
+:root {
+  /* ---- 主题主语义键（9 项用户可定制；colorTitle 为标题/主亮文字，colorBubbleText 为气泡文字） ---- */
+  --p-bg1: #101a33;
+  --p-bg2: #0b1224;
+  --p-title: #eef2fb;
+  --p-bubble-me: #3b6fd4;
+  --p-bubble-her: #eef2fb;
+  --p-bubble-text: #ffffff;
+  --p-btn: #c9a86a;
+  --p-hi: #8fb3ff;
+  --p-dot: #a8b6d8;
+  --p-text: #eef2fb;                 /* 通用主文字（同月白，随 colorTitle） */
+
+  /* ---- 派生：bg1/bg2（渐变双停 + 透明度） ---- */
+  --p-bg-glow: #1d2f57;               /* 内屏/头像氛围光（径向 0% 停） */
+  --p-bg1-soft: rgba(16,26,51,0.12);  /* 来电遮罩上段 */
+  --p-bg1-glass: rgba(16,26,51,0.5);  /* 屏内工具钮底 */
+  --p-bg1-cam: rgba(16,26,51,0.9);    /* 灵动岛摄像头点 */
+  --p-bg2-glass: rgba(11,18,36,0.94); /* 错误行底 */
+  --p-bg2-0: rgba(11,18,36,0);        /* screen::before 径向末端 */
+  --p-keypad-bg1: rgba(16,26,51,0.96);/* 聊天区 0% 停 */
+  --p-keypad-bg2: rgba(11,18,36,0.99);/* 聊天区 100% 停 */
+
+  /* ---- 派生：我方气泡（渐变 100% 停/描边 = 滚动条） ---- */
+  --p-bubble-me-2: #1e3f8f;           /* 渐变次停（不随用户覆盖推导，联动策略见报告） */
+  --p-bubble-me-border: rgba(143,179,255,0.35);
+
+  /* ---- 派生：祥子气泡（玻璃底/描边 alpha 保留） ---- */
+  --p-bubble-her-glass: rgba(238,242,251,0.09);
+  --p-bubble-her-border: rgba(238,242,251,0.25);
+
+  /* ---- 派生：月白高光带（title 派生 alpha，逐值保留） ---- */
+  --p-glass-border: rgba(238,242,251,0.18);
+  --p-glint-05: rgba(238,242,251,0.05);
+  --p-glint-06: rgba(238,242,251,0.06);
+  --p-glint-07: rgba(238,242,251,0.07);
+  --p-glint-10: rgba(238,242,251,0.1);
+  --p-glint-12: rgba(238,242,251,0.12);
+  --p-glint-14: rgba(238,242,251,0.14);
+  --p-glint-16: rgba(238,242,251,0.16);
+  --p-glint-20: rgba(238,242,251,0.2);
+  --p-glint-30: rgba(238,242,251,0.3);
+  --p-glint-80: rgba(238,242,251,0.8);
+
+  /* ---- 派生：高亮蓝（hi 派生 alpha） ---- */
+  --p-hi-10: rgba(143,179,255,0.1);
+  --p-hi-12: rgba(143,179,255,0.12);
+  --p-hi-20: rgba(143,179,255,0.2);
+  --p-hi-28: rgba(143,179,255,0.28);
+  --p-hi-32: rgba(143,179,255,0.32);
+  --p-hi-50: rgba(143,179,255,0.5);
+  --p-hi-55: rgba(143,179,255,0.55);
+  --p-call-bg: rgba(143,179,255,0.08);
+  --p-call-border: rgba(143,179,255,0.45);
+
+  /* ---- 派生：品牌金（btn 派生 alpha 与发送钮渐变） ---- */
+  --p-btn-06: rgba(201,168,106,0.06);
+  --p-btn-25: rgba(201,168,106,0.25);
+  --p-btn-28: rgba(201,168,106,0.28);
+  --p-btn-45: rgba(201,168,106,0.45);
+  --p-btn-55: rgba(201,168,106,0.55);
+  --p-btn-75: rgba(201,168,106,0.75);
+  --p-btn-send1: #d9bd7f;
+  --p-btn-send2: #b9965a;
+  --p-btn-send-h1: #e6cc92;
+  --p-btn-send-h2: #c9a86a;
+
+  /* ---- 派生：次级文字（dot 派生 alpha） ---- */
+  --p-dot-55: rgba(168,182,216,0.55);
+  --p-dot-60: rgba(168,182,216,0.6);
+  --p-dot-72: rgba(168,182,216,0.72);
+
+  /* ---- 固定硬件/中性遮罩/功能色（不随主题；外观结构与可读性保证） ---- */
+  --p-frame1:#223058; --p-frame2:#131d38; --p-frame3:#0c1428; --p-frame4:#060b18;
+  --p-key1:#2c4070; --p-key2:#16223f;
+  --p-island:#000;
+  --p-scrim-dark:#070d1a;
+  --p-scrim: rgba(7,13,26,0.62);
+  --p-scrim-top: rgba(7,13,26,0.42);
+  --p-scrim-screen: rgba(7,13,26,0.4);
+  --p-scrim-call: rgba(7,13,26,0.72);
+  --p-scrim-35: rgba(7,13,26,0.35);
+  --p-sendtext:#0b1224;
+  --p-err:#ff7b6b; --p-err-border:rgba(255,123,107,0.45);
+  --p-rec:#b53a2e; --p-rec-glow:rgba(181,58,46,0.22);
+  --p-greencall1:#3da463; --p-greencall2:#2f8f4e; --p-greencall3:#1f6b38; --p-greenglow: rgba(47,143,78,0.5);
+  --p-redcall1:#cc5848; --p-redcall2:#b53a2e; --p-redcall3:#86261d; --p-redglow: rgba(181,58,46,0.5);
+  --p-white05:rgba(255,255,255,0.05); --p-white03:rgba(255,255,255,0.03);
+  --p-vignette:rgba(2,5,12,0.55);
+  --p-shadow-a:rgba(0,0,0,0.62); --p-shadow-b:rgba(0,0,0,0.55); --p-shadow-c:rgba(0,0,0,0.6);
+  --p-shadow-d:rgba(0,0,0,0.5); --p-shadow-e:rgba(0,0,0,0.45); --p-shadow-f:rgba(0,0,0,0.35);
+  --p-shadow-g:rgba(0,0,0,0.28); --p-shadow-h:rgba(0,0,0,0.2);
+  --p-unlock-face1:#24355f; --p-unlock-face2:#15213f; --p-unlock-faceh1:#2c3f6e; --p-unlock-faceh2:#1b2a4d;
+}
+
+/* @supports 兜底：若运行环境不支持 color-mix 亦不受影响（变量均以字面量给出，无 color-mix 依赖） */
+
 /* ============ iPhone 15 直板机身（深蓝金属） ============ */
 #phone {
   position: relative;
@@ -20,16 +121,16 @@ button { font-family: inherit; }
   flex-direction: column;
   padding: 9px;
   background:
-    radial-gradient(140% 90% at 28% 0%, rgba(143, 179, 255, 0.2), transparent 55%),
-    linear-gradient(158deg, #223058 0%, #131d38 24%, #0c1428 58%, #060b18 100%);
-  border: 1px solid rgba(143, 179, 255, 0.5);
+    radial-gradient(140% 90% at 28% 0%, var(--p-hi-20), transparent 55%),
+    linear-gradient(158deg, var(--p-frame1) 0%, var(--p-frame2) 24%, var(--p-frame3) 58%, var(--p-frame4) 100%);
+  border: 1px solid var(--p-hi-50);
   border-radius: 36px;
   box-shadow:
-    0 26px 64px rgba(0, 0, 0, 0.62),
-    0 0 0 1px rgba(238, 242, 251, 0.06),
-    inset 0 1px 0 rgba(238, 242, 251, 0.14),
-    inset 1px 0 0 rgba(143, 179, 255, 0.1),
-    inset 0 -2px 0 rgba(0, 0, 0, 0.55);
+    0 26px 64px var(--p-shadow-a),
+    0 0 0 1px var(--p-glint-06),
+    inset 0 1px 0 var(--p-glint-14),
+    inset 1px 0 0 var(--p-hi-10),
+    inset 0 -2px 0 var(--p-shadow-b);
   overflow: visible;
 }
 /* P6：浮窗全填充（浮窗=手机本体，零留白）——body.float-fill 由 panel.js 依 cfg.floatPanel 切换；
@@ -48,10 +149,10 @@ body.float-fill #phone {
   width: 4px;
   height: 86px;
   border-radius: 3px;
-  background: linear-gradient(180deg, #2c4070 0%, #16223f 100%);
+  background: linear-gradient(180deg, var(--p-key1) 0%, var(--p-key2) 100%);
   box-shadow:
-    inset 0 1px 0 rgba(238, 242, 251, 0.3),
-    inset 0 0 0 1px rgba(143, 179, 255, 0.2);
+    inset 0 1px 0 var(--p-glint-30),
+    inset 0 0 0 1px var(--p-hi-20);
   pointer-events: none;
 }
 /* 右侧电源键 */
@@ -63,10 +164,10 @@ body.float-fill #phone {
   width: 4px;
   height: 138px;
   border-radius: 3px;
-  background: linear-gradient(180deg, #2c4070 0%, #16223f 100%);
+  background: linear-gradient(180deg, var(--p-key1) 0%, var(--p-key2) 100%);
   box-shadow:
-    inset 0 1px 0 rgba(238, 242, 251, 0.3),
-    inset 0 0 0 1px rgba(143, 179, 255, 0.2);
+    inset 0 1px 0 var(--p-glint-30),
+    inset 0 0 0 1px var(--p-hi-20);
   pointer-events: none;
 }
 
@@ -76,11 +177,11 @@ body.float-fill #phone {
   min-height: 0;
   position: relative;
   overflow: hidden;
-  background: linear-gradient(180deg, #101a33 0%, #0b1224 100%);
+  background: linear-gradient(180deg, var(--p-bg1) 0%, var(--p-bg2) 100%);
   border-radius: 24px 24px 0 0;
   box-shadow:
-    inset 0 0 0 1px rgba(238, 242, 251, 0.07),
-    inset 0 0 30px rgba(7, 13, 26, 0.4);
+    inset 0 0 0 1px var(--p-glint-07),
+    inset 0 0 30px var(--p-scrim-screen);
 }
 /* 模型区氛围光（#1d2f57 → #0b1224）+ 顶部渐暗，保证状态条可读 */
 #screen::before {
@@ -88,8 +189,8 @@ body.float-fill #phone {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(130% 100% at 50% 30%, #1d2f57 0%, rgba(11, 18, 36, 0) 70%),
-    linear-gradient(180deg, rgba(7, 13, 26, 0.42) 0%, rgba(7, 13, 26, 0) 26%);
+    radial-gradient(130% 100% at 50% 30%, var(--p-bg-glow) 0%, var(--p-bg2-0) 70%),
+    linear-gradient(180deg, var(--p-scrim-top) 0%, rgba(7, 13, 26, 0) 26%);
   z-index: 0;
   pointer-events: none;
 }
@@ -100,8 +201,8 @@ body.float-fill #phone {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(118deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 22%, rgba(255, 255, 255, 0) 84%, rgba(255, 255, 255, 0.03) 100%),
-    radial-gradient(ellipse 140% 115% at 50% 45%, transparent 56%, rgba(2, 5, 12, 0.55) 100%);
+    linear-gradient(118deg, var(--p-white05) 0%, rgba(255, 255, 255, 0) 22%, rgba(255, 255, 255, 0) 84%, var(--p-white03) 100%),
+    radial-gradient(ellipse 140% 115% at 50% 45%, transparent 56%, var(--p-vignette) 100%);
   z-index: 3;
 }
 
@@ -125,8 +226,8 @@ body.float-fill #phone {
   width: 18px;
   height: 6px;
   border-radius: 999px;
-  background: #000;
-  box-shadow: inset 0 0 1px rgba(238, 242, 251, 0.18);
+  background: var(--p-island);
+  box-shadow: inset 0 0 1px var(--p-glass-border);
   position: relative;
 }
 #sb-island::after {
@@ -138,7 +239,7 @@ body.float-fill #phone {
   height: 2.5px;
   transform: translateY(-50%);
   border-radius: 50%;
-  background: rgba(16, 26, 51, 0.9);
+  background: var(--p-bg1-cam);
 }
 #sb-right {
   position: absolute;
@@ -154,7 +255,7 @@ body.float-fill #phone {
   width: 3px;
   height: 3px;
   border-radius: 50%;
-  background: rgba(238, 242, 251, 0.8);
+  background: var(--p-glint-80);
 }
 #screen-clock {
   position: absolute;
@@ -163,8 +264,8 @@ body.float-fill #phone {
   font-family: Consolas, monospace;
   font-size: 11px;
   letter-spacing: 0.5px;
-  color: #eef2fb;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  color: var(--p-title);
+  text-shadow: 0 1px 3px var(--p-shadow-c);
   z-index: 4;
   pointer-events: none;
 }
@@ -204,7 +305,7 @@ body.float-fill #phone {
   max-width: 100%;
   display: block;
   animation: amad-float 4.5s ease-in-out infinite;
-  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 26px rgba(143, 179, 255, 0.12));
+  filter: drop-shadow(0 8px 22px var(--p-shadow-e)) drop-shadow(0 0 26px var(--p-hi-12));
 }
 @keyframes amad-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 
@@ -215,9 +316,9 @@ body.float-fill #phone {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  border: 1px solid rgba(238, 242, 251, 0.18);
-  background: rgba(16, 26, 51, 0.5);
-  color: #a8b6d8;
+  border: 1px solid var(--p-glass-border);
+  background: var(--p-bg1-glass);
+  color: var(--p-dot);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -226,10 +327,31 @@ body.float-fill #phone {
   backdrop-filter: blur(3px);
 }
 #close-btn:hover,
-#calib-btn:hover { background: rgba(201, 168, 106, 0.28); color: #fff; }
-#calib-btn.active { background: rgba(143, 179, 255, 0.32); color: #eef2fb; }
+#calib-btn:hover { background: var(--p-btn-28); color: var(--p-bubble-text); }
+#calib-btn.active { background: var(--p-hi-32); color: var(--p-title); }
 #close-btn { top: 8px; right: 8px; }
 #calib-btn { top: 44px; left: 8px; }
+
+/* Task3：设置入口（⚙，与 calib-btn 同排、位于其右，不与 close × 冲突） */
+#settings-btn {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--p-glass-border);
+  background: var(--p-bg1-glass);
+  color: var(--p-dot);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 5;
+  padding: 0;
+  backdrop-filter: blur(3px);
+  top: 44px;
+  left: 34px;
+}
+#settings-btn:hover { background: var(--p-btn-28); color: var(--p-bubble-text); }
+#settings-btn.active { background: var(--p-hi-32); color: var(--p-title); }
 
 /* ---------- 开机启动屏 ---------- */
 #boot {
@@ -237,10 +359,10 @@ body.float-fill #phone {
   inset: 0;
   z-index: 7;
   background:
-    radial-gradient(ellipse 110% 65% at 50% 12%, rgba(143, 179, 255, 0.12), transparent 65%),
-    radial-gradient(ellipse 70% 45% at 50% 105%, rgba(201, 168, 106, 0.06), transparent 70%),
-    linear-gradient(180deg, #101a33 0%, #0b1224 68%, #070d1a 100%);
-  color: #a8b6d8;
+    radial-gradient(ellipse 110% 65% at 50% 12%, var(--p-hi-12), transparent 65%),
+    radial-gradient(ellipse 70% 45% at 50% 105%, var(--p-btn-06), transparent 70%),
+    linear-gradient(180deg, var(--p-bg1) 0%, var(--p-bg2) 68%, var(--p-scrim-dark) 100%);
+  color: var(--p-dot);
   font-family: Consolas, "Courier New", monospace;
   padding: 18px 16px;
   font-size: 11px;
@@ -257,17 +379,17 @@ body.float-fill #phone {
 #boot-logo-img { display: none !important; }
 .boot-logo { display: none; }
 .boot-title {
-  color: #c9a86a;
+  color: var(--p-btn);
   font-weight: 800;
   font-size: 34px;
   letter-spacing: 12px;
   padding-left: 12px; /* 抵消末字符间距，视觉居中 */
   line-height: 1.2;
-  -webkit-text-stroke: 1px rgba(238, 242, 251, 0.14);
+  -webkit-text-stroke: 1px var(--p-glint-14);
   text-shadow:
-    0 0 24px rgba(201, 168, 106, 0.45),
-    0 0 6px rgba(201, 168, 106, 0.55),
-    0 2px 8px rgba(0, 0, 0, 0.5);
+    0 0 24px var(--p-btn-45),
+    0 0 6px var(--p-btn-55),
+    0 2px 8px var(--p-shadow-d);
   animation: amad-logo-fadein 1.3s ease-out both;
 }
 .boot-title::after {
@@ -276,7 +398,7 @@ body.float-fill #phone {
   width: 58px;
   height: 1px;
   margin: 12px auto 0;
-  background: linear-gradient(90deg, transparent, rgba(201, 168, 106, 0.75), transparent);
+  background: linear-gradient(90deg, transparent, var(--p-btn-75), transparent);
 }
 @keyframes amad-logo-fadein {
   0% { opacity: 0; transform: scale(0.9); filter: blur(2px); }
@@ -291,11 +413,11 @@ body.float-fill #phone {
   align-items: center;
   justify-content: flex-start;
 }
-.boot-line { white-space: pre-wrap; word-break: break-all; text-align: center; color: #a8b6d8; }
-.boot-line::after { content: "▌"; color: #8fb3ff; animation: amad-blink 0.9s steps(1) infinite; }
+.boot-line { white-space: pre-wrap; word-break: break-all; text-align: center; color: var(--p-dot); }
+.boot-line::after { content: "▌"; color: var(--p-hi); animation: amad-blink 0.9s steps(1) infinite; }
 .boot-loading {
   margin-top: 6px;
-  color: #8fb3ff;
+  color: var(--p-hi);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 1px;
@@ -307,8 +429,8 @@ body.float-fill #phone {
   height: 3px;
   margin: 10px auto 0;
   border-radius: 999px;
-  background: linear-gradient(90deg, #8fb3ff 0%, #c9a86a 100%);
-  box-shadow: 0 0 10px rgba(143, 179, 255, 0.55);
+  background: linear-gradient(90deg, var(--p-hi) 0%, var(--p-btn) 100%);
+  box-shadow: 0 0 10px var(--p-hi-55);
   animation: amad-progress 2.5s linear forwards;
 }
 @keyframes amad-progress {
@@ -317,7 +439,7 @@ body.float-fill #phone {
 }
 .boot-version {
   margin-top: 4px;
-  color: rgba(168, 182, 216, 0.6);
+  color: var(--p-dot-60);
   font-size: 10px;
   letter-spacing: 1px;
 }
@@ -331,23 +453,23 @@ body.float-fill #phone {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(7, 13, 26, 0.62);
+  background: var(--p-scrim);
   backdrop-filter: blur(5px);
 }
 #unlock.hidden { display: none; }
 #unlock-btn {
-  background: linear-gradient(180deg, #24355f 0%, #15213f 100%);
-  color: #eef2fb;
-  border: 1px solid rgba(201, 168, 106, 0.55);
+  background: linear-gradient(180deg, var(--p-unlock-face1) 0%, var(--p-unlock-face2) 100%);
+  color: var(--p-text);
+  border: 1px solid var(--p-btn-55);
   border-radius: 999px;
   padding: 10px 20px;
   font-size: 13px;
   cursor: pointer;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(238, 242, 251, 0.18);
+  box-shadow: 0 6px 20px var(--p-shadow-e), inset 0 1px 0 var(--p-glass-border);
 }
 #unlock-btn:hover {
-  background: linear-gradient(180deg, #2c3f6e 0%, #1b2a4d 100%);
-  box-shadow: 0 6px 24px rgba(201, 168, 106, 0.25), inset 0 1px 0 rgba(238, 242, 251, 0.2);
+  background: linear-gradient(180deg, var(--p-unlock-faceh1) 0%, var(--p-unlock-faceh2) 100%);
+  box-shadow: 0 6px 24px var(--p-btn-25), inset 0 1px 0 var(--p-glint-20);
 }
 
 /* ---------- 来电（模型直出 + 半透明遮罩） ---------- */
@@ -362,23 +484,23 @@ body.float-fill #phone {
   gap: 4px;
   padding: 10px 8px 26px;
   background:
-    radial-gradient(ellipse 100% 60% at 50% 8%, rgba(143, 179, 255, 0.12), transparent 68%),
-    linear-gradient(180deg, rgba(16, 26, 51, 0.12) 0%, rgba(7, 13, 26, 0.72) 100%);
+    radial-gradient(ellipse 100% 60% at 50% 8%, var(--p-hi-12), transparent 68%),
+    linear-gradient(180deg, var(--p-bg1-soft) 0%, var(--p-scrim-call) 100%);
   backdrop-filter: blur(6px) saturate(1.15);
 }
 #call-overlay.hidden { display: none; }
 #call-portrait-wrap { display: none; }
 #call-portrait { display: none !important; }
 .call-name {
-  color: #eef2fb;
+  color: var(--p-title);
   font-size: 30px;
   font-weight: 800;
   letter-spacing: 6px;
-  text-shadow: 0 0 20px rgba(238, 242, 251, 0.3), 0 2px 10px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 0 20px var(--p-glint-30), 0 2px 10px var(--p-shadow-c);
   animation: amad-call-in 0.45s ease-out 0.08s both;
 }
 .call-sub {
-  color: #a8b6d8;
+  color: var(--p-dot);
   font-size: 11px;
   letter-spacing: 3px;
   animation: amad-call-in 0.45s ease-out 0.18s both, amad-blink 1.4s steps(1) infinite;
@@ -398,21 +520,21 @@ body.float-fill #phone {
   font-weight: 700;
   letter-spacing: 1px;
   cursor: pointer;
-  color: #fff;
+  color: var(--p-bubble-text);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .call-accept:hover,
 .call-deny:hover { transform: scale(1.07); }
 .call-accept {
-  background: radial-gradient(circle at 35% 30%, #3da463 0%, #2f8f4e 60%, #1f6b38 100%);
-  box-shadow: 0 6px 20px rgba(47, 143, 78, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 0 1px rgba(238, 242, 251, 0.16);
+  background: radial-gradient(circle at 35% 30%, var(--p-greencall1) 0%, var(--p-greencall2) 60%, var(--p-greencall3) 100%);
+  box-shadow: 0 6px 20px var(--p-greenglow), inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 0 1px var(--p-glint-16);
 }
 .call-deny {
-  background: radial-gradient(circle at 35% 30%, #cc5848 0%, #b53a2e 60%, #86261d 100%);
-  box-shadow: 0 6px 20px rgba(181, 58, 46, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 0 0 1px rgba(238, 242, 251, 0.16);
+  background: radial-gradient(circle at 35% 30%, var(--p-redcall1) 0%, var(--p-redcall2) 60%, var(--p-redcall3) 100%);
+  box-shadow: 0 6px 20px var(--p-redglow), inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 0 0 1px var(--p-glint-16);
 }
-.call-accept:hover { box-shadow: 0 8px 26px rgba(47, 143, 78, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 0 1px rgba(238, 242, 251, 0.16); }
-.call-deny:hover { box-shadow: 0 8px 26px rgba(181, 58, 46, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 0 0 1px rgba(238, 242, 251, 0.16); }
+.call-accept:hover { box-shadow: 0 8px 26px var(--p-greenglow), inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 0 1px var(--p-glint-16); }
+.call-deny:hover { box-shadow: 0 8px 26px var(--p-redglow), inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 0 0 1px var(--p-glint-16); }
 
 /* ---------- 错误行 & 状态胶囊 ---------- */
 #errline {
@@ -421,14 +543,14 @@ body.float-fill #phone {
   right: 10px;
   bottom: 30px;
   z-index: 5;
-  background: rgba(11, 18, 36, 0.94);
-  color: #ff7b6b;
+  background: var(--p-bg2-glass);
+  color: var(--p-err);
   font-size: 11px;
   line-height: 1.5;
   padding: 6px 10px;
   border-radius: 9px;
-  border: 1px solid rgba(255, 123, 107, 0.45);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--p-err-border);
+  box-shadow: 0 4px 14px var(--p-shadow-f);
   word-break: break-all;
 }
 #errline.hidden { display: none; }
@@ -440,14 +562,14 @@ body.float-fill #phone {
   z-index: 3;
   padding: 3px 9px;
   border-radius: 999px;
-  background: rgba(7, 13, 26, 0.62);
-  color: #a8b6d8;
+  background: var(--p-scrim);
+  color: var(--p-dot);
   font-size: 9px;
   letter-spacing: 0.5px;
-  border: 1px solid rgba(238, 242, 251, 0.1);
+  border: 1px solid var(--p-glint-10);
   backdrop-filter: blur(4px);
 }
-#status-chip.off { color: #ff7b6b; }
+#status-chip.off { color: var(--p-err); }
 
 /* ============ 聊天区（屏内底部消息面板，占 45%） ============ */
 #keypad {
@@ -458,9 +580,9 @@ body.float-fill #phone {
   display: flex;
   flex-direction: column;
   padding: 8px 8px 8px;
-  background: linear-gradient(180deg, rgba(16, 26, 51, 0.96) 0%, rgba(11, 18, 36, 0.99) 100%);
+  background: linear-gradient(180deg, var(--p-keypad-bg1) 0%, var(--p-keypad-bg2) 100%);
   border-radius: 0 0 24px 24px;
-  box-shadow: inset 0 1px 0 rgba(238, 242, 251, 0.05);
+  box-shadow: inset 0 1px 0 var(--p-glint-05);
   overflow: hidden;
 }
 
@@ -473,9 +595,15 @@ body.float-fill #phone {
   flex-direction: column;
   gap: 8px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(143, 179, 255, 0.35) transparent;
+  scrollbar-color: var(--p-bubble-me-border) transparent;
 }
-.msg-empty { color: rgba(168, 182, 216, 0.55); font-size: 11px; text-align: center; margin-top: 18px; }
+/* Task3：聊天背景图——chatBgUrl 非空时 panel.js 给 #history 加 .has-bg 并直写 background-image（图片 + 半透明遮罩保文字可读） */
+#history.has-bg {
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+}
+.msg-empty { color: var(--p-dot-55); font-size: 11px; text-align: center; margin-top: 18px; }
 
 /* 消息行骨架（avatar 与气泡分家） */
 .msg {
@@ -500,9 +628,9 @@ body.float-fill #phone {
   /* Task5-R1: 已移除旧 SVG content 覆盖 <img> 的非标准技巧（仅 Chromium>=118 支持）。
      JS 侧 makeAvatar() 现生成 <span class="msg-avatar">S</span> 文本头像，
      圆徽视觉（圆形、金边、深蓝渐变底、白字 S）改用普通 CSS 呈现。 */
-  background: radial-gradient(circle at 35% 30%, #1d2f57 0%, #0b1224 100%);
-  border: 1.7px solid #c9a86a;
-  color: #eef2fb;
+  background: radial-gradient(circle at 35% 30%, var(--p-bg-glow) 0%, var(--p-bg2) 100%);
+  border: 1.7px solid var(--p-btn);
+  color: var(--p-title);
   font-size: 16px;
   font-weight: 700;
   line-height: 1;
@@ -518,28 +646,28 @@ body.float-fill #phone {
 }
 .msg.user .bubble {
   max-width: 88%;
-  background: linear-gradient(135deg, #3b6fd4 0%, #1e3f8f 100%);
-  color: #ffffff;
-  border: 1px solid rgba(143, 179, 255, 0.35);
+  background: linear-gradient(135deg, var(--p-bubble-me) 0%, var(--p-bubble-me-2) 100%);
+  color: var(--p-bubble-text);
+  border: 1px solid var(--p-bubble-me-border);
   border-bottom-right-radius: 4px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 2px 10px var(--p-shadow-g);
 }
 .msg.amadeus .bubble {
-  background: rgba(238, 242, 251, 0.09);
-  color: #eef2fb;
-  border: 1px solid rgba(238, 242, 251, 0.25);
+  background: var(--p-bubble-her-glass);
+  color: var(--p-title);
+  border: 1px solid var(--p-bubble-her-border);
   border-bottom-left-radius: 4px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 10px var(--p-shadow-h);
 }
 .msg.call {
   display: block;
   align-self: center;
   text-align: center;
   padding: 5px 12px;
-  background: rgba(143, 179, 255, 0.08);
-  border: 1px dashed rgba(143, 179, 255, 0.45);
+  background: var(--p-call-bg);
+  border: 1px dashed var(--p-call-border);
   border-radius: 12px;
-  color: #a8b6d8;
+  color: var(--p-dot);
   font-size: 11px;
 }
 .msg .time {
@@ -547,7 +675,7 @@ body.float-fill #phone {
   margin-top: 3px;
   font-size: 9px;
   opacity: 1;
-  color: rgba(168, 182, 216, 0.72);
+  color: var(--p-dot-72);
 }
 
 /* ---------- 圆角输入条 ---------- */
@@ -558,17 +686,17 @@ body.float-fill #phone {
   gap: 6px;
   padding: 4px 6px;
   margin-top: 2px;
-  background: rgba(238, 242, 251, 0.07);
-  border: 1px solid rgba(238, 242, 251, 0.16);
+  background: var(--p-glint-07);
+  border: 1px solid var(--p-glint-16);
   border-radius: 999px;
-  box-shadow: inset 0 1px 2px rgba(7, 13, 26, 0.35);
+  box-shadow: inset 0 1px 2px var(--p-scrim-35);
   backdrop-filter: blur(4px);
 }
 #chat-row.hidden { display: none; }
 #chat-row button {
   border: 0;
-  background: rgba(238, 242, 251, 0.1);
-  color: #eef2fb;
+  background: var(--p-glint-10);
+  color: var(--p-title);
   border-radius: 50%;
   width: 30px;
   height: 30px;
@@ -582,15 +710,15 @@ body.float-fill #phone {
   justify-content: center;
   transition: background 0.15s ease, transform 0.1s ease;
 }
-#chat-row button:hover { background: rgba(143, 179, 255, 0.28); }
+#chat-row button:hover { background: var(--p-hi-28); }
 #chat-row button:active { transform: scale(0.92); }
 #chat-row button.mic-btn svg { display: block; pointer-events: none; }
 #chat-row button.rec {
-  background: #b53a2e;
+  background: var(--p-rec);
   animation: amad-pulse 1s ease-in-out infinite;
 }
-#chat-row button.rec svg { color: #fff; }
-@keyframes amad-pulse { 50% { box-shadow: 0 0 0 6px rgba(181, 58, 46, 0.22); } }
+#chat-row button.rec svg { color: var(--p-bubble-text); }
+@keyframes amad-pulse { 50% { box-shadow: 0 0 0 6px var(--p-rec-glow); } }
 #chat-lang {
   width: auto;
   height: 22px;
@@ -598,26 +726,187 @@ body.float-fill #phone {
   border-radius: 999px;
   font-size: 10px;
   background: transparent;
-  color: #a8b6d8;
-  border: 1px solid rgba(238, 242, 251, 0.12);
+  color: var(--p-dot);
+  border: 1px solid var(--p-glint-12);
 }
 #chat-send {
-  background: linear-gradient(180deg, #d9bd7f 0%, #b9965a 100%);
-  color: #0b1224;
+  background: linear-gradient(180deg, var(--p-btn-send1) 0%, var(--p-btn-send2) 100%);
+  color: var(--p-sendtext);
   font-weight: 800;
 }
-#chat-send:hover { background: linear-gradient(180deg, #e6cc92 0%, #c9a86a 100%); }
+#chat-send:hover { background: linear-gradient(180deg, var(--p-btn-send-h1) 0%, var(--p-btn-send-h2) 100%); }
 #chat-input {
   flex: 1;
   min-width: 0;
   background: transparent;
   border: 0;
   outline: 0;
-  color: #eef2fb;
+  color: var(--p-title);
   font-size: 12px;
   line-height: 22px;
 }
-#chat-input::placeholder { color: rgba(168, 182, 216, 0.6); }
+#chat-input::placeholder { color: var(--p-dot-60); }
+
+/* ============ Task3：面板内设置页（外观与布局组，覆层形态，保留返回/关闭） ============ */
+#settings {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: none;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--p-bg1) 0%, var(--p-bg2) 100%);
+  border-radius: 36px;
+  overflow: hidden;
+}
+#settings.open { display: flex; }
+.settings-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--p-glint-10);
+}
+.settings-h-title {
+  color: var(--p-title);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 2px;
+}
+.settings-nav {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--p-glass-border);
+  background: var(--p-bg1-glass);
+  color: var(--p-title);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-nav:hover { background: var(--p-btn-28); color: var(--p-bubble-text); }
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 12px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--p-bubble-me-border) transparent;
+}
+.settings-group {
+  color: var(--p-hi);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin: 10px 2px 6px;
+}
+.set-item {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--p-glint-06);
+  border: 1px solid var(--p-glint-10);
+}
+.set-label {
+  color: var(--p-dot);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.set-preset-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.set-preset-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--p-glint-16);
+  color: var(--p-title);
+  font-size: 11px;
+  cursor: pointer;
+  background: transparent;
+}
+.set-preset-opt input { accent-color: var(--p-btn); margin: 0; }
+.set-preset-opt.selected {
+  background: var(--p-hi-28);
+  border-color: var(--p-hi-50);
+  color: var(--p-title);
+}
+.color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.color-row { display: flex; align-items: center; gap: 6px; }
+.color-row input[type="color"] {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--p-glint-16);
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+.color-row .color-label { flex: 1; color: var(--p-text); font-size: 11px; }
+.color-row input[type="text"] {
+  width: 64px;
+  background: var(--p-glint-10);
+  border: 1px solid var(--p-glint-16);
+  border-radius: 7px;
+  color: var(--p-title);
+  font-size: 10px;
+  font-family: Consolas, monospace;
+  padding: 3px 5px;
+  outline: 0;
+  text-transform: lowercase;
+}
+.set-input {
+  width: 100%;
+  background: var(--p-glint-10);
+  border: 1px solid var(--p-glint-16);
+  border-radius: 9px;
+  color: var(--p-title);
+  font-size: 12px;
+  padding: 7px 9px;
+  outline: 0;
+}
+.set-input::placeholder { color: var(--p-dot-60); }
+.set-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.set-switch input { display: none; }
+.set-switch-track {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--p-glint-16);
+  border: 1px solid var(--p-glint-10);
+  position: relative;
+  transition: background 0.15s ease;
+}
+.set-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--p-dot);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.set-switch input:checked + .set-switch-track { background: var(--p-hi-28); }
+.set-switch input:checked + .set-switch-track::after { transform: translateX(18px); background: var(--p-title); }
+.set-switch-txt { color: var(--p-title); font-size: 12px; }
+.set-hint { color: var(--p-dot-60); font-size: 10px; margin-top: 4px; }
+.set-reset {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 0;
+  border-radius: 999px;
+  border: 1px solid var(--p-btn-55);
+  background: var(--p-btn-06);
+  color: var(--p-btn);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.set-reset:hover { background: var(--p-btn-28); color: var(--p-bubble-text); }
 
 /* ============ Task5-R1：浮层期间门控聊天区 ============
    #keypad 是 #screen 的兄弟节点（占机身 45%）；开机动画（#boot）、语音解锁（#unlock）、
