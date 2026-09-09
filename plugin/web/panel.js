@@ -2041,7 +2041,7 @@
       ct.className = 'time'
       ct.textContent = fmtTime(entry.t || Date.now())
       callEl.appendChild(ct)
-      attachReplay(callEl, entry.jp, entry.emotion)
+      attachReplay(callEl, entry.jp || entry.cn, entry.emotion)
       historyEl.appendChild(callEl)
       historyEl.scrollTop = historyEl.scrollHeight
       return
@@ -2055,7 +2055,7 @@
       var a = makeAmadeusMsg()
       a.bubble.textContent = entry.cn || entry.jp || ''
       addTimeTo(a.bubble, entry.t)
-      attachReplay(a.bubble, entry.jp, entry.emotion)
+      attachReplay(a.bubble, entry.jp || entry.cn, entry.emotion)
       historyEl.appendChild(a.wrap)
     }
     historyEl.scrollTop = historyEl.scrollHeight
@@ -2064,14 +2064,14 @@
   // ============================================================
   // Task4：聊天气泡重播按钮（祥子话语可点击重播）
   // ------------------------------------------------------------
-  // 重播文本来源（按实际数据结构取，优先日文 jp）：
-  //   - 播报 announce / 空闲 idle / 来电 call 气泡：queue 条目自身带 jp(=u.text，日文)
-  //     与 cn(=u.cn，中文副标题)；由 renderItemBubble 透传给 addHistory。
-  //   - 聊天回复 chat 气泡：sendChat 流式读取 finalSt.jp（日文）与 finalSt.emotion。
-  //   - 历史记忆装载（/amadeus/memory → addHistory）：assistant 条目自带 jp/emotion。
-  //   - 纯 cn 条目（kind:'cn' 的 pushCn / revealHistory 打字机）：只带 cn，无 jp，
-  //     视为「无可合成文本」→ 按钮灰显禁用（祥子音色为日文克隆，宿主对纯中文合成不可靠）。
-  // 判定：仅当气泡携带非空 jp（或 text）时启用；否则灰显。详见 task-4-report.md。
+  // 重播文本来源（按实际数据结构取；统一判据 = (jp || cn)，日文优先，纯中文同样可合成）：
+  //   - 播报 announce / 空闲 idle / 来电 call 气泡：jp(=u.text，日文) 与 cn(=u.cn，中文副标题)；
+  //     renderItemBubble 透传 jp+cn 给 addHistory。
+  //   - 聊天回复 chat 气泡：sendChat 流式读取 finalSt.jp（日文）/ finalSt.cn（中文），与主链 jp=finalSt.jp||cn 一致。
+  //   - 历史记忆装载（/amadeus/memory → addHistory）：assistant 条目自带 jp/cn/emotion。
+  //   - 纯中文条目（kind:'cn' 的 pushCn / revealHistory 打字机）：只有 cn，仍启用重播（controller 实测
+  //     /amadeus/tts 对中文返回 200+audio，中文合成可用，不再按「日文声线不可靠」灰显）。
+  // 判定：气泡携带非空 (jp || cn) → 启用重播；两者皆空才灰显禁用。详见 task-4-report.md「Fix Round 1」。
   var replayAudioEl = null
   var replayBusy = false
 
@@ -2083,10 +2083,10 @@
   }
 
   // 给气泡容器（.bubble / .msg.call）右下角附小喇叭重播按钮。
-  // jp 非空 → data-replay 供委托点击读取（合成用日文原文+原情绪）；否则灰显禁用。
-  function attachReplay(bubble, jp, emotion) {
+  // text = (jp || cn)：日文优先；非空 → data-replay 供委托点击读取（合成原文+原情绪）；两者皆空才灰显禁用。
+  function attachReplay(bubble, text, emotion) {
     if (!bubble) return
-    var t = String(jp || '').trim()
+    var t = String(text || '').trim()
     var btn = document.createElement('button')
     btn.className = 'bubble-replay'
     btn.type = 'button'
@@ -2193,8 +2193,8 @@
     var body = document.createElement('span')
     m.bubble.appendChild(body)
     addTimeTo(m.bubble, Date.now())
-    // Task4：kind:'cn' 纯中文条目（无 jp）→ 灰显重播按钮（仅供参考，见报告判定）
-    attachReplay(m.bubble, '', null)
+    // Task4：纯中文条目（仅有 cn）→ 以中文重播（controller 实测 /amadeus/tts 对中文返回 200+audio）
+    attachReplay(m.bubble, s, null)
     var empty = historyEl.querySelector('.msg-empty')
     if (empty) empty.remove()
     historyEl.appendChild(m.wrap)
@@ -2297,8 +2297,8 @@
             enqueue(jpSentences[si], true, emotion, EXPR[emotion] || '', si === jpSentences.length - 1 ? cn : '')
           }
         }
-        // Task4：聊天回复气泡可重播——日文原文(finalSt.jp)+原情绪；纯中文回复则灰显
-        attachReplay(m2.bubble, (finalSt && finalSt.jp) || '', (finalSt && finalSt.emotion) || 'neutral')
+        // Task4：聊天回复气泡可重播——(jp||cn)+原情绪，与 sendChat 主链 jp=finalSt.jp||cn 一致
+        attachReplay(m2.bubble, (finalSt && (finalSt.jp || finalSt.cn)) || '', (finalSt && finalSt.emotion) || 'neutral')
         updateChip('● ' + (cfg.provider || 'edge'), false)
       }
       historyEl.scrollTop = historyEl.scrollHeight
