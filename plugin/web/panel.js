@@ -116,37 +116,54 @@
   applyFloatFill()
 
   // ============================================================
-  // Task3：主题引擎（CSS 变量化 + 3 套预设 + 9 项自定义 + 聊天背景图）
+  // Task3/P8：主题引擎（CSS 变量化 + 3 套预设 + 10 项自定义（含 colorBezel 机身外框）+ 聊天背景图）
   // ------------------------------------------------------------
-  // THEME_PRESETS = 预设全量变量集（含渐变次停/发送钮面/氛围光等实色派生）；
-  // 每个预设给定 9 个「主题主键」，派生 alpha 由 applyTheme 依生效主键原地计算，
+  // THEME_PRESETS = 预设全量变量集（含渐变次停/发送钮面/氛围光/机身外框等实色派生）；
+  // 每个预设给定 10 个「主题主键」，派生 alpha 由 applyTheme 依生效主键原地计算，
   // 从而保留权威表的 alpha/双停结构，且用户覆盖主键后派生色随之联动。
-  //   - 9 用户键覆盖对应主键（colorBg1/2/Title/BubbleMe/BubbleHer/BubbleText/Btn/Hi/Dot）
-  //   - 派生实色（-bubble-me-2 / -btn-send* / -bg-glow）保留为预设字面量（联动策略见报告）
+  //   - 10 用户键覆盖对应主键（colorBg1/2/Title/BubbleMe/BubbleHer/BubbleText/Btn/Hi/Dot/Bezel）
+  //   - 派生实色（-bubble-me-2 / -btn-send* / -bg-glow / 机身 bezel*）默认取预设字面量；
+  //     colorBezel 自定义时由单色用乘子派生机身 4 停/侧键/描边（校准见 P8 报告）
   var THEME_PRESETS = {
     'sakiko-blue': {   // 默认 = 现状 深蓝×月白×金（逐值迁移）
       base: { bg1: '#101a33', bg2: '#0b1224', title: '#eef2fb', bubbleMe: '#3b6fd4', bubbleHer: '#eef2fb', bubbleText: '#ffffff', btn: '#c9a86a', hi: '#8fb3ff', dot: '#a8b6d8' },
       bubbleMe2: '#1e3f8f',
       bgGlow: '#1d2f57',
-      send1: '#d9bd7f', send2: '#b9965a', sendH1: '#e6cc92', sendH2: '#c9a86a'
+      send1: '#d9bd7f', send2: '#b9965a', sendH1: '#e6cc92', sendH2: '#c9a86a',
+      bezel: '#223058',
+      bezelStops: ['#223058', '#131d38', '#0c1428', '#060b18'],
+      bezelKey: ['#2c4070', '#16223f'],
+      bezelBorder: 'rgba(143,179,255,0.5)'
     },
-    'midnight-gold': { // 暮蓝鎏金：深墨蓝底 + 鎏金标题/强调 + 暖白文字
+    'midnight-gold': { // 暮蓝鎏金：深墨蓝底 + 鎏金标题/强调 + 暖白文字；机身为深暖金褐
       base: { bg1: '#0e1224', bg2: '#080b16', title: '#f4e8cc', bubbleMe: '#c9a159', bubbleHer: '#f4e8cc', bubbleText: '#fffdf6', btn: '#d4b25e', hi: '#e7c96e', dot: '#b7a88b' },
       bubbleMe2: '#8a6a2e',
       bgGlow: '#3a2e1c',
-      send1: '#ecd28e', send2: '#c2a052', sendH1: '#f6e2a4', sendH2: '#d4b25e'
+      send1: '#ecd28e', send2: '#c2a052', sendH1: '#f6e2a4', sendH2: '#d4b25e',
+      bezel: '#2b2118',
+      bezelStops: ['#2b2118', '#1d160f', '#140f0a', '#0a0705'],
+      bezelKey: ['#3a2d1a', '#241a10'],
+      bezelBorder: 'rgba(231,201,110,0.45)'
     },
-    'sakura-pink': {   // 樱粉月白：樱粉底 + 月白气泡 + 淡金高亮
+    'sakura-pink': {   // 樱粉月白：樱粉底 + 月白气泡 + 淡金高亮；机身为深樱紫
       base: { bg1: '#372633', bg2: '#241a24', title: '#ffe9f2', bubbleMe: '#d98aa8', bubbleHer: '#ffe9f2', bubbleText: '#ffffff', btn: '#e6cfa0', hi: '#f0b6cf', dot: '#d8a8bd' },
       bubbleMe2: '#b05e82',
       bgGlow: '#6a4b5e',
-      send1: '#f0ddb4', send2: '#cfae7c', sendH1: '#f8ebc9', sendH2: '#e6cfa0'
+      send1: '#f0ddb4', send2: '#cfae7c', sendH1: '#f8ebc9', sendH2: '#e6cfa0',
+      bezel: '#3a2030',
+      bezelStops: ['#3a2030', '#2a1624', '#1d0f19', '#10080e'],
+      bezelKey: ['#4c2b3d', '#321c2a'],
+      bezelBorder: 'rgba(240,182,207,0.45)'
     },
-    'mono': {          // 月灰单色：低饱和灰阶
+    'mono': {          // 月灰单色：低饱和灰阶；机身为月灰
       base: { bg1: '#1b2025', bg2: '#12161a', title: '#e6e8ea', bubbleMe: '#6b7076', bubbleHer: '#e6e8ea', bubbleText: '#ffffff', btn: '#b8bcc0', hi: '#aeb4bb', dot: '#9aa0a6' },
       bubbleMe2: '#494e54',
       bgGlow: '#2e343a',
-      send1: '#d2d5d8', send2: '#9aa0a6', sendH1: '#e3e5e7', sendH2: '#b8bcc0'
+      send1: '#d2d5d8', send2: '#9aa0a6', sendH1: '#e3e5e7', sendH2: '#b8bcc0',
+      bezel: '#262b34',
+      bezelStops: ['#262b34', '#1a1e26', '#13161c', '#0a0c10'],
+      bezelKey: ['#343a46', '#20242c'],
+      bezelBorder: 'rgba(174,180,187,0.45)'
     }
   }
   // 语义键 → 主 CSS 变量 与 用户 cfg 键
@@ -163,9 +180,10 @@
     { cfg: 'colorTitle',  preset: 'title',     css: '--p-text' } // 通用主文字 = colorTitle
   ]
   var rootEl = document.documentElement
-  // Color cfg key → preset 语义键名（colorTitle 两行同为 title）
+  // Color cfg key → preset 语义键名（colorTitle 两行同为 title；colorBezel 为第 10 键）
   var CFG_TO_PRESET = {}
   for (var _ci = 0; _ci < THEME_COLOR_KEYS.length; _ci++) CFG_TO_PRESET[THEME_COLOR_KEYS[_ci].cfg] = THEME_COLOR_KEYS[_ci].preset
+  CFG_TO_PRESET['colorBezel'] = 'bezel'
 
   function validHex(v) {
     return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)
@@ -177,7 +195,8 @@
     var v = cfg[cfgKey]
     if (!validHex(v)) return false
     var preset = CFG_TO_PRESET[cfgKey]
-    return String(v).toLowerCase() !== String(THEME_PRESETS['sakiko-blue'].base[preset]).toLowerCase()
+    var def = preset === 'bezel' ? THEME_PRESETS['sakiko-blue'].bezel : THEME_PRESETS['sakiko-blue'].base[preset]
+    return String(v).toLowerCase() !== String(def).toLowerCase()
   }
   function hexRgb(hex) {
     if (!validHex(hex)) return null
@@ -192,16 +211,41 @@
     if (!c) return 'transparent'
     return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',' + a + ')'
   }
+  // P8：单色 colorBezel 派生机身 4 停渐变 / 侧键 / 描边（乘子校准见报告）
+  function darkenHex(hex, f) {
+    var c = hexRgb(hex); if (!c) return '#000000'
+    var r = Math.max(0, Math.min(255, Math.round(c.r * f)))
+    var g = Math.max(0, Math.min(255, Math.round(c.g * f)))
+    var b = Math.max(0, Math.min(255, Math.round(c.b * f)))
+    return '#' + ('0' + r.toString(16)).slice(-2) + ('0' + g.toString(16)).slice(-2) + ('0' + b.toString(16)).slice(-2)
+  }
+  function lightenHex(hex, t) {
+    var c = hexRgb(hex); if (!c) return '#ffffff'
+    var r = Math.max(0, Math.min(255, Math.round(c.r + (255 - c.r) * t)))
+    var g = Math.max(0, Math.min(255, Math.round(c.g + (255 - c.g) * t)))
+    var b = Math.max(0, Math.min(255, Math.round(c.b + (255 - c.b) * t)))
+    return '#' + ('0' + r.toString(16)).slice(-2) + ('0' + g.toString(16)).slice(-2) + ('0' + b.toString(16)).slice(-2)
+  }
+  function deriveBezelStops(hex) {
+    return [hex, darkenHex(hex, 0.6), darkenHex(hex, 0.41), darkenHex(hex, 0.23)]
+  }
+  function deriveBezelKeys(hex) {
+    return [lightenHex(hex, 0.14), darkenHex(hex, 0.55)]
+  }
+  function deriveBezelBorder(hex) {
+    var c = hexRgb(lightenHex(hex, 0.55))
+    return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',0.5)'
+  }
 
   // 主题相关配置签名：host poll 仅在实际变化时重跑 applyTheme（fix M2 幂等浪费）。
   // panel 内不再有本地预览（设置已搬入 DSH 设置区），故无需 pendingCfg/filterPending。
   function themeSig(c) {
     return [c.themePreset, c.colorBg1, c.colorBg2, c.colorTitle, c.colorBubbleMe, c.colorBubbleHer,
-      c.colorBubbleText, c.colorBtn, c.colorHi, c.colorDot, c.chatBgUrl, c.floatPanel].join('~')
+      c.colorBubbleText, c.colorBtn, c.colorHi, c.colorDot, c.colorBezel, c.chatBgUrl, c.floatPanel].join('~')
   }
   var lastThemeSig = ''
 
-  // 计算生效主键：预设 base + 9 用户键（「用户脏键」覆盖；非脏键一律取预设 base）。
+  // 计算生效主键：预设 base + 9 用户键 + colorBezel（「用户脏键」覆盖；非脏键一律取预设 base）。
   // —— 修复 C1：此前用 validHex 恒非空覆盖，而 getStatus/poll 恒供 9 个合法 hex（DEFAULT_CONFIG）→
   //    切到非默认预设后主键被写回 sakiko 默认、几乎不变；改判据后才真正随预设切换。
   function effectiveBase() {
@@ -212,10 +256,12 @@
     base.bg1 = p.bg1; base.bg2 = p.bg2; base.title = p.title
     base.bubbleMe = p.bubbleMe; base.bubbleHer = p.bubbleHer; base.bubbleText = p.bubbleText
     base.btn = p.btn; base.hi = p.hi; base.dot = p.dot
+    base.bezel = preset.bezel
     for (var i = 0; i < THEME_COLOR_KEYS.length; i++) {
       var k = THEME_COLOR_KEYS[i]
       if (isDirty(k.cfg)) base[k.preset] = cfg[k.cfg]
     }
+    if (isDirty('colorBezel')) base.bezel = cfg.colorBezel
     return { preset: preset, base: base }
   }
 
@@ -262,6 +308,15 @@
     set('--p-btn-55', rgbaHex(b.btn, 0.55)); set('--p-btn-75', rgbaHex(b.btn, 0.75))
     set('--p-dot-55', rgbaHex(b.dot, 0.55)); set('--p-dot-60', rgbaHex(b.dot, 0.6))
     set('--p-dot-72', rgbaHex(b.dot, 0.72))
+
+    // 机身/外框（P8 colorBezel）：自定义时由单色派生 4 停渐变/侧键/描边；否则用预设原值组（默认零回归）
+    var bezelDirty = isDirty('colorBezel')
+    var bzStops = bezelDirty ? deriveBezelStops(b.bezel) : pr.bezelStops
+    var bzKeys = bezelDirty ? deriveBezelKeys(b.bezel) : pr.bezelKey
+    var bzBorder = bezelDirty ? deriveBezelBorder(b.bezel) : pr.bezelBorder
+    set('--p-bezel1', bzStops[0]); set('--p-bezel2', bzStops[1]); set('--p-bezel3', bzStops[2]); set('--p-bezel4', bzStops[3])
+    set('--p-bezel-key1', bzKeys[0]); set('--p-bezel-key2', bzKeys[1])
+    set('--p-bezel-border', bzBorder)
 
     // data-theme 为预设语义选择器（panel.css 提供 :root[data-theme=…] 静态基色兜底），
     // 变量实值由上方 setProperty 覆盖行优先应用（JS 为权威）。

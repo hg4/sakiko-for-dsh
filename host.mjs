@@ -136,7 +136,7 @@ export function apply(ctx) {
       narratorDone: true,
       narratorMilestoneMs: 240000,
       narratorMilestoneSteps: 10,
-      // 手机界面浮窗化（Task 1）：浮窗布局开关 / 主题预设 / 9 项自定义配色 / 聊天区背景图
+      // 手机界面浮窗化（Task 1 / P8）：浮窗布局开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
       // 配色默认 = 现状「深蓝月白金」panel.css 硬编码值（逐色权威表见 .superpowers/sdd/2026-09-08-float-panel/task-1-report.md）
       floatPanel: true,
       themePreset: 'sakiko-blue',
@@ -149,6 +149,7 @@ export function apply(ctx) {
       colorBtn: '#c9a86a',
       colorHi: '#8fb3ff',
       colorDot: '#a8b6d8',
+      colorBezel: '#223058',
       chatBgUrl: '',
     }
 
@@ -546,7 +547,7 @@ export function apply(ctx) {
       if (typeof p.narratorDone === 'boolean') out.narratorDone = p.narratorDone
       if (typeof p.narratorMilestoneMs === 'number' && p.narratorMilestoneMs >= 60000 && p.narratorMilestoneMs <= 1800000) out.narratorMilestoneMs = Math.floor(p.narratorMilestoneMs)
       if (typeof p.narratorMilestoneSteps === 'number' && p.narratorMilestoneSteps >= 3 && p.narratorMilestoneSteps <= 50) out.narratorMilestoneSteps = Math.floor(p.narratorMilestoneSteps)
-      // 手机界面浮窗化（Task 1）：浮窗开关 / 主题预设 / 9 项自定义配色 / 聊天区背景图
+      // 手机界面浮窗化（Task 1 / P8）：浮窗开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
       // 白名单：floatPanel 布尔；themePreset 四枚举；color* 严格 6 位 hex（非法仅忽略该键，不回滚整包）；
       // chatBgUrl 字符串长度 ≤500 且（空串或 http://、https:// 前缀），非法忽略。
       if (typeof p.floatPanel === 'boolean') out.floatPanel = p.floatPanel
@@ -560,6 +561,7 @@ export function apply(ctx) {
       if (typeof p.colorBtn === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBtn)) out.colorBtn = p.colorBtn
       if (typeof p.colorHi === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorHi)) out.colorHi = p.colorHi
       if (typeof p.colorDot === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorDot)) out.colorDot = p.colorDot
+      if (typeof p.colorBezel === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.colorBezel)) out.colorBezel = p.colorBezel
       if (typeof p.chatBgUrl === 'string' && p.chatBgUrl.length <= 500 && (p.chatBgUrl.length === 0 || /^https?:\/\//.test(p.chatBgUrl))) out.chatBgUrl = p.chatBgUrl
       return out
     }

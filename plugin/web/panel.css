@@ -88,9 +88,11 @@ button { font-family: inherit; }
   --p-dot-60: rgba(168,182,216,0.6);
   --p-dot-72: rgba(168,182,216,0.72);
 
+  /* ---- 机身/外框（P8 colorBezel 驱动，非固定硬件；默认=现状原值）---- */
+  --p-bezel1:#223058; --p-bezel2:#131d38; --p-bezel3:#0c1428; --p-bezel4:#060b18;
+  --p-bezel-key1:#2c4070; --p-bezel-key2:#16223f;
+  --p-bezel-border: rgba(143,179,255,0.5);
   /* ---- 固定硬件/中性遮罩/功能色（不随主题；外观结构与可读性保证） ---- */
-  --p-frame1:#223058; --p-frame2:#131d38; --p-frame3:#0c1428; --p-frame4:#060b18;
-  --p-key1:#2c4070; --p-key2:#16223f;
   --p-island:#000;
   --p-scrim-dark:#070d1a;
   --p-scrim: rgba(7,13,26,0.62);
@@ -143,8 +145,8 @@ button { font-family: inherit; }
   padding: 9px;
   background:
     radial-gradient(140% 90% at 28% 0%, var(--p-hi-20), transparent 55%),
-    linear-gradient(158deg, var(--p-frame1) 0%, var(--p-frame2) 24%, var(--p-frame3) 58%, var(--p-frame4) 100%);
-  border: 1px solid var(--p-hi-50);
+    linear-gradient(158deg, var(--p-bezel1) 0%, var(--p-bezel2) 24%, var(--p-bezel3) 58%, var(--p-bezel4) 100%);
+  border: 1px solid var(--p-bezel-border);
   border-radius: 36px;
   box-shadow:
     0 26px 64px var(--p-shadow-a),
@@ -170,7 +172,7 @@ body.float-fill #phone {
   width: 4px;
   height: 86px;
   border-radius: 3px;
-  background: linear-gradient(180deg, var(--p-key1) 0%, var(--p-key2) 100%);
+  background: linear-gradient(180deg, var(--p-bezel-key1) 0%, var(--p-bezel-key2) 100%);
   box-shadow:
     inset 0 1px 0 var(--p-glint-30),
     inset 0 0 0 1px var(--p-hi-20);
@@ -185,7 +187,7 @@ body.float-fill #phone {
   width: 4px;
   height: 138px;
   border-radius: 3px;
-  background: linear-gradient(180deg, var(--p-key1) 0%, var(--p-key2) 100%);
+  background: linear-gradient(180deg, var(--p-bezel-key1) 0%, var(--p-bezel-key2) 100%);
   box-shadow:
     inset 0 1px 0 var(--p-glint-30),
     inset 0 0 0 1px var(--p-hi-20);

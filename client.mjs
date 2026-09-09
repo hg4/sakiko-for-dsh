@@ -210,6 +210,15 @@ export function apply(ctx) {
       }
     }
 
+    // P8：hexDarken —— 按倍率压暗 6 位 hex（机身色单色 → 浮窗壳四角深色），非法输入回退原深端 #0c1428
+    function hexDarken(hex, f) {
+      if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return '#0c1428'
+      const r = Math.round(parseInt(hex.slice(1, 3), 16) * f)
+      const g = Math.round(parseInt(hex.slice(3, 5), 16) * f)
+      const b = Math.round(parseInt(hex.slice(5, 7), 16) * f)
+      return '#' + [r, g, b].map((v) => ('0' + Math.max(0, Math.min(255, v)).toString(16)).slice(-2)).join('')
+    }
+
     async function rpcSay(text) {
       try { return await hostLocal.call('say', { text }) } catch (e) { return { ok: false } }
     }
@@ -446,6 +455,7 @@ export function apply(ctx) {
 
     function FloatShell() {
       const f = useStore(floatStore)
+      const config = useStore(configStore)
       const dragRef = React.useRef(null)
       const [interacting, setInteracting] = React.useState(null)
 
@@ -518,6 +528,8 @@ export function apply(ctx) {
         height: f.h + 'px',
         zIndex: FLOAT_Z,
         display: f.collapsed ? 'none' : 'block',
+        // P8：浮窗壳四角深色随 config.colorBezel 单色派生（hexDarken 深端）；未定义回退 CSS #0c1428
+        background: hexDarken((config && config.colorBezel) || '#223058', 0.41),
       }
 
       return React.createElement('div', { className: 'amad-float-root' },
@@ -687,6 +699,7 @@ export function apply(ctx) {
         Row({ label: '主题预设', control: Select({ value: config.themePreset || 'sakiko-blue', options: [['sakiko-blue', '深蓝月白金（默认）'], ['midnight-gold', '暮蓝鎏金'], ['sakura-pink', '樱粉月白'], ['mono', '月灰单色']], onChange: (v) => patchConfig({ themePreset: v }) }) }),
         Row({ label: '主底渐变1', control: ColorControl({ value: config.colorBg1, onChange: (v) => patchConfig({ colorBg1: v }) }) }),
         Row({ label: '主底渐变2', control: ColorControl({ value: config.colorBg2, onChange: (v) => patchConfig({ colorBg2: v }) }) }),
+        Row({ label: '机身/外框', control: ColorControl({ value: config.colorBezel, onChange: (v) => patchConfig({ colorBezel: v }) }) }),
         Row({ label: '标题文字', control: ColorControl({ value: config.colorTitle, onChange: (v) => patchConfig({ colorTitle: v }) }) }),
         Row({ label: '我方气泡', control: ColorControl({ value: config.colorBubbleMe, onChange: (v) => patchConfig({ colorBubbleMe: v }) }) }),
         Row({ label: '祥子气泡', control: ColorControl({ value: config.colorBubbleHer, onChange: (v) => patchConfig({ colorBubbleHer: v }) }) }),

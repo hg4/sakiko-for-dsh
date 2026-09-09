@@ -205,6 +205,14 @@ function apply(ctx) {
       return null;
     }
   }
+
+  function hexDarken(hex, f) {
+    if (typeof hex !== "string" || !/^#[0-9a-fA-F]{6}$/.test(hex)) return "#0c1428";
+    const r = Math.round(parseInt(hex.slice(1, 3), 16) * f);
+    const g = Math.round(parseInt(hex.slice(3, 5), 16) * f);
+    const b = Math.round(parseInt(hex.slice(5, 7), 16) * f);
+    return "#" + [r, g, b].map((v) => ("0" + Math.max(0, Math.min(255, v)).toString(16)).slice(-2)).join("");
+  }
   async function rpcSay(text) {
     try {
       return await hostLocal.call("say", { text });
@@ -455,6 +463,7 @@ function apply(ctx) {
   const FLOAT_Z = 2147483000;
   function FloatShell() {
     const f = useStore(floatStore);
+    const config = useStore(configStore);
     const dragRef = import_react.default.useRef(null);
     const [interacting, setInteracting] = import_react.default.useState(null);
     import_react.default.useEffect(() => {
@@ -523,7 +532,8 @@ function apply(ctx) {
       width: f.w + "px",
       height: f.h + "px",
       zIndex: FLOAT_Z,
-      display: f.collapsed ? "none" : "block"
+      display: f.collapsed ? "none" : "block",
+      background: hexDarken((config && config.colorBezel) || "#223058", 0.41)
     };
     return import_react.default.createElement(
       "div",
@@ -713,6 +723,7 @@ function apply(ctx) {
       Row({ label: "\u4E3B\u9898\u9884\u8BBE", control: Select({ value: config.themePreset || "sakiko-blue", options: [["sakiko-blue", "\u6DF1\u84DD\u6708\u767D\u91D1\uFF08\u9ED8\u8BA4\uFF09"], ["midnight-gold", "\u66AE\u84DD\u938F\u91D1"], ["sakura-pink", "\u6A31\u7C89\u6708\u767D"], ["mono", "\u6708\u7070\u5355\u8272"]], onChange: (v) => patchConfig({ themePreset: v }) }) }),
       Row({ label: "\u4E3B\u5E95\u6E10\u53D81", control: ColorControl({ value: config.colorBg1, onChange: (v) => patchConfig({ colorBg1: v }) }) }),
       Row({ label: "\u4E3B\u5E95\u6E10\u53D82", control: ColorControl({ value: config.colorBg2, onChange: (v) => patchConfig({ colorBg2: v }) }) }),
+      Row({ label: "\u673A\u8EAB/\u5916\u6846", control: ColorControl({ value: config.colorBezel, onChange: (v) => patchConfig({ colorBezel: v }) }) }),
       Row({ label: "\u6807\u9898\u6587\u5B57", control: ColorControl({ value: config.colorTitle, onChange: (v) => patchConfig({ colorTitle: v }) }) }),
       Row({ label: "\u6211\u65B9\u6C14\u6CE1", control: ColorControl({ value: config.colorBubbleMe, onChange: (v) => patchConfig({ colorBubbleMe: v }) }) }),
       Row({ label: "\u7965\u5B50\u6C14\u6CE1", control: ColorControl({ value: config.colorBubbleHer, onChange: (v) => patchConfig({ colorBubbleHer: v }) }) }),
