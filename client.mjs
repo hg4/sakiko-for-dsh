@@ -282,9 +282,9 @@ export function apply(ctx) {
     }
 
     // ---------------- 浮窗壳（FloatShell）几何 / localStorage 记忆 ----------------
-    const FLOAT_KEY = 'amadeus.float'
-    const FLOAT_DEF_W = 400
-    const FLOAT_DEF_H = 700
+    const FLOAT_KEY = 'amadeus.float.v2'
+    const FLOAT_DEF_W = 320
+    const FLOAT_DEF_H = 640
     const FLOAT_MIN_W = 320
     const FLOAT_MIN_H = 480
     const FLOAT_GAP = 24
@@ -320,12 +320,21 @@ export function apply(ctx) {
         raw = null
       }
       const fallback = defaultFloatState()
-      if (!raw || typeof raw !== 'object') return fallback
-      const num = (v) => typeof v === 'number' && Number.isFinite(v)
-      if (!num(raw.x) || !num(raw.y) || !num(raw.w) || !num(raw.h)) return fallback
-      if (raw.w < FLOAT_MIN_W || raw.h < FLOAT_MIN_H) return fallback
-      const r = clampFloatRect({ x: raw.x, y: raw.y, w: raw.w, h: raw.h })
-      return { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: raw.collapsed === true }
+      let state = fallback
+      if (raw && typeof raw === 'object') {
+        const num = (v) => typeof v === 'number' && Number.isFinite(v)
+        if (num(raw.x) && num(raw.y) && num(raw.w) && num(raw.h) && raw.w >= FLOAT_MIN_W && raw.h >= FLOAT_MIN_H) {
+          const r = clampFloatRect({ x: raw.x, y: raw.y, w: raw.w, h: raw.h })
+          state = { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: raw.collapsed === true }
+        }
+      }
+      // P6 收尾（§5i）：v1 旧键 amadeus.float（400×700 + 旧视口坐标）一律忽略——按全新默认
+      // 320×640 + 右下 24 锚定当前视口处理；顺带删除旧键并立即落 v2，此后拖动/缩放记忆在 v2。
+      try {
+        localStorage.removeItem('amadeus.float')
+      } catch (e) { /* 忽略 */ }
+      saveFloatState(state)
+      return state
     }
 
     function saveFloatState(state) {

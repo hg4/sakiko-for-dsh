@@ -298,9 +298,9 @@ function apply(ctx) {
     }, []);
     return null;
   }
-  const FLOAT_KEY = "amadeus.float";
-  const FLOAT_DEF_W = 400;
-  const FLOAT_DEF_H = 700;
+  const FLOAT_KEY = "amadeus.float.v2";
+  const FLOAT_DEF_W = 320;
+  const FLOAT_DEF_H = 640;
   const FLOAT_MIN_W = 320;
   const FLOAT_MIN_H = 480;
   const FLOAT_GAP = 24;
@@ -332,12 +332,22 @@ function apply(ctx) {
       raw = null;
     }
     const fallback = defaultFloatState();
-    if (!raw || typeof raw !== "object") return fallback;
-    const num = (v) => typeof v === "number" && Number.isFinite(v);
-    if (!num(raw.x) || !num(raw.y) || !num(raw.w) || !num(raw.h)) return fallback;
-    if (raw.w < FLOAT_MIN_W || raw.h < FLOAT_MIN_H) return fallback;
-    const r = clampFloatRect({ x: raw.x, y: raw.y, w: raw.w, h: raw.h });
-    return { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: raw.collapsed === true };
+    let state = fallback;
+    if (raw && typeof raw === "object") {
+      const num = (v) => typeof v === "number" && Number.isFinite(v);
+      if (num(raw.x) && num(raw.y) && num(raw.w) && num(raw.h) && raw.w >= FLOAT_MIN_W && raw.h >= FLOAT_MIN_H) {
+        const r = clampFloatRect({ x: raw.x, y: raw.y, w: raw.w, h: raw.h });
+        state = { x: r.x, y: r.y, w: r.w, h: r.h, collapsed: raw.collapsed === true };
+      }
+    }
+    // P6 tail (5i): v1 legacy key amadeus.float (400x700 + old viewport pos) is ignored -
+    // fresh default 320x640 anchored bottom-right 24 to current viewport; remove legacy key and persist v2 now.
+    try {
+      localStorage.removeItem("amadeus.float");
+    } catch (e) {
+    }
+    saveFloatState(state);
+    return state;
   }
   function saveFloatState(state) {
     try {

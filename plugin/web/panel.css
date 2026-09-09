@@ -32,6 +32,13 @@ button { font-family: inherit; }
     inset 0 -2px 0 rgba(0, 0, 0, 0.55);
   overflow: visible;
 }
+/* P6：浮窗全填充（浮窗=手机本体，零留白）——body.float-fill 由 panel.js 依 cfg.floatPanel 切换；
+   保留 aspect-ratio 1/2 与 padding/圆角/描边/侧键；仅宽铺满、高受 100% 封顶，多余高度由 flex 居中留白 */
+body.float-fill #phone {
+  width: 100%;
+  max-height: 100%;
+  height: auto;
+}
 /* 左侧音量键 */
 #phone::before {
   content: "";

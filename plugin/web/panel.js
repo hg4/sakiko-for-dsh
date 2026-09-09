@@ -90,6 +90,7 @@
     if (d.type === 'amadeus/config' && d.value && typeof d.value === 'object') {
       cfg = Object.assign(cfg, d.value)
       applyChatVisibility()
+      applyFloatFill()
     }
     if (d.type === 'amadeus/say' && typeof d.text === 'string') {
       enqueue(d.text, true, 'neutral')
@@ -105,6 +106,14 @@
     else chatRow.classList.remove('hidden')
   }
   applyChatVisibility()
+
+  // P6：浮窗模式识别——cfg.floatPanel !== false（默认浮窗）→ body.float-fill：机身铺满 iframe、零留白；
+  // 否则（legacy 右列）移除。初始查询 cfg、postMessage amadeus/config、poll data.config 三处合并后统一调用。
+  function applyFloatFill() {
+    if (cfg.floatPanel === false) document.body.classList.remove('float-fill')
+    else document.body.classList.add('float-fill')
+  }
+  applyFloatFill()
 
   // ---------------- 屏幕时钟 ----------------
   function tickClock() {
@@ -1951,6 +1960,7 @@
       if (data && data.config) {
         cfg = Object.assign(cfg, data.config)
         applyChatVisibility()
+        applyFloatFill()
       }
       if (data && typeof data.cursor === 'number') {
         var items = data.utterances || []
