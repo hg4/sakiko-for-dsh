@@ -685,10 +685,11 @@
   function renderItemBubble(item) {
     if (!item || item.bubbleDone || !item.bubble) return
     item.bubbleDone = true
+    var bEmo = item.emotion || item.bubble.emotion || 'neutral'
     if (item.bubble.call) {
-      addHistory({ role: 'assistant', cn: item.bubble.cn, call: true })
+      addHistory({ role: 'assistant', cn: item.bubble.cn, jp: item.bubble.jp, emotion: bEmo, call: true })
     } else {
-      addHistory({ role: 'assistant', cn: item.bubble.cn, announce: item.bubble.announce === true, idle: item.bubble.idle === true, t: Date.now() })
+      addHistory({ role: 'assistant', cn: item.bubble.cn, jp: item.bubble.jp, emotion: bEmo, announce: item.bubble.announce === true, idle: item.bubble.idle === true, t: Date.now() })
     }
     // 时间线：气泡已插入 DOM（与 tl:play 同回调、播放开始瞬间），id 与 host push 对齐
     if (typeof item.id === 'number') report('tl:bubble:' + item.id)
@@ -978,7 +979,7 @@
       // 来电接听气泡同样迁移到播放开始瞬间：气泡元数据随条目入队，
       // 由 pump 在该句真正开始播放（成功回调）或终局失败兜底时插入（仅一次）
       enqueue(item.text, true, item.emotion || 'neutral', item.expr || '', item.cn || '', item.id,
-        item.cn ? { cn: item.cn, call: true } : null)
+        (item.cn || item.text) ? { cn: item.cn || '', jp: item.text, call: true } : null)
     }
   })
   callDeny.addEventListener('click', function () {
@@ -2040,6 +2041,7 @@
       ct.className = 'time'
       ct.textContent = fmtTime(entry.t || Date.now())
       callEl.appendChild(ct)
+      attachReplay(callEl, entry.jp, entry.emotion)
       historyEl.appendChild(callEl)
       historyEl.scrollTop = historyEl.scrollHeight
       return
@@ -2053,9 +2055,104 @@
       var a = makeAmadeusMsg()
       a.bubble.textContent = entry.cn || entry.jp || ''
       addTimeTo(a.bubble, entry.t)
+      attachReplay(a.bubble, entry.jp, entry.emotion)
       historyEl.appendChild(a.wrap)
     }
     historyEl.scrollTop = historyEl.scrollHeight
+  }
+
+  // ============================================================
+  // Task4：聊天气泡重播按钮（祥子话语可点击重播）
+  // ------------------------------------------------------------
+  // 重播文本来源（按实际数据结构取，优先日文 jp）：
+  //   - 播报 announce / 空闲 idle / 来电 call 气泡：queue 条目自身带 jp(=u.text，日文)
+  //     与 cn(=u.cn，中文副标题)；由 renderItemBubble 透传给 addHistory。
+  //   - 聊天回复 chat 气泡：sendChat 流式读取 finalSt.jp（日文）与 finalSt.emotion。
+  //   - 历史记忆装载（/amadeus/memory → addHistory）：assistant 条目自带 jp/emotion。
+  //   - 纯 cn 条目（kind:'cn' 的 pushCn / revealHistory 打字机）：只带 cn，无 jp，
+  //     视为「无可合成文本」→ 按钮灰显禁用（祥子音色为日文克隆，宿主对纯中文合成不可靠）。
+  // 判定：仅当气泡携带非空 jp（或 text）时启用；否则灰显。详见 task-4-report.md。
+  var replayAudioEl = null
+  var replayBusy = false
+
+  function ensureReplayAudioEl() {
+    if (replayAudioEl) return replayAudioEl
+    replayAudioEl = document.createElement('audio')
+    replayAudioEl.preload = 'auto'
+    return replayAudioEl
+  }
+
+  // 给气泡容器（.bubble / .msg.call）右下角附小喇叭重播按钮。
+  // jp 非空 → data-replay 供委托点击读取（合成用日文原文+原情绪）；否则灰显禁用。
+  function attachReplay(bubble, jp, emotion) {
+    if (!bubble) return
+    var t = String(jp || '').trim()
+    var btn = document.createElement('button')
+    btn.className = 'bubble-replay'
+    btn.type = 'button'
+    btn.setAttribute('aria-label', '重播祥子的这句话')
+    btn.textContent = '🔊'
+    if (t.length > 0) {
+      btn.dataset.replay = t
+      btn.dataset.emotion = emotion || 'neutral'
+    } else {
+      btn.disabled = true
+      btn.classList.add('disabled')
+      btn.setAttribute('aria-disabled', 'true')
+    }
+    bubble.appendChild(btn)
+  }
+
+  // 短暂轻提示（chip 风）：独立于被 150ms 轮询覆盖的状态 chip，2s 自隐（重播中/失败反馈）
+  function flashTip(text, off) {
+    try {
+      var el = document.createElement('div')
+      el.className = 'flash-tip' + (off ? ' off' : '')
+      el.textContent = text
+      document.body.appendChild(el)
+      window.setTimeout(function () { if (el && el.parentNode) el.parentNode.removeChild(el) }, 2000)
+    } catch (e) { /* ignore */ }
+  }
+
+  function replayFail(msg) {
+    report('replay fail: ' + msg)
+    flashTip('⚠ ' + String(msg).slice(0, 26), true)
+  }
+
+  // 独立音源重播：复用 fetchAudioWithWords 的合成/缓存通道，但用独立 <audio> 播放。
+  // 不投主播放队列、不触发 narrator/口型、不写 tl: 上报、不打断正在播放的播报（双音源并行）。
+  function replaySpoken(text, emotion) {
+    var t = String(text || '').trim()
+    if (t.length === 0) return
+    if (replayBusy) { flashTip('⚠ 正在重播，请稍候', true); return }
+    replayBusy = true
+    flashTip('♪ 重播中…', false)
+    fetchAudioWithWords(t, emotion || 'neutral').then(function (obj) {
+      var el = ensureReplayAudioEl()
+      el.onended = function () { replayBusy = false; flashTip('♪ 重播结束', false) }
+      el.onerror = function () { replayBusy = false; replayFail('播放失败') }
+      el.src = obj.url
+      var p = el.play()
+      if (p && p.then) p.catch(function (e) {
+        replayBusy = false
+        replayFail('播放被拦截：' + (e && e.message ? e.message : e))
+      })
+    }).catch(function (e) {
+      replayBusy = false
+      replayFail('合成失败（网络或 TTS 服务）：' + (e && e.message ? e.message : e))
+    })
+  }
+
+  // 委托点击：history 内任意 .bubble-replay（含后续动态插入的气泡），避免逐气泡绑定监听
+  if (historyEl) {
+    historyEl.addEventListener('click', function (ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('.bubble-replay') : null
+      if (!btn || btn.disabled) return
+      var t = (btn.getAttribute('data-replay') || '').trim()
+      if (!t) return
+      if (ev.stopPropagation) ev.stopPropagation()
+      replaySpoken(t, btn.getAttribute('data-emotion') || 'neutral')
+    })
   }
 
   function loadMemory() {
@@ -2096,6 +2193,8 @@
     var body = document.createElement('span')
     m.bubble.appendChild(body)
     addTimeTo(m.bubble, Date.now())
+    // Task4：kind:'cn' 纯中文条目（无 jp）→ 灰显重播按钮（仅供参考，见报告判定）
+    attachReplay(m.bubble, '', null)
     var empty = historyEl.querySelector('.msg-empty')
     if (empty) empty.remove()
     historyEl.appendChild(m.wrap)
@@ -2198,6 +2297,8 @@
             enqueue(jpSentences[si], true, emotion, EXPR[emotion] || '', si === jpSentences.length - 1 ? cn : '')
           }
         }
+        // Task4：聊天回复气泡可重播——日文原文(finalSt.jp)+原情绪；纯中文回复则灰显
+        attachReplay(m2.bubble, (finalSt && finalSt.jp) || '', (finalSt && finalSt.emotion) || 'neutral')
         updateChip('● ' + (cfg.provider || 'edge'), false)
       }
       historyEl.scrollTop = historyEl.scrollHeight
@@ -2422,7 +2523,7 @@
             // 任务播报 / 空闲闲聊（announce/idle）：不再取到即插气泡——气泡元数据随条目
             // 入队（enqueue 末参 bubble），由 pump 在该句真正开始播放（或终局失败兜底）时插入
             var bubbleMeta = (u.announce === true || u.idle === true)
-              ? { cn: u.cn || u.text, announce: u.announce === true, idle: u.idle === true }
+              ? { cn: u.cn || u.text, jp: u.text || '', announce: u.announce === true, idle: u.idle === true }
               : null
             enqueue(u.text, u.force === true, u.emotion || 'neutral', u.expr || '', u.cn || '', u.id, bubbleMeta)
           }

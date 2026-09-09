@@ -699,6 +699,106 @@ body.float-fill #phone {
   color: var(--p-dot-72);
 }
 
+/* ---------- Task4：气泡重播按钮（祥子话语右下角小喇叭） ---------- */
+/* 落点：仅祥子气泡（.msg.amadeus .bubble / .msg.call）容器内右下；用户消息【不加】。
+   交互：hover 显示（桌面）；触摸(hover:none)常显半透明；无 jp 文本 → 灰显禁用。 */
+.msg .bubble,
+.msg.call { position: relative; }
+.msg .bubble .bubble-replay,
+.msg.call .bubble-replay {
+  position: absolute;
+  right: 5px;
+  bottom: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--p-btn-28);
+  color: var(--p-title);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, background 0.15s ease, transform 0.1s ease;
+  backdrop-filter: blur(2px);
+}
+.msg .bubble:hover .bubble-replay,
+.msg.call:hover .bubble-replay,
+.bubble-replay:focus-visible {
+  opacity: 0.9;
+  pointer-events: auto;
+}
+.bubble-replay:hover { background: var(--p-hi-32); transform: scale(1.08); }
+.bubble-replay:disabled,
+.bubble-replay.disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: var(--p-glint-10);
+  color: var(--p-dot-60);
+}
+/* 禁用按钮在 hover 下也保持灰显（覆盖上方 :hover 的高亮规则，避免误以为可点） */
+.msg .bubble:hover .bubble-replay:disabled,
+.msg.call:hover .bubble-replay:disabled,
+.msg .bubble:hover .bubble-replay.disabled,
+.msg.call:hover .bubble-replay.disabled {
+  opacity: 0.42;
+  pointer-events: none;
+  background: var(--p-glint-10);
+  color: var(--p-dot-60);
+}
+/* 触摸常显：无 hover 能力时让喇叭保持半透明可见（沿用浮窗 hover:none 手法） */
+@media (hover: none) {
+  .msg .bubble .bubble-replay,
+  .msg.call .bubble-replay {
+    opacity: 0.55;
+    pointer-events: auto;
+  }
+  .msg .bubble .bubble-replay:disabled,
+  .msg .bubble .bubble-replay.disabled,
+  .msg.call .bubble-replay:disabled,
+  .msg.call .bubble-replay.disabled { opacity: 0.35; }
+}
+
+/* 短暂轻提示（chip 风）：重播中 / 合成失败反馈，2s 自隐 */
+.flash-tip {
+  position: fixed;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%) translateY(6px);
+  z-index: 80;
+  max-width: 82%;
+  padding: 6px 12px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--p-bg2-glass);
+  border: 1px solid var(--p-glass-border);
+  color: var(--p-title);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 16px var(--p-shadow-e);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  pointer-events: none;
+  animation: flash-tip-in 0.16s ease forwards;
+}
+.flash-tip.off { color: var(--p-err); border-color: var(--p-err-border); }
+@keyframes flash-tip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* ---------- 圆角输入条 ---------- */
 #chat-row {
   flex: none;
