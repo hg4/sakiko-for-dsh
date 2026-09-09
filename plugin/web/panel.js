@@ -190,6 +190,8 @@
   }
   // 「用户脏键」判据：cfg 中该色键 ≠ 默认预设 sakiko-blue 的同位值（大小写不敏感）。
   // 注意：不能用「当前预设 base」比较——否则切到非默认预设后 9 键全被判脏；只能以 sakiko 默认值为基准。
+  // 防御（runtime）：cfg[key] 非合法 #RRGGBB（含 undefined/null/空串，如 host 白名单未重启前 colorBezel 缺失）
+  // → 一律视为「非脏」，走预设原值，绝不对非法值做派生（杜绝黑色/NaN 预览）。
   // 边界（报告注明）：用户把某色改成恰好等于 sakiko 默认值 → 判为非脏，在非默认预设下不覆盖（保持预设值）。
   function isDirty(cfgKey) {
     var v = cfg[cfgKey]
@@ -226,13 +228,19 @@
     var b = Math.max(0, Math.min(255, Math.round(c.b + (255 - c.b) * t)))
     return '#' + ('0' + r.toString(16)).slice(-2) + ('0' + g.toString(16)).slice(-2) + ('0' + b.toString(16)).slice(-2)
   }
+  // 防御：派生入口一律以「合法 hex」为前置——非法(含 undefined/null/空串/非 #RRGGBB)回退默认机身色 #223058，
+  // 杜绝把非法值传入 hexRgb/derive（避免黑色/NaN 输出）。仅 panel.js 侧；host 白名单未重启也能安全回退预设。
+  function safeBezel(hex) { return validHex(hex) ? hex : '#223058' }
   function deriveBezelStops(hex) {
+    hex = safeBezel(hex)
     return [hex, darkenHex(hex, 0.6), darkenHex(hex, 0.41), darkenHex(hex, 0.23)]
   }
   function deriveBezelKeys(hex) {
+    hex = safeBezel(hex)
     return [lightenHex(hex, 0.14), darkenHex(hex, 0.55)]
   }
   function deriveBezelBorder(hex) {
+    hex = safeBezel(hex)
     var c = hexRgb(lightenHex(hex, 0.55))
     return 'rgba(' + c.r + ',' + c.g + ',' + c.b + ',0.5)'
   }
@@ -259,9 +267,9 @@
     base.bezel = preset.bezel
     for (var i = 0; i < THEME_COLOR_KEYS.length; i++) {
       var k = THEME_COLOR_KEYS[i]
-      if (isDirty(k.cfg)) base[k.preset] = cfg[k.cfg]
+      if (isDirty(k.cfg) && validHex(cfg[k.cfg])) base[k.preset] = cfg[k.cfg]
     }
-    if (isDirty('colorBezel')) base.bezel = cfg.colorBezel
+    if (isDirty('colorBezel') && validHex(cfg.colorBezel)) base.bezel = cfg.colorBezel
     return { preset: preset, base: base }
   }
 
@@ -310,7 +318,8 @@
     set('--p-dot-72', rgbaHex(b.dot, 0.72))
 
     // 机身/外框（P8 colorBezel）：自定义时由单色派生 4 停渐变/侧键/描边；否则用预设原值组（默认零回归）
-    var bezelDirty = isDirty('colorBezel')
+    // 守卫：bezelDirty 须同时满足「脏」且「生效 base 为合法 hex」（host 白名单未重启时 cfg.colorBezel 可能为 undefined/null）。
+    var bezelDirty = isDirty('colorBezel') && validHex(b.bezel)
     var bzStops = bezelDirty ? deriveBezelStops(b.bezel) : pr.bezelStops
     var bzKeys = bezelDirty ? deriveBezelKeys(b.bezel) : pr.bezelKey
     var bzBorder = bezelDirty ? deriveBezelBorder(b.bezel) : pr.bezelBorder
