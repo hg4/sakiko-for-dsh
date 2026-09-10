@@ -1569,17 +1569,18 @@
   //  - head（点头/轻拍头＝被摸头）→ A7-1 害羞推辞（原文直用）＋ A7-4 惊讶害羞（原创）；
   //  - body（摸/拍身体＝被突然触碰）→ A7-2/A7-3 短促惊讶轻呼（节选，作低频短反应）。
   // A7 全为摸头/点头语义、无专门"摸身体"台词 → 两池按上述语义就近分配（差异见 7b 报告）。
-  // playTap 只朗读 pick.jp 并以 pick.emotion 驱动表情，不生成历史气泡 → 不填 cn
-  // （enqueue 签名带 cn 可选参数，但该路径不消费，按「CN 缺失不用」红线不硬塞）。
+  // 触碰反应现在也出气泡（修复「只出声无文字」）：cn 逐字取自考据表 A7 已批中文
+  // （docs/sakiko-quotes.md L112–L115），playTap 以 bubble 元数据随条目入队，
+  // 由 pump 在该句播放瞬间经 renderItemBubble 插入气泡（沿用 T2 既有语义）。
   // 空池保护逻辑保留：若未来候选被抽空，playTap 空池时仍只做动作/表情、不播报台词。
   var TAP_LINES = {
     head: [
-      { jp: 'お… おかまいなく', emotion: 'blush' }, // A7-1 摸头·害羞（原文直用 MyGO#3 00:05:06）
-      { jp: 'まあ… 急にどうしましたの？ 照れますわ', emotion: 'blush' } // A7-4 摸头·害羞（原创·依考据风格）
+      { jp: 'お… おかまいなく', cn: '别… 别在意', emotion: 'blush' }, // A7-1 摸头·害羞（原文直用 MyGO#3 00:05:06）
+      { jp: 'まあ… 急にどうしましたの？ 照れますわ', cn: '哎呀…突然怎么啦？我都要害羞了', emotion: 'blush' } // A7-4 摸头·害羞（原创·依考据风格）
     ],
     body: [
-      { jp: 'あら', emotion: 'surprised' }, // A7-2 点头·惊讶（节选 MyGO#3 00:04:43）
-      { jp: 'まあ', emotion: 'surprised' } // A7-3 摸头·惊讶（节选 MyGO#3 00:04:55）
+      { jp: 'あら', cn: '呀', emotion: 'surprised' }, // A7-2 点头·惊讶（节选 MyGO#3 00:04:43）
+      { jp: 'まあ', cn: '哎呀', emotion: 'surprised' } // A7-3 摸头·惊讶（节选 MyGO#3 00:04:55）
     ]
   }
 
@@ -1612,7 +1613,10 @@
       setExpression(prevEmotion)
       applyEmotionFace(prevEmotion, 0.5)
     }, 900)
-    if (pick && pick.jp) enqueue(pick.jp, true, pick.emotion || 'happy')
+    // 触碰反应补气泡（T2 后气泡改到播放瞬间插入）：传 bubble 元数据 → pump 在该句
+    // 真正出声时经 renderItemBubble 插入历史气泡。不带 announce/idle 语义（不写 host memory、
+    // 不参与播报节流/时间线 push——触碰是本地互动）。
+    if (pick && pick.jp) enqueue(pick.jp, true, pick.emotion || 'happy', '', pick.cn || '', undefined, { cn: pick.cn || pick.jp })
   }
 
   function handleCanvasTap(ev) {
