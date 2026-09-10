@@ -93,7 +93,8 @@ export function apply(ctx) {
       personaOn: false,
       themeOn: true,
       chatOn: true,
-      callOn: true,
+      // 来电功能 2026-09-10 按用户决定默认关闭；触发逻辑保留（冬眠可复活，改回 true 即恢复）
+      callOn: false,
       voiceName: 'ja-JP-NanamiNeural',
       rate: '+0%',
       pitch: '+0Hz',

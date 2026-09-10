@@ -229,10 +229,6 @@ export function apply(ctx) {
       try { return await hostLocal.call('clear', {}) } catch (e) { return { ok: false } }
     }
 
-    async function rpcTestCall() {
-      try { return await hostLocal.call('testCall', {}) } catch (e) { return { ok: false } }
-    }
-
     async function rpcTestChat() {
       try { return await hostLocal.call('testChat', {}) } catch (e) { return { ok: false, error: String(e && e.message ? e.message : e) } }
     }
@@ -650,16 +646,13 @@ export function apply(ctx) {
       }
       const group = (title) => React.createElement('div', { style: { marginTop: '18px', marginBottom: '4px', fontSize: '12px', fontWeight: 700, letterSpacing: '1px', color: '#c9a86a', textTransform: 'uppercase' } }, title)
       const idleOptions = [[300000, '5 分钟'], [600000, '10 分钟'], [1200000, '20 分钟（默认）'], [1800000, '30 分钟'], [3600000, '60 分钟']]
-      const callOptions = [[7200000, '2 小时'], [21600000, '6 小时'], [36000000, '10 小时（默认）'], [86400000, '24 小时']]
       const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 1200000
-      const pickCall = (v) => callOptions.find((o) => o[0] === v) ? v : 36000000
       const narratorOptions = [[120000, '2 分钟'], [240000, '4 分钟（默认）'], [360000, '6 分钟'], [600000, '10 分钟']]
       const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 240000
       return React.createElement('div', null,
         group('基本开关'),
         Row({ label: '语音朗读', desc: '助手回复自动由 SAKIKO 朗读', control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
         Row({ label: 'AI 聊天', desc: '右栏底部与 SAKIKO 直接对话（日语音频 + 中文文字，带长期记忆）', control: Check({ checked: config.chatOn !== false, onChange: (v) => patchConfig({ chatOn: v }) }) }),
-        Row({ label: '主动来电', desc: '她每天像原作一样主动「打电话」给你（来电铃音 + 震屏）', control: Check({ checked: config.callOn !== false, onChange: (v) => patchConfig({ callOn: v }) }) }),
         Row({ label: '空闲闲聊', desc: '长时间不互动时，她主动找话题开口说话', control: Check({ checked: config.idleChatOn !== false, onChange: (v) => patchConfig({ idleChatOn: v }) }) }),
         Row({ label: '祥子人格注入', desc: '让 Agent 以祥子口吻回答，作用于所有会话', control: Check({ checked: config.personaOn === true, onChange: (v) => patchConfig({ personaOn: v }) }) }),
         Row({ label: 'SAKIKO 全局主题', desc: '整套 GUI 强制深蓝 SAKIKO 配色（插件停止后自动还原）', control: Check({ checked: config.themeOn !== false, onChange: (v) => patchConfig({ themeOn: v }) }) }),
@@ -687,7 +680,6 @@ export function apply(ctx) {
 
         group('主动互动节奏'),
         Row({ label: '空闲多久开口', control: Select({ value: pickIdle(config.idleChatMs), options: idleOptions, onChange: (v) => patchConfig({ idleChatMs: Number(v) }) }) }),
-        Row({ label: '来电间隔', control: Select({ value: pickCall(config.callIntervalMs), options: callOptions, onChange: (v) => patchConfig({ callIntervalMs: Number(v) }) }) }),
 
         group('进度播报'),
         Row({ label: '进度播报', desc: '祥子播报任务进展：开工、完成、里程碑与阻塞', control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),
@@ -719,7 +711,6 @@ export function apply(ctx) {
           React.createElement('button', { className: 'amad-settings-btn', onClick: async () => { const r = await rpcTestChat(); window.alert(r && r.ok ? 'AI API OK: ' + r.content : 'AI API Error: ' + (r && r.error ? r.error : 'unknown')) } }, '🔌 测试 AI API'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: rpcRepeat }, '↺ 重播上一条'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: rpcClear }, '🧹 清空队列'),
-          React.createElement('button', { className: 'amad-settings-btn', onClick: rpcTestCall }, '📞 测试来电'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: () => { notifyOpen(); if (layout) layout.openDetails() } }, '👁 打开右侧栏'),
           React.createElement('button', { className: 'amad-settings-btn', onClick: () => { if (layout) layout.closeDetails() } }, '🚫 关闭右侧栏'),
         ),

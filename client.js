@@ -234,13 +234,6 @@ function apply(ctx) {
       return { ok: false };
     }
   }
-  async function rpcTestCall() {
-    try {
-      return await hostLocal.call("testCall", {});
-    } catch (e) {
-      return { ok: false };
-    }
-  }
   async function rpcTestChat() {
     try {
       return await hostLocal.call("testChat", {});
@@ -678,9 +671,7 @@ function apply(ctx) {
     }
     const group = (title) => import_react.default.createElement("div", { style: { marginTop: "18px", marginBottom: "4px", fontSize: "12px", fontWeight: 700, letterSpacing: "1px", color: "#c9a86a", textTransform: "uppercase" } }, title);
     const idleOptions = [[3e5, "5 \u5206\u949F"], [6e5, "10 \u5206\u949F"], [12e5, "20 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [18e5, "30 \u5206\u949F"], [36e5, "60 \u5206\u949F"]];
-    const callOptions = [[72e5, "2 \u5C0F\u65F6"], [216e5, "6 \u5C0F\u65F6"], [36e6, "10 \u5C0F\u65F6\uFF08\u9ED8\u8BA4\uFF09"], [864e5, "24 \u5C0F\u65F6"]];
     const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 12e5;
-    const pickCall = (v) => callOptions.find((o) => o[0] === v) ? v : 36e6;
     const narratorOptions = [[12e4, "2 \u5206\u949F"], [24e4, "4 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [36e4, "6 \u5206\u949F"], [6e5, "10 \u5206\u949F"]];
     const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 24e4;
     return import_react.default.createElement(
@@ -689,7 +680,6 @@ function apply(ctx) {
       group("\u57FA\u672C\u5F00\u5173"),
       Row({ label: "\u8BED\u97F3\u6717\u8BFB", desc: "\u52A9\u624B\u56DE\u590D\u81EA\u52A8\u7531 SAKIKO \u6717\u8BFB", control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
       Row({ label: "AI \u804A\u5929", desc: "\u53F3\u680F\u5E95\u90E8\u4E0E SAKIKO \u76F4\u63A5\u5BF9\u8BDD\uFF08\u65E5\u8BED\u97F3\u9891 + \u4E2D\u6587\u6587\u5B57\uFF0C\u5E26\u957F\u671F\u8BB0\u5FC6\uFF09", control: Check({ checked: config.chatOn !== false, onChange: (v) => patchConfig({ chatOn: v }) }) }),
-      Row({ label: "\u4E3B\u52A8\u6765\u7535", desc: "\u5979\u6BCF\u5929\u50CF\u539F\u4F5C\u4E00\u6837\u4E3B\u52A8\u300C\u6253\u7535\u8BDD\u300D\u7ED9\u4F60\uFF08\u6765\u7535\u94C3\u97F3 + \u9707\u5C4F\uFF09", control: Check({ checked: config.callOn !== false, onChange: (v) => patchConfig({ callOn: v }) }) }),
       Row({ label: "\u7A7A\u95F2\u95F2\u804A", desc: "\u957F\u65F6\u95F4\u4E0D\u4E92\u52A8\u65F6\uFF0C\u5979\u4E3B\u52A8\u627E\u8BDD\u9898\u5F00\u53E3\u8BF4\u8BDD", control: Check({ checked: config.idleChatOn !== false, onChange: (v) => patchConfig({ idleChatOn: v }) }) }),
       Row({ label: "\u7965\u5B50\u4EBA\u683C\u6CE8\u5165", desc: "\u8BA9 Agent \u4EE5\u7965\u5B50\u53E3\u543B\u56DE\u7B54\uFF0C\u4F5C\u7528\u4E8E\u6240\u6709\u4F1A\u8BDD", control: Check({ checked: config.personaOn === true, onChange: (v) => patchConfig({ personaOn: v }) }) }),
       Row({ label: "SAKIKO \u5168\u5C40\u4E3B\u9898", desc: "\u6574\u5957 GUI \u5F3A\u5236\u6DF1\u84DD SAKIKO \u914D\u8272\uFF08\u63D2\u4EF6\u505C\u6B62\u540E\u81EA\u52A8\u8FD8\u539F\uFF09", control: Check({ checked: config.themeOn !== false, onChange: (v) => patchConfig({ themeOn: v }) }) }),
@@ -713,7 +703,6 @@ function apply(ctx) {
       Row({ label: "STT \u6A21\u578B", control: TextInput({ value: config.sttModel || "whisper-1", placeholder: "whisper-1", onChange: (v) => patchConfig({ sttModel: v }) }) }),
       group("\u4E3B\u52A8\u4E92\u52A8\u8282\u594F"),
       Row({ label: "\u7A7A\u95F2\u591A\u4E45\u5F00\u53E3", control: Select({ value: pickIdle(config.idleChatMs), options: idleOptions, onChange: (v) => patchConfig({ idleChatMs: Number(v) }) }) }),
-      Row({ label: "\u6765\u7535\u95F4\u9694", control: Select({ value: pickCall(config.callIntervalMs), options: callOptions, onChange: (v) => patchConfig({ callIntervalMs: Number(v) }) }) }),
       group("\u8FDB\u5EA6\u64AD\u62A5"),
       Row({ label: "\u8FDB\u5EA6\u64AD\u62A5", desc: "\u7965\u5B50\u64AD\u62A5\u4EFB\u52A1\u8FDB\u5C55\uFF1A\u5F00\u5DE5\u3001\u5B8C\u6210\u3001\u91CC\u7A0B\u7891\u4E0E\u963B\u585E", control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),
       Row({ label: "LLM \u56DE\u5408\u603B\u7ED3", desc: "\u6BCF\u56DE\u5408\u5B8C\u6210\u65F6\u7531 LLM \u603B\u7ED3\u505A\u4E86\u4EC0\u4E48+\u4E0B\u4E00\u6B65\uFF08\u5931\u8D25\u81EA\u52A8\u9000\u56DE\u6A21\u677F\u53E5\uFF09", control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),
@@ -748,7 +737,6 @@ function apply(ctx) {
         } }, "\u{1F50C} \u6D4B\u8BD5 AI API"),
         import_react.default.createElement("button", { className: "amad-settings-btn", onClick: rpcRepeat }, "\u21BA \u91CD\u64AD\u4E0A\u4E00\u6761"),
         import_react.default.createElement("button", { className: "amad-settings-btn", onClick: rpcClear }, "\u{1F9F9} \u6E05\u7A7A\u961F\u5217"),
-        import_react.default.createElement("button", { className: "amad-settings-btn", onClick: rpcTestCall }, "\u{1F4DE} \u6D4B\u8BD5\u6765\u7535"),
         import_react.default.createElement("button", { className: "amad-settings-btn", onClick: () => {
           notifyOpen();
           if (layout) layout.openDetails();
