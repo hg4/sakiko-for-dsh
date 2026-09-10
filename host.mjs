@@ -131,6 +131,10 @@ export function apply(ctx) {
       callIntervalMs: 36000000,
       idleChatOn: true,
       idleChatMs: 1200000,
+      // 随机哼唱彩蛋（hum easter egg）：触发方式仅随机自动；音频库 assets/audio/hum-*.wav 由 SVC 转换后补，
+      // 无音频时优雅静默（playHum 探测为空即跳过）。humOn 总开关；humIntervalMs 基准间隔（20 分钟）。
+      humOn: true,
+      humIntervalMs: 1200000,
       // 进度叙事系统（Progress Narrator）：开关与里程碑阈值
       narratorOn: true,
       narratorLLMSummary: true,
@@ -216,7 +220,7 @@ export function apply(ctx) {
     const chatStreams = new Map()
 
     // 记忆（持久化）
-    let memory = { facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0 }
+    let memory = { facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0, lastHumAt: 0, humCount: 0 }
 
     const ttsCache = new Map()
     const ttsOrder = []
@@ -500,6 +504,8 @@ export function apply(ctx) {
       if (typeof p.idleChatOn === 'boolean') out.idleChatOn = p.idleChatOn
       if (typeof p.idleChatMs === 'number' && p.idleChatMs >= 60000 && p.idleChatMs <= 86400000) out.idleChatMs = Math.floor(p.idleChatMs)
       if (typeof p.callIntervalMs === 'number' && p.callIntervalMs >= 600000 && p.callIntervalMs <= 86400000) out.callIntervalMs = Math.floor(p.callIntervalMs)
+      if (typeof p.humOn === 'boolean') out.humOn = p.humOn
+      if (typeof p.humIntervalMs === 'number' && p.humIntervalMs >= 300000 && p.humIntervalMs <= 86400000) out.humIntervalMs = Math.floor(p.humIntervalMs)
       if (typeof p.voiceName === 'string' && VOICES.indexOf(p.voiceName) >= 0) out.voiceName = p.voiceName
       if (typeof p.rate === 'string' && RATES.indexOf(p.rate) >= 0) out.rate = p.rate
       if (typeof p.pitch === 'string' && PITCHES.indexOf(p.pitch) >= 0) out.pitch = p.pitch
@@ -601,7 +607,7 @@ export function apply(ctx) {
         if (info === undefined) return
         const parsed = JSON.parse(await fs.readText(t))
         if (parsed && typeof parsed === 'object') {
-          memory = Object.assign({ facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0 }, parsed)
+          memory = Object.assign({ facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0, lastHumAt: 0, humCount: 0 }, parsed)
           if (!Array.isArray(memory.facts)) memory.facts = []
           if (!Array.isArray(memory.history)) memory.history = []
           if (typeof memory.summary !== 'string') memory.summary = ''
@@ -1875,6 +1881,75 @@ export function apply(ctx) {
       }
     }
 
+    // ---------------- 随机哼唱彩蛋（hum easter egg） ----------------
+    // 触发方式仅随机自动：周期巡检 checkHum 到达间隔后以 50% 概率出声（随机感 ≈ 间隔×1~2 倍）。
+    // 音频库 assets/audio/hum-1.wav … hum-16.wav 由 SVC 转换后补；无文件时 playHum 探测为空，
+    // console 提示 + tlLog hum_skip 后静默返回（不推队列、不留气泡、无 TTS 合成）。
+    const HUM_DIR = ROOT + '/assets/audio'
+    const HUM_MAX = 16
+
+    async function scanHumFiles() {
+      const found = []
+      for (let i = 1; i <= HUM_MAX; i++) {
+        const name = 'hum-' + i + '.wav'
+        try {
+          const p = await fs.resolve(HUM_DIR + '/' + name)
+          const info = await fs.stat(p)
+          if (info !== undefined) found.push({ n: i, name })
+        } catch (e) { /* 文件不存在 → 跳过 */ }
+      }
+      return found
+    }
+
+    // 出声：随机挑一个存在的 hum 文件 → pushHum 走既有 push/tl 通道；无文件 → 静默。
+    async function playHum() {
+      const files = await scanHumFiles()
+      if (files.length === 0) {
+        console.log('[amadeus] 哼唱彩蛋：无音频（assets/audio/hum-*.wav 未提供），静默跳过')
+        tlLog({ ev: 'hum_skip', reason: 'no-audio' })
+        return { ok: true, file: null, reason: 'no-audio' }
+      }
+      const pick = files[Math.floor(Math.random() * files.length)]
+      const url = '/amadeus/assets/audio/' + pick.name
+      pushHum(url)
+      memory.humCount = (memory.humCount || 0) + 1
+      memory.history.push({ role: 'assistant', jp: '', cn: '♪ ♪ ♪', emotion: 'happy', hum: true, t: Date.now() })
+      if (memory.history.length > 60) maybeCompactHistory()
+      scheduleSaveMemory()
+      tlLog({ ev: 'hum_play', url })
+      return { ok: true, file: url, reason: 'played' }
+    }
+
+    // 入队：hum 为直连音频，不触发 warmTts（无 TTS 合成）；气泡/播放链沿用既有 push/tl 通道。
+    function pushHum(url) {
+      const item = { id: nextId, kind: 'hum', text: '', cn: '♪ ♪ ♪', force: true, emotion: 'happy', url: url, ts: Date.now() }
+      queue.push(item)
+      nextId += 1
+      maxIssuedId = Math.max(maxIssuedId, nextId - 1)
+      if (queue.length > 60) queue.shift()
+      tlLog({ ev: 'push', id: item.id, kind: 'hum', url })
+    }
+
+    function checkHum() {
+      if (config.humOn !== true) return
+      if (config.voiceOn !== true) return
+      const now = Date.now()
+      // 首次巡检仅初始化基准时刻（同 checkCalls 的 lastCallAt 语义），不立即出声
+      if (memory.lastHumAt === 0) {
+        memory.lastHumAt = now
+        scheduleSaveMemory()
+        return
+      }
+      const interval = typeof config.humIntervalMs === 'number' && config.humIntervalMs > 0 ? config.humIntervalMs : 1200000
+      if (now - memory.lastHumAt >= interval) {
+        memory.lastHumAt = now
+        scheduleSaveMemory()
+        if (Math.random() < 0.5) {
+          playHum().catch((e) => console.error('[amadeus] 哼唱彩蛋失败:', e && e.message ? e.message : e))
+        }
+      }
+    }
+
     // ---------------- HTTP 响应助手 ----------------
     function sendJson(res, code, obj) {
       const body = JSON.stringify(obj)
@@ -2061,7 +2136,7 @@ export function apply(ctx) {
         if (!isFinite(after)) after = -1
         let items = []
         if (after >= 0) {
-          items = queue.filter((u) => u.id > after).map((u) => ({ id: u.id, kind: u.kind || 'say', text: u.text, cn: u.cn || '', force: !!u.force, emotion: u.emotion || 'neutral', expr: u.expr || '', ts: u.ts || 0, announce: u.announce === true, idle: u.idle === true }))
+          items = queue.filter((u) => u.id > after).map((u) => ({ id: u.id, kind: u.kind || 'say', text: u.text, cn: u.cn || '', force: !!u.force, emotion: u.emotion || 'neutral', expr: u.expr || '', ts: u.ts || 0, announce: u.announce === true, idle: u.idle === true, url: u.url || '' }))
           const served = new Set(items.map((u) => u.id))
           queue = queue.filter((u) => !served.has(u.id))
         }
@@ -2409,6 +2484,11 @@ export function apply(ctx) {
       return { ok: true }
     }))
 
+    // 随机哼唱彩蛋测试：立即 playHum()（探测音频、随机挑一、push/tl 留痕），返回 played/no-audio
+    ctx.effect(() => harnessLocal.handle('testHum', async () => {
+      return await playHum()
+    }))
+
     ctx.effect(() => harnessLocal.handle('ackCall', async () => {
       callPending = false
       return { ok: true }
@@ -2576,6 +2656,7 @@ export function apply(ctx) {
     ctx.effect(() => ctx.interval(() => {
       try { checkCalls() } catch (e) { /* ignore */ }
       try { checkIdle() } catch (e) { /* ignore */ }
+      try { checkHum() } catch (e) { /* ignore */ }
     }, 300000))
 
     // 记忆兜底落盘（每 60 秒）

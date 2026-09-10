@@ -647,6 +647,8 @@ export function apply(ctx) {
       const group = (title) => React.createElement('div', { style: { marginTop: '18px', marginBottom: '4px', fontSize: '12px', fontWeight: 700, letterSpacing: '1px', color: '#c9a86a', textTransform: 'uppercase' } }, title)
       const idleOptions = [[300000, '5 分钟'], [600000, '10 分钟'], [1200000, '20 分钟（默认）'], [1800000, '30 分钟'], [3600000, '60 分钟']]
       const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 1200000
+      const humOptions = [[300000, '5 分钟'], [600000, '10 分钟'], [1200000, '20 分钟（默认）'], [1800000, '30 分钟'], [3600000, '60 分钟']]
+      const pickHum = (v) => humOptions.find((o) => o[0] === v) ? v : 1200000
       const narratorOptions = [[120000, '2 分钟'], [240000, '4 分钟（默认）'], [360000, '6 分钟'], [600000, '10 分钟']]
       const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 240000
       return React.createElement('div', null,
@@ -680,6 +682,8 @@ export function apply(ctx) {
 
         group('主动互动节奏'),
         Row({ label: '空闲多久开口', control: Select({ value: pickIdle(config.idleChatMs), options: idleOptions, onChange: (v) => patchConfig({ idleChatMs: Number(v) }) }) }),
+        Row({ label: '随机哼歌', desc: '她心情好时会随机哼一段小曲（彩蛋）', control: Check({ checked: config.humOn !== false, onChange: (v) => patchConfig({ humOn: v }) }) }),
+        Row({ label: '哼歌间隔', control: Select({ value: pickHum(config.humIntervalMs), options: humOptions, onChange: (v) => patchConfig({ humIntervalMs: Number(v) }) }) }),
 
         group('进度播报'),
         Row({ label: '进度播报', desc: '祥子播报任务进展：开工、完成、里程碑与阻塞', control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),

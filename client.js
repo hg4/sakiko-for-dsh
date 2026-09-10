@@ -672,6 +672,8 @@ function apply(ctx) {
     const group = (title) => import_react.default.createElement("div", { style: { marginTop: "18px", marginBottom: "4px", fontSize: "12px", fontWeight: 700, letterSpacing: "1px", color: "#c9a86a", textTransform: "uppercase" } }, title);
     const idleOptions = [[3e5, "5 \u5206\u949F"], [6e5, "10 \u5206\u949F"], [12e5, "20 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [18e5, "30 \u5206\u949F"], [36e5, "60 \u5206\u949F"]];
     const pickIdle = (v) => idleOptions.find((o) => o[0] === v) ? v : 12e5;
+    const humOptions = [[3e5, "5 \u5206\u949F"], [6e5, "10 \u5206\u949F"], [12e5, "20 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [18e5, "30 \u5206\u949F"], [36e5, "60 \u5206\u949F"]];
+    const pickHum = (v) => humOptions.find((o) => o[0] === v) ? v : 12e5;
     const narratorOptions = [[12e4, "2 \u5206\u949F"], [24e4, "4 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [36e4, "6 \u5206\u949F"], [6e5, "10 \u5206\u949F"]];
     const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 24e4;
     return import_react.default.createElement(
@@ -703,6 +705,8 @@ function apply(ctx) {
       Row({ label: "STT \u6A21\u578B", control: TextInput({ value: config.sttModel || "whisper-1", placeholder: "whisper-1", onChange: (v) => patchConfig({ sttModel: v }) }) }),
       group("\u4E3B\u52A8\u4E92\u52A8\u8282\u594F"),
       Row({ label: "\u7A7A\u95F2\u591A\u4E45\u5F00\u53E3", control: Select({ value: pickIdle(config.idleChatMs), options: idleOptions, onChange: (v) => patchConfig({ idleChatMs: Number(v) }) }) }),
+      Row({ label: "\u968F\u673A\u54FC\u6B4C", desc: "\u5979\u5FC3\u60C5\u597D\u65F6\u4F1A\u968F\u673A\u54FC\u4E00\u6BB5\u5C0F\u66F2\uFF08\u5F69\u86CB\uFF09", control: Check({ checked: config.humOn !== false, onChange: (v) => patchConfig({ humOn: v }) }) }),
+      Row({ label: "\u54FC\u6B4C\u95F4\u9694", control: Select({ value: pickHum(config.humIntervalMs), options: humOptions, onChange: (v) => patchConfig({ humIntervalMs: Number(v) }) }) }),
       group("\u8FDB\u5EA6\u64AD\u62A5"),
       Row({ label: "\u8FDB\u5EA6\u64AD\u62A5", desc: "\u7965\u5B50\u64AD\u62A5\u4EFB\u52A1\u8FDB\u5C55\uFF1A\u5F00\u5DE5\u3001\u5B8C\u6210\u3001\u91CC\u7A0B\u7891\u4E0E\u963B\u585E", control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),
       Row({ label: "LLM \u56DE\u5408\u603B\u7ED3", desc: "\u6BCF\u56DE\u5408\u5B8C\u6210\u65F6\u7531 LLM \u603B\u7ED3\u505A\u4E86\u4EC0\u4E48+\u4E0B\u4E00\u6B65\uFF08\u5931\u8D25\u81EA\u52A8\u9000\u56DE\u6A21\u677F\u53E5\uFF09", control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),

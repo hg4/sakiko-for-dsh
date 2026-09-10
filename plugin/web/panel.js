@@ -453,18 +453,22 @@
 
   try { unlocked = window.localStorage.getItem('amadeus.unlocked') === '1' } catch (e) { unlocked = false }
 
-  function enqueue(text, force, emotion, expr, cn, id, bubble) {
+  function enqueue(text, force, emotion, expr, cn, id, bubble, url) {
     var t = String(text || '').replace(/\s+/g, ' ').trim()
-    if (t.length === 0) return
+    var hasUrl = typeof url === 'string' && url.length > 0
+    // hum 等直连音频条目（text 为空但带 url）同样入主队列；纯空文本才丢弃
+    if (t.length === 0 && !hasUrl) return
     if (!force && cfg.voiceOn !== true) return
-    if (t === lastQueued) return
-    lastQueued = t
+    if (t.length > 0 && t === lastQueued) return
+    if (t.length > 0) lastQueued = t
     var emo = EXPR[emotion] !== undefined ? emotion : 'neutral'
     if (queue.length > 30) queue.shift()
     var qi = { text: t, cn: cn || '', emotion: emo, expr: expr || EXPR[emo] || '' }
+    // 直连音频（hum）：pump 跳过 TTS 合成，直接播放该 URL（words 空 → 口型静默）
+    if (hasUrl) qi.url = url
     // 时间线：透传 host 队列 id（若有），播报 play/end 上报才能与 host push 事件对齐
     if (typeof id === 'number') qi.id = id
-    // 气泡元数据（任务播报 announce/idle、来电接听 call）随条目入队：取到条目时不再直接
+    // 气泡元数据（任务播报 announce/idle、来电接听 call、哼唱 hum）随条目入队：取到条目时不再直接
     // 插气泡，改由 pump 在该句真正开始播放（play() resolve 回调内）或终局失败兜底时插入
     if (bubble) qi.bubble = bubble
     queue.push(qi)
@@ -583,6 +587,8 @@
     for (var i = 0; i < n; i++) {
       var item = queue[i]
       if (!item) continue
+      // hum 等直连音频条目无 TTS 合成，跳过预取（避免对空文本发起 /amadeus/tts）
+      if (item.url) continue
       var url = ttsUrl(item.text, item.emotion)
       if (prefetchCache[url] || inflightAudio[url]) continue
       fetchAudioWithWords(item.text, item.emotion).catch(function () { /* ignore */ })
@@ -646,7 +652,8 @@
     playing = true
     var item = queue.shift()
     try {
-      var obj = await fetchAudioWithWords(item.text, item.emotion)
+      // hum 等直连音频：跳过 TTS 合成，直接以 item.url 播放（words 空 → 口型静默，不加新状态机）
+      var obj = item.url ? { url: item.url, words: [] } : await fetchAudioWithWords(item.text, item.emotion)
       await playAudioUrl(obj.url, function () {
         startSpeaking(item, obj.words)
         // 气泡渲染时机 = 该句真正开始出声（audioEl.play() promise resolve 回调内）：
@@ -2314,6 +2321,10 @@
           if (typeof u.id === 'number' && u.id > cursor) cursor = u.id
           if (u.kind === 'call') {
             handleCallItem(u)
+          } else if (u.kind === 'hum') {
+            // 随机哼唱彩蛋：直连音频入主串行队列（text 空、force true、气泡 cn='♪ ♪ ♪'、url 直连），
+            // 由 pump 在播放瞬间插入气泡并播放，不叠播、不走 TTS 合成。
+            enqueue('', true, u.emotion || 'happy', u.expr || '', '', u.id, { cn: u.cn || '♪ ♪ ♪', jp: '', hum: true }, u.url || '')
           } else if (u.kind === 'cn') {
             revealHistory(u.cn || '', u.id)
           } else {
