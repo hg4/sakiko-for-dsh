@@ -223,7 +223,7 @@ export function apply(ctx) {
     const chatStreams = new Map()
 
     // 记忆（持久化）
-    let memory = { facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0, lastHumAt: 0, humCount: 0 }
+    let memory = { facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0, lastHumAt: 0, humCount: 0, progress: {} }
 
     const ttsCache = new Map()
     const ttsOrder = []
@@ -617,10 +617,12 @@ export function apply(ctx) {
         if (info === undefined) return
         const parsed = JSON.parse(await fs.readText(t))
         if (parsed && typeof parsed === 'object') {
-          memory = Object.assign({ facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0, lastHumAt: 0, humCount: 0 }, parsed)
+          memory = Object.assign({ facts: [], history: [], summary: '', lastCallAt: 0, callCount: 0, lastHumAt: 0, humCount: 0, progress: {} }, parsed)
           if (!Array.isArray(memory.facts)) memory.facts = []
           if (!Array.isArray(memory.history)) memory.history = []
           if (typeof memory.summary !== 'string') memory.summary = ''
+          // Fix T4：progress 为新增键——旧档缺失 → 初始化为空；存在则逐条净化（容忍旧档/异常档）
+          memory.progress = sanitizeProgressMap(memory.progress)
         }
       } catch (e) {
         console.error('[amadeus] 读取记忆失败:', e && e.message ? e.message : String(e))
@@ -1203,6 +1205,7 @@ export function apply(ctx) {
       lastSummary: '',
       lastLLMAt: 0,
       poolCursor: {},
+      sessions: {},   // Fix T4：per-session 分片摘要（label/milestoneCount/lastSummary/updatedAt），随 narrator.json 落盘
     }
 
     // 单个会话（或默认槽）的回合态；sid 供播报归属与里程碑巡检回传
@@ -1483,6 +1486,103 @@ export function apply(ctx) {
       return ''
     }
 
+    // ============================================================
+    // Task 4：进度记忆分层（memory.progress[sid] + narrator.json 分片摘要）
+    //   口径（用户已确认）：**进度分会话 + 人格全局**——
+    //     · 进度类（最近在干什么 / 用了哪些工具 / 里程碑次数 / 最近总结）按 sid 分片，落 amadeus-memory.json 的 progress 键；
+    //     · narrator.json 另存一份精简分片摘要（label/milestoneCount/lastSummary/updatedAt），供叙事侧独立恢复；
+    //     · memory.facts（人格/偏好）与直聊 chat 历史**保持全局**，本任务不动；
+    //     · memory.history 的归属用**结构化字段** {sid,label} 承载（cn 文本一律不带「〔label〕」，Task 2 口径）。
+    //   写入时机：回合收尾（DONE/goal）与里程碑触发；读取：LLM 总结输入侧可引用、narratorStatus 摘要暴露。
+    // ============================================================
+    const NARR_PROGRESS_MAX = 64   // 分片条目上限（与注册表同量级；超出淘汰 updatedAt 最老者）
+    function sanitizeProgressEntry(v) {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+      const out = {}
+      if (typeof v.label === 'string') out.label = v.label.slice(0, 40)
+      if (typeof v.cwd === 'string') out.cwd = v.cwd.slice(0, 400)
+      if (typeof v.lastUserText === 'string') out.lastUserText = v.lastUserText.slice(0, 200)
+      if (v.tools && typeof v.tools === 'object' && !Array.isArray(v.tools)) {
+        const t = {}
+        const ks = Object.keys(v.tools).slice(0, 40)
+        for (let i = 0; i < ks.length; i++) {
+          const n = v.tools[ks[i]]
+          if (typeof n === 'number' && isFinite(n)) t[String(ks[i]).slice(0, 120)] = Math.max(0, Math.floor(n))
+        }
+        out.tools = t
+      }
+      out.milestoneCount = (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0
+      if (typeof v.lastSummary === 'string' && v.lastSummary.length > 0) out.lastSummary = v.lastSummary.slice(0, 200)
+      if (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) out.updatedAt = v.updatedAt
+      return out
+    }
+    function sanitizeProgressMap(m) {
+      const out = {}
+      if (!m || typeof m !== 'object' || Array.isArray(m)) return out
+      const keys = Object.keys(m).slice(0, 200)
+      for (let i = 0; i < keys.length; i++) {
+        const e = sanitizeProgressEntry(m[keys[i]])
+        if (e !== null) out[String(keys[i]).slice(0, 80)] = e
+      }
+      return out
+    }
+    function sanitizeNarratorSessions(m) {
+      const out = {}
+      if (!m || typeof m !== 'object' || Array.isArray(m)) return out
+      const keys = Object.keys(m).slice(0, 200)
+      for (let i = 0; i < keys.length; i++) {
+        const v = m[keys[i]]
+        if (!v || typeof v !== 'object' || Array.isArray(v)) continue
+        out[String(keys[i]).slice(0, 80)] = {
+          label: typeof v.label === 'string' ? v.label.slice(0, 40) : '',
+          milestoneCount: (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0,
+          lastSummary: typeof v.lastSummary === 'string' ? v.lastSummary.slice(0, 200) : '',
+          updatedAt: (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) ? v.updatedAt : 0,
+        }
+      }
+      return out
+    }
+    // 写入/累加某会话的进度记忆；无归属（sid 为空）不计入
+    function recordProgress(sid, patch) {
+      const key = (typeof sid === 'string' && sid.length > 0) ? sid : ''
+      if (key.length === 0) return null
+      if (!memory.progress || typeof memory.progress !== 'object' || Array.isArray(memory.progress)) memory.progress = {}
+      let e = memory.progress[key]
+      if (!e || typeof e !== 'object') e = { milestoneCount: 0 }
+      if (typeof e.milestoneCount !== 'number' || !isFinite(e.milestoneCount)) e.milestoneCount = 0
+      const rec = sessions.get(key)
+      if (rec !== undefined) {
+        e.label = rec.label
+        if (typeof rec.cwd === 'string' && rec.cwd.length > 0) e.cwd = rec.cwd
+      }
+      const p = patch && typeof patch === 'object' ? patch : {}
+      if (typeof p.lastUserText === 'string' && p.lastUserText.length > 0) e.lastUserText = p.lastUserText.slice(0, 200)
+      if (p.tools && typeof p.tools === 'object' && !Array.isArray(p.tools)) e.tools = Object.assign({}, p.tools)
+      if (p.milestoneBump === true) e.milestoneCount += 1
+      if (typeof p.lastSummary === 'string' && p.lastSummary.length > 0) e.lastSummary = p.lastSummary.slice(0, 200)
+      e.updatedAt = Date.now()
+      memory.progress[key] = e
+      // narrator.json 侧的精简分片摘要（同源数据）
+      narrGlobal.sessions[key] = {
+        label: typeof e.label === 'string' ? e.label : '',
+        milestoneCount: e.milestoneCount,
+        lastSummary: typeof e.lastSummary === 'string' ? e.lastSummary : '',
+        updatedAt: e.updatedAt,
+      }
+      // 上限淘汰：超出时分片与摘要一起丢最老者（防长跑宿主无限增长）
+      const keys = Object.keys(memory.progress)
+      if (keys.length > NARR_PROGRESS_MAX) {
+        keys.sort((a, b) => ((memory.progress[a] && memory.progress[a].updatedAt) || 0) - ((memory.progress[b] && memory.progress[b].updatedAt) || 0))
+        for (let i = 0; i < keys.length - NARR_PROGRESS_MAX; i++) {
+          delete memory.progress[keys[i]]
+          delete narrGlobal.sessions[keys[i]]
+        }
+      }
+      scheduleSaveMemory()
+      scheduleSaveNarrator()
+      return e
+    }
+
     const poolLastUsed = new Map()      // 每池最近使用的一条（供状态查看 / LRU 沉底确认）
     const lastNarrSpeaks = []           // 最近发声留档（供验证）
     let narrSaveTimer = null
@@ -1493,6 +1593,8 @@ export function apply(ctx) {
         lastSummary: typeof narrGlobal.lastSummary === 'string' ? narrGlobal.lastSummary.slice(0, 500) : '',
         lastLLMAt: narrGlobal.lastLLMAt || 0,
         poolCursor: narrGlobal.poolCursor || {},
+        // Fix T4：per-session 分片摘要（旧档缺该键 → 视为空，正常工作）
+        sessions: narrGlobal.sessions || {},
       }
     }
     async function loadNarrator() {
@@ -1511,6 +1613,8 @@ export function apply(ctx) {
         if (typeof parsed.lastSummary === 'string') narrGlobal.lastSummary = parsed.lastSummary.slice(0, 500)
         if (typeof parsed.lastLLMAt === 'number' && isFinite(parsed.lastLLMAt)) narrGlobal.lastLLMAt = parsed.lastLLMAt
         if (parsed.poolCursor && typeof parsed.poolCursor === 'object') narrGlobal.poolCursor = parsed.poolCursor
+        // Fix T4：per-session 分片摘要（旧档无此键 → 保持空对象，不报错）
+        narrGlobal.sessions = sanitizeNarratorSessions(parsed.sessions)
       } catch (e) {
         console.error('[amadeus] 读取 narrator 状态失败:', e && e.message ? e.message : String(e))
       }
@@ -1680,6 +1784,8 @@ export function apply(ctx) {
         if (typeof parsed.jp !== 'string' || parsed.jp.trim().length === 0) return null
         if (NARR_LLM_EMOTIONS.indexOf(parsed.emotion) < 0) return null
         if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrGlobal.lastSummary = parsed.cn.slice(0, 120)
+        // Fix T4：把该次总结同时写入**本会话**的进度分片（全局 lastSummary 语义不变，供兼容与 LLM 上下文）
+        recordProgress(o.sid, { lastSummary: typeof parsed.cn === 'string' ? parsed.cn : '' })
         scheduleSaveNarrator()
         return { jp: parsed.jp, cn: parsed.cn || parsed.jp, emotion: parsed.emotion }
       } catch (e) {
@@ -1851,7 +1957,13 @@ export function apply(ctx) {
       // （或快照缺失）时回落到此刻现算。这样「最后一个收尾者」也不会因为 turnActive 已被清掉而掉前缀。
       const prefix = (typeof opts.bubblePrefix === 'string') ? opts.bubblePrefix : bubblePrefixFor(sidKey)
       const bubbleCn = prefix.length > 0 ? prefix + cnText : cnText
-      memory.history.push({ role: 'assistant', jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral', announce: true, narrate: intent, t: Date.now() })
+      // Fix T4：history 条目的归属用**结构化字段**承载（cn 保持原文，不加「〔label〕」前缀）
+      const histEntry = { role: 'assistant', jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral', announce: true, narrate: intent, t: Date.now() }
+      if (sidKey.length > 0) {
+        histEntry.sid = sidKey
+        histEntry.label = narrLabel
+      }
+      memory.history.push(histEntry)
       if (memory.history.length > 60) maybeCompactHistory()
       narrGlobal.counts[intent] = (narrGlobal.counts[intent] || 0) + 1   // counts 全局聚合（跨会话累加）
       lastNarrSpeaks.push({ at: Date.now(), intent, source, jp: line.jp, cn: cnText, bubble: bubbleCn, sid: sidKey, label: narrLabel, emotion: line.emotion || 'neutral' })
@@ -1878,6 +1990,8 @@ export function apply(ctx) {
       const overSteps = st.stepCount >= steps
       if (!overTime && !overSteps) return
       st.milestoneSpoken = true
+      // Fix T4：里程碑触发 → 该会话的里程碑计数 +1（进度记忆分片）
+      recordProgress(st.sid, { milestoneBump: true })
       narrate('milestone', { sid: st.sid })
     }
 
@@ -1908,6 +2022,8 @@ export function apply(ctx) {
       st.stepCount = 0
       st.turnGoalDone = false
       st.toolNames = {}
+      // Fix T4：回合收尾（DONE/goal）→ 写入该会话的进度记忆（用清态前已快照的 userMsg/tools）
+      recordProgress(st.sid, { lastUserText: doneOpts.userMsg, tools: doneOpts.tools })
       if (goalDone) {
         narrate('goal', { sid: st.sid })
       } else if (config.narratorDone === true) {
@@ -2782,6 +2898,8 @@ export function apply(ctx) {
       for (const rec of sessions.values()) {
         // 经 stateFor 取值：multiSession:false 时各行的回合态即共享默认槽（与 state 字段同源，不虚报）
         const rst = stateFor(rec.sid)
+        // Fix T4：行内附带该会话的进度分片摘要（最近用户输入 + 里程碑次数），便于真机验收
+        const pe = (memory.progress && typeof memory.progress === 'object') ? memory.progress[rec.sid] : undefined
         sessionRows.push({
           sid: String(rec.sid).slice(0, 8),
           label: rec.label,
@@ -2790,6 +2908,8 @@ export function apply(ctx) {
           stepCount: rst.stepCount,
           blocking: rst.blocking,
           lastActiveAt: rec.lastActiveAt,
+          lastUserText: (pe && typeof pe.lastUserText === 'string') ? pe.lastUserText.slice(0, 100) : '',
+          milestoneCount: (pe && typeof pe.milestoneCount === 'number') ? pe.milestoneCount : 0,
         })
       }
       sessionRows.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
