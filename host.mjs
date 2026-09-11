@@ -141,6 +141,9 @@ export function apply(ctx) {
       narratorDone: true,
       narratorMilestoneMs: 240000,
       narratorMilestoneSteps: 10,
+      // 多工作区播报（Task 1）：多会话状态分片总开关 / 气泡前缀策略（'auto'|'always'，文案在 Task 2 使用）
+      multiSession: true,
+      multiSessionPrefix: 'auto',
       // 手机界面浮窗化（Task 1 / P8）：浮窗布局开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
       // 配色默认 = 现状「深蓝月白金」panel.css 硬编码值（逐色权威表见 .superpowers/sdd/2026-09-08-float-panel/task-1-report.md）
       floatPanel: true,
@@ -554,6 +557,9 @@ export function apply(ctx) {
       if (typeof p.narratorDone === 'boolean') out.narratorDone = p.narratorDone
       if (typeof p.narratorMilestoneMs === 'number' && p.narratorMilestoneMs >= 60000 && p.narratorMilestoneMs <= 1800000) out.narratorMilestoneMs = Math.floor(p.narratorMilestoneMs)
       if (typeof p.narratorMilestoneSteps === 'number' && p.narratorMilestoneSteps >= 3 && p.narratorMilestoneSteps <= 50) out.narratorMilestoneSteps = Math.floor(p.narratorMilestoneSteps)
+      // 多工作区播报（Task 1）：multiSession 布尔；multiSessionPrefix 枚举 auto|always
+      if (typeof p.multiSession === 'boolean') out.multiSession = p.multiSession
+      if (typeof p.multiSessionPrefix === 'string' && ['auto', 'always'].indexOf(p.multiSessionPrefix) >= 0) out.multiSessionPrefix = p.multiSessionPrefix
       // 手机界面浮窗化（Task 1 / P8）：浮窗开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
       // 白名单：floatPanel 布尔；themePreset 四枚举；color* 严格 6 位 hex（非法仅忽略该键，不回滚整包）；
       // chatBgUrl 字符串长度 ≤500 且（空串或 http://、https:// 前缀），非法忽略。
@@ -1164,35 +1170,186 @@ export function apply(ctx) {
       jobDone: { jp: 'お待たせしましたわね。ようやく一段落したようですわ', cn: '让你久等了。总算是告一段落了', emotion: 'soft' },
     }
 
-    // 进度状态机：持久键随 narrator.json 落盘；回合瞬态键不落盘（重启即清）
-    let narrState = {
+    // ============================================================
+    // 多工作区播报（Task 1）：全局键 + 会话注册表 + per-session 回合态
+    //   全局保留（跨会话共享，随 narrator.json 落盘）：counts / lastSummary / lastLLMAt / poolCursor
+    //   全局保留（内存）：台词池游标状态 poolLastUsed / 最近发声留档 lastNarrSpeaks / 播报批次队列
+    //   per-session（不落盘）：回合瞬态 + 节流占位（lastSpokeByIntent / lastDoneFamilyAt）
+    // ============================================================
+    const narrGlobal = {
       counts: { start: 0, done: 0, milestone: 0, block: 0, fail: 0, special: 0, goal: 0 },
       lastSummary: '',
       lastLLMAt: 0,
       poolCursor: {},
-      // ---- 回合瞬态（不落盘） ----
-      turnActive: false,
-      turnStartAt: 0,
-      stepCount: 0,
-      startSpoken: false,
-      milestoneSpoken: false,
-      turnGoalDone: false,
-      blocking: null,       // 'b1'..'b4' | null
-      lastUserText: '',
-      toolNames: {},        // 本轮工具名 → 次数
     }
+
+    // 单个会话（或默认槽）的回合态；sid 供播报归属与里程碑巡检回传
+    function makeTurnState(sid) {
+      return {
+        sid: typeof sid === 'string' ? sid : '',
+        // ---- 回合瞬态 ----
+        turnActive: false,
+        turnStartAt: 0,
+        stepCount: 0,
+        startSpoken: false,
+        milestoneSpoken: false,
+        turnGoalDone: false,
+        blocking: null,        // 'b1'..'b4' | null
+        lastUserText: '',
+        toolNames: {},         // 本轮工具名 → 次数
+        // ---- 节流占位（per-session：Task 3 在此之上加跨会话互斥窗） ----
+        lastDoneFamilyAt: 0,             // done/goal 完成语义 8s 互斥窗
+        lastSpokeByIntent: new Map(),    // 同意图最近发声时刻
+      }
+    }
+    // 单一默认槽：multiSession:false 时所有会话共用；也充当「无归属会话」事件
+    // （子代理结束 / 工作流 / agent 错误 / 后台任务 / testNarrator）的落点
+    const defaultSlot = { state: makeTurnState('') }
+    // 会话注册表：sid → { sid, label, cwd, title, lastActiveAt, state }
+    const sessions = new Map()
+    const SESSIONS_MAX = 64   // 注册表上限（只淘汰非回合进行中的最久未活跃者）
+
+    // ---- 标签三级回退：① session/title 标题 → ② basename(cwd) → ③ basename(cwd)·sid4（撞车双方都加） ----
+    function sidOf(session) {
+      try {
+        const id = (session === null || session === undefined) ? '' : session.id
+        return (typeof id === 'string' && id.length > 0) ? id : ''
+      } catch (e) { return '' }
+    }
+    function cwdOf(session) {
+      try {
+        const h = (session === null || session === undefined) ? undefined : session.header
+        const cwd = (h === null || h === undefined) ? undefined : h.cwd
+        return (typeof cwd === 'string' && cwd.length > 0) ? cwd : ''
+      } catch (e) { return '' }
+    }
+    function basenameOf(p) {
+      const s = String((p === null || p === undefined) ? '' : p).replace(/[\\/]+$/, '')
+      if (s.length === 0) return ''
+      const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'))
+      return i >= 0 ? s.slice(i + 1) : s
+    }
+    function sidShort(sid) { return String(sid).slice(0, 4) }
+    function normTitle(v) {
+      return (typeof v === 'string' && v.trim().length > 0) ? v.trim().slice(0, 40) : ''
+    }
+    // 会话标题也可从事件日志回折（插件晚挂载时首见即拿到既有标题；不可读则走 cwd 回退）
+    function titleFromLog(session) {
+      try {
+        const evs = (session === null || session === undefined) ? undefined : session.events
+        if (!Array.isArray(evs)) return ''
+        for (let i = evs.length - 1; i >= 0; i--) {
+          const ev = evs[i]
+          if (ev && ev.type === 'session/title') {
+            const t = normTitle(ev.data && typeof ev.data === 'object' ? ev.data.title : undefined)
+            if (t.length > 0) return t
+          }
+        }
+      } catch (e) { /* 日志不可读：忽略 */ }
+      return ''
+    }
+    // 注册表级标签重算：有标题者用标题且不参与撞车判定；无标题者按 basename 分组，
+    // 同一 basename 被 ≥2 个无标题会话占用（或无 cwd 的独苗）→ 本会话与冲突方都加 ·sid4
+    function refreshLabels() {
+      const groups = new Map()
+      for (const rec of sessions.values()) {
+        const t = normTitle(rec.title)
+        if (t.length > 0) { rec.label = t; continue }
+        const base = basenameOf(rec.cwd)
+        rec.label = base
+        const key = base.toLowerCase()
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key).push(rec)
+      }
+      for (const [key, list] of groups) {
+        if (list.length < 2 && key.length > 0) continue
+        for (const rec of list) {
+          const base = basenameOf(rec.cwd)
+          rec.label = (base.length > 0 ? base : '会话') + '·' + sidShort(rec.sid)
+        }
+      }
+    }
+    function evictSessions() {
+      while (sessions.size > SESSIONS_MAX) {
+        let victimKey = null
+        let victimAt = Infinity
+        for (const [key, rec] of sessions) {
+          if (rec.state.turnActive === true) continue   // 回合进行中的会话绝不淘汰
+          if (rec.lastActiveAt < victimAt) { victimAt = rec.lastActiveAt; victimKey = key }
+        }
+        if (victimKey === null) break
+        sessions.delete(victimKey)
+      }
+    }
+    function registerSession(sid, session) {
+      const rec = {
+        sid,
+        label: '',
+        cwd: session ? cwdOf(session) : '',
+        title: session ? titleFromLog(session) : '',
+        lastActiveAt: Date.now(),
+        state: makeTurnState(sid),
+      }
+      sessions.set(sid, rec)
+      refreshLabels()
+      evictSessions()
+      return rec
+    }
+    // 每次 session/event 续活：首见注册；cwd 变化时重算标签；lastActiveAt 每次事件刷新
+    function touchSession(session) {
+      const sid = sidOf(session)
+      if (sid.length === 0) return null
+      let rec = sessions.get(sid)
+      if (rec === undefined) rec = registerSession(sid, session)
+      const cwd = cwdOf(session)
+      if (cwd.length > 0 && cwd !== rec.cwd) { rec.cwd = cwd; refreshLabels() }
+      rec.lastActiveAt = Date.now()
+      return rec
+    }
+    // session/title 到达：更新 title/label（只影响之后的播报；撞车后缀随之解除）
+    function setSessionTitle(rec, title) {
+      if (rec === null) return
+      const t = normTitle(title)
+      if (t.length === 0 || t === rec.title) return
+      rec.title = t
+      refreshLabels()
+    }
+
+    // ---- provider：状态访问（Task 2/3 在 stateFor/activeStates 之上加标签文案与节流） ----
+    function stateFor(sid) {
+      if (config.multiSession === false) return defaultSlot.state
+      const key = (typeof sid === 'string' && sid.length > 0) ? sid : ''
+      if (key.length === 0) return defaultSlot.state
+      const rec = sessions.get(key)
+      if (rec !== undefined) return rec.state
+      return registerSession(key, null).state
+    }
+    function activeStates() {
+      if (config.multiSession === false) return [defaultSlot.state]
+      const out = []
+      for (const rec of sessions.values()) out.push(rec.state)
+      return out
+    }
+    // 焦点状态（narratorStatus.state）：单一默认槽，或最近活跃的会话态
+    function primaryState() {
+      if (config.multiSession === false) return defaultSlot.state
+      let best = null
+      for (const rec of sessions.values()) {
+        if (best === null || rec.lastActiveAt > best.lastActiveAt) best = rec
+      }
+      return best === null ? defaultSlot.state : best.state
+    }
+
     const poolLastUsed = new Map()      // 每池最近使用的一条（供状态查看 / LRU 沉底确认）
-    const lastSpokeByIntent = new Map() // 同意图最近发声时刻
-    let lastDoneFamilyAt = 0            // done/goal 完成语义 8s 互斥窗
     const lastNarrSpeaks = []           // 最近发声留档（供验证）
     let narrSaveTimer = null
 
     function narrPersistSnapshot() {
       return {
-        counts: narrState.counts,
-        lastSummary: typeof narrState.lastSummary === 'string' ? narrState.lastSummary.slice(0, 500) : '',
-        lastLLMAt: narrState.lastLLMAt || 0,
-        poolCursor: narrState.poolCursor || {},
+        counts: narrGlobal.counts,
+        lastSummary: typeof narrGlobal.lastSummary === 'string' ? narrGlobal.lastSummary.slice(0, 500) : '',
+        lastLLMAt: narrGlobal.lastLLMAt || 0,
+        poolCursor: narrGlobal.poolCursor || {},
       }
     }
     async function loadNarrator() {
@@ -1204,13 +1361,13 @@ export function apply(ctx) {
         if (!parsed || typeof parsed !== 'object') return
         const c = parsed.counts
         if (c && typeof c === 'object') {
-          for (const k of Object.keys(narrState.counts)) {
-            if (typeof c[k] === 'number' && isFinite(c[k])) narrState.counts[k] = Math.max(0, Math.floor(c[k]))
+          for (const k of Object.keys(narrGlobal.counts)) {
+            if (typeof c[k] === 'number' && isFinite(c[k])) narrGlobal.counts[k] = Math.max(0, Math.floor(c[k]))
           }
         }
-        if (typeof parsed.lastSummary === 'string') narrState.lastSummary = parsed.lastSummary.slice(0, 500)
-        if (typeof parsed.lastLLMAt === 'number' && isFinite(parsed.lastLLMAt)) narrState.lastLLMAt = parsed.lastLLMAt
-        if (parsed.poolCursor && typeof parsed.poolCursor === 'object') narrState.poolCursor = parsed.poolCursor
+        if (typeof parsed.lastSummary === 'string') narrGlobal.lastSummary = parsed.lastSummary.slice(0, 500)
+        if (typeof parsed.lastLLMAt === 'number' && isFinite(parsed.lastLLMAt)) narrGlobal.lastLLMAt = parsed.lastLLMAt
+        if (parsed.poolCursor && typeof parsed.poolCursor === 'object') narrGlobal.poolCursor = parsed.poolCursor
       } catch (e) {
         console.error('[amadeus] 读取 narrator 状态失败:', e && e.message ? e.message : String(e))
       }
@@ -1231,27 +1388,29 @@ export function apply(ctx) {
     }
 
     // 池轮换：游标 +1（最近一条沉底，绝不立刻复读）；跨重启用落盘游标延续偏移
+    // 游标全局共享：多会话下同一池的台词按全局顺序轮转（跨会话也不复读同一条）
     function pickPool(poolKey) {
       const ids = NARR_POOLS[poolKey]
       if (!Array.isArray(ids) || ids.length === 0) return null
-      const cursor = narrState.poolCursor || {}
+      const cursor = narrGlobal.poolCursor || {}
       let idx = (typeof cursor[poolKey] === 'number' && cursor[poolKey] >= 0) ? cursor[poolKey] : -1
       idx = (idx + 1) % ids.length
-      narrState.poolCursor[poolKey] = idx
+      narrGlobal.poolCursor[poolKey] = idx
       poolLastUsed.set(poolKey, { id: ids[idx], at: Date.now() })
       scheduleSaveNarrator()
       return NARR_LINES[ids[idx]]
     }
 
-    function resetTurn() {
+    // 回合复位（per-session）：st 由 stateFor(sid) 提供
+    function resetTurn(st) {
       const now = Date.now()
-      narrState.stepCount = 0
-      narrState.startSpoken = false
-      narrState.milestoneSpoken = false
-      narrState.turnGoalDone = false
-      narrState.turnActive = true
-      narrState.turnStartAt = now
-      narrState.toolNames = {}
+      st.stepCount = 0
+      st.startSpoken = false
+      st.milestoneSpoken = false
+      st.turnGoalDone = false
+      st.turnActive = true
+      st.turnStartAt = now
+      st.toolNames = {}
     }
 
     function userMessageText(d) {
@@ -1318,21 +1477,24 @@ export function apply(ctx) {
     async function narrateSummary(kind, opts) {
       if (config.narratorLLMSummary !== true) return null
       const now = Date.now()
-      if (now - (narrState.lastLLMAt || 0) < NARR_LLM_GAP_MS) return null
+      if (now - (narrGlobal.lastLLMAt || 0) < NARR_LLM_GAP_MS) return null
       // 进入即登记 lastLLMAt（先于本函数首个 await）：以“启动时刻”卡 8s 门，
       // 两个并发 LLM 总结的第二个必在门处被拦；失败返回 null 不回滚已登记时间（宁可少跑 LLM 不多烧 token）。
-      narrState.lastLLMAt = now
+      // lastLLMAt/lastSummary 为全局（跨会话共享：总结节奏与上一句总结都不因会话切换而重置）。
+      narrGlobal.lastLLMAt = now
       scheduleSaveNarrator()
       const o = opts && typeof opts === 'object' ? opts : {}
-      const userMsg = String(o.userMsg || narrState.lastUserText || '').slice(0, 200)
-      const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (narrState.toolNames || {})
+      // 会话态兜底：调用方未显式传 userMsg/tools/blocking 时，取该 sid 的回合态
+      const st = stateFor(o.sid)
+      const userMsg = String(o.userMsg || st.lastUserText || '').slice(0, 200)
+      const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (st.toolNames || {})
       const toolNames = Object.keys(tools)
       const toolLine = toolNames.length > 0
         ? toolNames.slice(0, 12).map((n) => String(n) + '×' + (tools[n] || 1)).join('、').slice(0, 300)
         : '（ツール呼び出しなし）'
-      const isBlocked = (o.blocking !== undefined) ? !!o.blocking : !!narrState.blocking
+      const isBlocked = (o.blocking !== undefined) ? !!o.blocking : !!st.blocking
       const blockingLine = isBlocked ? '（ユーザーの確認・返答を待っています）' : ''
-      const prevSummary = narrState.lastSummary ? narrState.lastSummary.slice(0, 200) : ''
+      const prevSummary = narrGlobal.lastSummary ? narrGlobal.lastSummary.slice(0, 200) : ''
       const kindLine = kind === 'milestone'
         ? '作業が長引いているので、順調であることと継続を伝える一言を。'
         : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
@@ -1351,7 +1513,7 @@ export function apply(ctx) {
         const parsed = parseStructured(raw)
         if (typeof parsed.jp !== 'string' || parsed.jp.trim().length === 0) return null
         if (NARR_LLM_EMOTIONS.indexOf(parsed.emotion) < 0) return null
-        if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrState.lastSummary = parsed.cn.slice(0, 120)
+        if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrGlobal.lastSummary = parsed.cn.slice(0, 120)
         scheduleSaveNarrator()
         return { jp: parsed.jp, cn: parsed.cn || parsed.jp, emotion: parsed.emotion }
       } catch (e) {
@@ -1380,8 +1542,9 @@ export function apply(ctx) {
     let narrBatchScheduled = false
 
     // narrate(intent, opts)：
-    //   同意图 8s 合并；同一时刻多事件由微任务批收集后取最高优先级一条；
+    //   同意图 8s 合并（按 opts.sid 所属会话计入其 lastSpokeByIntent）；同一时刻多事件由微任务批收集后取最高优先级一条；
     //   done 受 narratorDone 开关；force=true（testNarrator）绕过节流/回合内一次性标记，仍受 narratorOn/voiceOn 约束。
+    //   opts.sid 缺省（子代理/工作流/后台任务/testNarrator）→ 落默认槽：与任何会话的节流互不干扰。
     function narrate(intent, opts) {
       const o = opts && typeof opts === 'object' ? opts : {}
       const now = Date.now()
@@ -1389,7 +1552,8 @@ export function apply(ctx) {
       if (config.narratorOn !== true) return { ok: false, reason: 'narrator-off' }
       if (intent === 'done' && config.narratorDone !== true && o.force !== true) return { ok: false, reason: 'done-off' }
       if (o.force !== true) {
-        const last = lastSpokeByIntent.get(intent)
+        const st = stateFor(o.sid)
+        const last = st.lastSpokeByIntent.get(intent)
         if (typeof last === 'number' && now - last < NARR_INTENT_GAP_MS) return { ok: false, reason: 'merged-same-intent' }
       }
       narrPendingBatch.push({ intent, opts: o, at: now })
@@ -1421,23 +1585,25 @@ export function apply(ctx) {
     // flushNarrBatch 对 deliverNarration 是 fire-and-forget，两个 deliver 可真实并发；
     // JS 单线程下，只要 lastSpokeByIntent/lastDoneFamilyAt 的登记先于任一 await，
     // 并发第二个必在门处被拦（lastLLMAt 的登记在 narrateSummary 入口，同样先于其 await）。
+    // 多工作区（Task 1）：门与占位全部落在 opts.sid 所属会话的 state 上（跨会话互不抑制）。
     async function deliverNarration(intent, opts) {
       const now = Date.now()
       const force = opts.force === true
+      const st = stateFor(opts.sid)
       let mySameAt = 0
       let myFamilyAt = 0
       // 同步门 + 同步占位登记（模板路径与 LLM 路径共用同一占位语义）
       if (!force) {
         if (intent === 'done' || intent === 'goal') {
           // done/goal 完成语义 8s 互斥（先到先得近似旧 announce 8s 窗；更高语义由同批优先级保证）
-          if (now - lastDoneFamilyAt < NARR_INTENT_GAP_MS) return
-          lastDoneFamilyAt = now
+          if (now - st.lastDoneFamilyAt < NARR_INTENT_GAP_MS) return
+          st.lastDoneFamilyAt = now
           myFamilyAt = now
         }
         // 同意图 8s 合并：受理即占位（8s 从“受理”起算，而非发声后）
-        const last = lastSpokeByIntent.get(intent)
+        const last = st.lastSpokeByIntent.get(intent)
         if (typeof last === 'number' && now - last < NARR_INTENT_GAP_MS) return
-        lastSpokeByIntent.set(intent, now)
+        st.lastSpokeByIntent.set(intent, now)
         mySameAt = now
       }
       let line = null
@@ -1461,17 +1627,17 @@ export function apply(ctx) {
       //   doneTookOver   = milestone 在飞期间 done/goal 登记了族窗（turn/end 已接管“回合结束”语义，
       //                    优先级 DONE20 > MILESTONE10，避免“还在进行中”落在“完成”之后）。
       if (llmAttempted && !force) {
-        const sameReplaced = lastSpokeByIntent.get(intent) !== mySameAt
-        const familyReplaced = myFamilyAt !== 0 && lastDoneFamilyAt !== myFamilyAt
+        const sameReplaced = st.lastSpokeByIntent.get(intent) !== mySameAt
+        const familyReplaced = myFamilyAt !== 0 && st.lastDoneFamilyAt !== myFamilyAt
         const doneTookOver = (intent !== 'done' && intent !== 'goal') && myFamilyAt === 0 &&
-          lastDoneFamilyAt !== 0 && lastDoneFamilyAt >= mySameAt
+          st.lastDoneFamilyAt !== 0 && st.lastDoneFamilyAt >= mySameAt
         if (sameReplaced || familyReplaced || doneTookOver) return
       }
       // 留痕对话历史（沿用 announce 语义：无论语音开关都记录）
       const cnText = (typeof line.cn === 'string' && line.cn.length > 0) ? line.cn : line.jp
       memory.history.push({ role: 'assistant', jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral', announce: true, narrate: intent, t: Date.now() })
       if (memory.history.length > 60) maybeCompactHistory()
-      narrState.counts[intent] = (narrState.counts[intent] || 0) + 1
+      narrGlobal.counts[intent] = (narrGlobal.counts[intent] || 0) + 1   // counts 全局聚合（跨会话累加）
       lastNarrSpeaks.push({ at: Date.now(), intent, source, jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral' })
       if (lastNarrSpeaks.length > 8) lastNarrSpeaks.shift()
       scheduleSaveNarrator()
@@ -1479,48 +1645,52 @@ export function apply(ctx) {
       await speakSynced(line.jp, cnText, line.emotion || 'neutral', 'force', { announce: true, narrate: intent })
     }
 
-    // ---------------- 里程碑巡检（时间/步数，单回合一次） ----------------
-    function maybeMilestone() {
+    // ---------------- 里程碑巡检（per-session：时间/步数，各自单回合一次） ----------------
+    // st = stateFor(sid)：时间阈值按该会话自己的 turnStartAt 计，步数按自己的 stepCount 计；
+    // 空闲会话（turnActive !== true）直接跳过——别的会话在忙不推迟本会话，本会话阻塞不抑制别的会话。
+    function maybeMilestone(st) {
       if (config.narratorOn !== true) return
-      if (narrState.turnActive !== true) return
-      if (narrState.milestoneSpoken) return
-      if (narrState.blocking) return
-      if (narrState.stepCount < 1) return
+      if (st === null || st === undefined) return
+      if (st.turnActive !== true) return
+      if (st.milestoneSpoken) return
+      if (st.blocking) return
+      if (st.stepCount < 1) return
       const ms = typeof config.narratorMilestoneMs === 'number' ? config.narratorMilestoneMs : 240000
       const steps = typeof config.narratorMilestoneSteps === 'number' ? config.narratorMilestoneSteps : 10
-      const overTime = Date.now() - narrState.turnStartAt >= ms
-      const overSteps = narrState.stepCount >= steps
+      const overTime = Date.now() - st.turnStartAt >= ms
+      const overSteps = st.stepCount >= steps
       if (!overTime && !overSteps) return
-      narrState.milestoneSpoken = true
-      narrate('milestone', {})
+      st.milestoneSpoken = true
+      narrate('milestone', { sid: st.sid })
     }
 
-    // turn/end：goal 完成过 → A3（'goal'）；否则 narratorDone 时 'done'（LLM 总结/模板兜底）；随后清回合状态
-    function handleTurnEnd(evData) {
+    // turn/end：goal 完成过 → A3（'goal'）；否则 narratorDone 时 'done'（LLM 总结/模板兜底）；随后清该会话回合状态
+    function handleTurnEnd(evData, st) {
       const reason = evData && typeof evData === 'object' ? evData.reason : undefined
       const kind = reason && typeof reason === 'object' ? reason.kind : (typeof reason === 'string' ? reason : undefined)
       // 非正常完成回合不播 DONE（blocked/error 已有 BLOCK/FAIL 语义；aborted/interrupted/max-tokens 无完成可言）
       const skipKinds = ['blocked', 'error', 'aborted', 'interrupted', 'max-tokens']
       if (kind !== undefined && skipKinds.indexOf(kind) >= 0) {
-        narrState.turnActive = false
+        st.turnActive = false
         return
       }
-      const goalDone = narrState.turnGoalDone === true
+      const goalDone = st.turnGoalDone === true
       // 先快照回合总结输入（随后清状态，LLM 异步取快照而非被清空的 live 字段）
       const doneOpts = {
-        userMsg: narrState.lastUserText,
-        tools: Object.assign({}, narrState.toolNames),
-        blocking: narrState.blocking,
+        sid: st.sid,
+        userMsg: st.lastUserText,
+        tools: Object.assign({}, st.toolNames),
+        blocking: st.blocking,
       }
-      narrState.turnActive = false
-      narrState.blocking = null
-      narrState.milestoneSpoken = false
-      narrState.startSpoken = false
-      narrState.stepCount = 0
-      narrState.turnGoalDone = false
-      narrState.toolNames = {}
+      st.turnActive = false
+      st.blocking = null
+      st.milestoneSpoken = false
+      st.startSpoken = false
+      st.stepCount = 0
+      st.turnGoalDone = false
+      st.toolNames = {}
       if (goalDone) {
-        narrate('goal', {})
+        narrate('goal', { sid: st.sid })
       } else if (config.narratorDone === true) {
         narrate('done', doneOpts)
       }
@@ -2383,9 +2553,27 @@ export function apply(ctx) {
       pendingClose,
     })))
 
-    // 进度叙事状态（供验证：回合状态 / 各意图计数 / 台词池游标与最近发声）
+    // 进度叙事状态（供验证：焦点会话回合状态 / 会话注册表摘要 / 全局计数与台词池 / 最近发声）
+    //   state / lastSpokeByIntent / lastDoneFamilyAt = 焦点会话（最近活跃；multiSession:false 时为默认槽）
+    //   summary / counts / poolCursor / poolLastUsed / lastSpeaks = 全局（跨会话共享）
     ctx.effect(() => harnessLocal.handle('narratorStatus', async () => {
       const now = Date.now()
+      const st = primaryState()
+      const sessionRows = []
+      for (const rec of sessions.values()) {
+        // 经 stateFor 取值：multiSession:false 时各行的回合态即共享默认槽（与 state 字段同源，不虚报）
+        const rst = stateFor(rec.sid)
+        sessionRows.push({
+          sid: String(rec.sid).slice(0, 8),
+          label: rec.label,
+          cwd: rec.cwd,
+          turnActive: rst.turnActive === true,
+          stepCount: rst.stepCount,
+          blocking: rst.blocking,
+          lastActiveAt: rec.lastActiveAt,
+        })
+      }
+      sessionRows.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
       return {
         config: {
           narratorOn: config.narratorOn,
@@ -2393,29 +2581,35 @@ export function apply(ctx) {
           narratorDone: config.narratorDone,
           narratorMilestoneMs: config.narratorMilestoneMs,
           narratorMilestoneSteps: config.narratorMilestoneSteps,
+          multiSession: config.multiSession !== false,
+          multiSessionPrefix: typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'auto',
         },
         state: {
-          turnActive: narrState.turnActive,
-          runningMs: narrState.turnActive ? now - narrState.turnStartAt : 0,
-          stepCount: narrState.stepCount,
-          startSpoken: narrState.startSpoken,
-          milestoneSpoken: narrState.milestoneSpoken,
-          turnGoalDone: narrState.turnGoalDone,
-          blocking: narrState.blocking,
-          lastUserText: String(narrState.lastUserText || '').slice(0, 100),
-          toolNames: narrState.toolNames || {},
+          sid: String(st.sid || '').slice(0, 8),
+          turnActive: st.turnActive,
+          runningMs: st.turnActive ? now - st.turnStartAt : 0,
+          stepCount: st.stepCount,
+          startSpoken: st.startSpoken,
+          milestoneSpoken: st.milestoneSpoken,
+          turnGoalDone: st.turnGoalDone,
+          blocking: st.blocking,
+          lastUserText: String(st.lastUserText || '').slice(0, 100),
+          toolNames: st.toolNames || {},
         },
-        summary: { lastSummary: narrState.lastSummary, lastLLMAt: narrState.lastLLMAt },
-        counts: narrState.counts,
-        poolCursor: narrState.poolCursor,
+        sessions: sessionRows.slice(0, 10),
+        sessionCount: sessions.size,
+        summary: { lastSummary: narrGlobal.lastSummary, lastLLMAt: narrGlobal.lastLLMAt },
+        counts: narrGlobal.counts,
+        poolCursor: narrGlobal.poolCursor,
         poolLastUsed: Object.fromEntries(poolLastUsed),
-        lastSpokeByIntent: Object.fromEntries(lastSpokeByIntent),
-        lastDoneFamilyAt,
+        lastSpokeByIntent: Object.fromEntries(st.lastSpokeByIntent),
+        lastDoneFamilyAt: st.lastDoneFamilyAt,
         lastSpeaks: lastNarrSpeaks.slice(-8),
       }
     }))
 
     // 进度叙事发声测试：强制触发对应意图（绕过节流与回合内一次性标记；仍受 narratorOn/voiceOn 约束）
+    // 多工作区（Task 1）：不带 sid → 走默认槽（force=true 本就绕过 lastSpokeByIntent/lastDoneFamilyAt 门）
     ctx.effect(() => harnessLocal.handle('testNarrator', async (args) => {
       const intent = args && typeof args.intent === 'string' ? args.intent : ''
       if (['start', 'done', 'block', 'milestone', 'fail', 'goal'].indexOf(intent) < 0) {
@@ -2542,64 +2736,76 @@ export function apply(ctx) {
 
     // ---------------- 进度叙事：会话事件 → 意图路由 ----------------
     // 助手输出的文本一律不朗读；会话进度由下方 dispatcher 归一为 narrate() 意图播报。
-    // 事件→意图（实测 dsh-session known-event-types：tool/call、approval/asked 均在 session/event 流内）：
+    // 多工作区（Task 1）：本监听是唯一的状态写入口，全部读写都落到【该事件所属 sid】的 state——
+    //   会话注册表（touchSession）负责登记/label/cwd/lastActiveAt；stateFor(sid) 提供该会话回合态；
+    //   narrate(..., { sid }) 使节流占位也归该会话，从而 A 工作区的事件不再清 B 的回合态、不再抑制 B 的里程碑。
+    // 事件→意图（实测 dsh-session known-event-types：tool/call、approval/asked、session/title 均在 session/event 流内）：
+    //   session/title → 更新该会话 title/label（不开口，只影响之后的播报）
     //   user/message → 清 blocking + resetTurn（不开口）
     //   turn/start → resetTurn
     //   tool/call（回合首个）→ START；累计 stepCount/工具名（里程碑步数依据）
     //   approval/asked → BLOCK B1；approval/decided → 清 blocking
     //   assistant/message 含 ask_user_question → BLOCK B2；含 exit_plan_mode → BLOCK B3（计划审批）；含 goal 完成类调用 → turnGoalDone
     //   goal/change operation=complete → turnGoalDone（不直接播，等 turn/end 归一 A3）
-    //   turn/end → handleTurnEnd()：goal 完成过 → 'goal'（A3）；否则 'done'（LLM/模板）；随后清回合状态
+    //   turn/end → handleTurnEnd()：goal 完成过 → 'goal'（A3）；否则 'done'（LLM/模板）；随后清该会话回合状态
     ctx.effect(() => ctx.on('session/event', (session, event) => {
       try {
         if (event === null || typeof event !== 'object') return
         const t = event.type
         const d = event.data
+        // 注册表续活（首见注册；标题/cwd 变更重算标签）——session 不可用时 rec 为 null，状态落默认槽（退化为单一槽行为）
+        const rec = touchSession(session)
+        if (t === 'session/title') {
+          setSessionTitle(rec, d && typeof d === 'object' ? d.title : undefined)
+          return
+        }
+        const sid = rec === null ? '' : rec.sid
+        const st = stateFor(sid)
         if (t === 'user/message') {
-          // 用户新消息到来：解除阻塞标记、记录输入、开启新回合（纯聊天回合不开口）
-          narrState.blocking = null
+          // 用户新消息到来：解除阻塞标记、记录输入、开启新回合（纯聊天回合不开口）——只动本会话
+          st.blocking = null
           const text = userMessageText(d).slice(0, 200)
-          if (text.length > 0) narrState.lastUserText = text
-          resetTurn()
+          if (text.length > 0) st.lastUserText = text
+          resetTurn(st)
           return
         }
         if (t === 'turn/start') {
-          resetTurn()
+          resetTurn(st)
           return
         }
         if (t === 'turn/end') {
-          handleTurnEnd(d)
+          handleTurnEnd(d, st)
           return
         }
         if (t === 'tool/call') {
           // 有据开工：回合首个工具调用 → START（每回合一次，由 startSpoken 保证）
-          narrState.stepCount += 1
+          st.stepCount += 1
           const name = d && typeof d === 'object' ? String(d.name || '') : ''
-          if (name.length > 0) narrState.toolNames[name] = (narrState.toolNames[name] || 0) + 1
-          if (!narrState.startSpoken) {
-            narrState.startSpoken = true
-            narrate('start', {})
+          if (name.length > 0) st.toolNames[name] = (st.toolNames[name] || 0) + 1
+          if (!st.startSpoken) {
+            st.startSpoken = true
+            narrate('start', { sid })
           }
           // 步数型里程碑即时检查（时间型由 30s 巡检兜底）
           const steps = typeof config.narratorMilestoneSteps === 'number' ? config.narratorMilestoneSteps : 10
-          if (!narrState.milestoneSpoken && narrState.stepCount >= steps) maybeMilestone()
+          if (!st.milestoneSpoken && st.stepCount >= steps) maybeMilestone(st)
           return
         }
         if (t === 'approval/asked') {
-          // 权限审批等待 → BLOCK B1（对 payload 防御式取用）
-          narrState.blocking = 'b1'
-          narrate('block', { variant: 'b1' })
+          // 权限审批等待 → BLOCK B1（对 payload 防御式取用）——只置本会话 blocking
+          st.blocking = 'b1'
+          narrate('block', { sid, variant: 'b1' })
           return
         }
         if (t === 'approval/decided') {
-          // 审批已有答复：解除阻塞（不开口）
-          if (narrState.blocking) narrState.blocking = null
+          // 审批已有答复：解除本会话阻塞（不开口）
+          if (st.blocking) st.blocking = null
           return
         }
         if (t === 'goal/change') {
           const gd = d
           if (gd && typeof gd === 'object' && typeof gd.operation === 'string') {
-            if (gd.operation === 'complete') narrState.turnGoalDone = true
+            if (gd.operation === 'complete') st.turnGoalDone = true
           }
           return
         }
@@ -2607,13 +2813,13 @@ export function apply(ctx) {
           const msg = d && d.message
           if (msg && typeof msg === 'object') {
             if (msgHasToolCall(msg, ['ask_user_question'])) {
-              narrState.blocking = 'b2'
-              narrate('block', { variant: 'b2' })
+              st.blocking = 'b2'
+              narrate('block', { sid, variant: 'b2' })
             } else if (msgHasToolCall(msg, ['exit_plan_mode'])) {
-              narrState.blocking = 'b3'
-              narrate('block', { variant: 'b3' })
+              st.blocking = 'b3'
+              narrate('block', { sid, variant: 'b3' })
             }
-            if (msgHasGoalDoneCall(msg)) narrState.turnGoalDone = true
+            if (msgHasGoalDoneCall(msg)) st.turnGoalDone = true
           }
           return
         }
@@ -2627,6 +2833,8 @@ export function apply(ctx) {
     // 注：goal 完成由 session 事件流 goal/change + assistant/message 工具扫描置 turnGoalDone，
     //     turn/end 统一归一为 A3（goal）/DONE（普通）——goal/changed 是 agent 作用域事件，全局插件收不到，勿再依赖。
     // 子代理结束 → special A4-1；工作流完成/出错 → special A4-2/A4-3；后台任务结束 → special A4-4；agent/error → FAIL F1/F2
+    // 多工作区（Task 1）：这些事件不带 sid → 落默认槽（defaultSlot），与任何会话的回合态/节流互不干扰；
+    // 会话事件从不产生 special/fail 语义，故单会话下节奏与现状一致。
     ctx.effect(() => ctx.on('subagent/end', (info) => {
       try {
         if (info && info.stopReason) narrate('special', { variant: 'subagent' })
@@ -2666,9 +2874,14 @@ export function apply(ctx) {
       try { scheduleSaveNarrator() } catch (e) { /* ignore */ }
     }, 60000))
 
-    // 进度叙事：里程碑巡检（30s 独立 tick；时间型阈值兜底，回合结束/新消息即复位）
+    // 进度叙事：里程碑巡检（30s 独立 tick；遍历各活跃会话，各按自己的时间/步数与 milestoneSpoken 判定；
+    // 空闲会话（无 turnActive）在 maybeMilestone 内直接跳过；multiSession:false 时只有默认槽一项 = 现状行为）
     ctx.effect(() => ctx.interval(() => {
-      try { maybeMilestone() } catch (e) { /* ignore */ }
+      let states
+      try { states = activeStates() } catch (e) { return }
+      for (let i = 0; i < states.length; i++) {
+        try { maybeMilestone(states[i]) } catch (e) { /* ignore */ }
+      }
     }, 30000))
 
     // 卸载插件时终止常驻 TTS worker
