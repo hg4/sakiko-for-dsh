@@ -1795,15 +1795,18 @@ export function apply(ctx) {
       const kindLine = kind === 'milestone'
         ? '作業が長引いているので、順調であることと継続を伝える一言を。'
         : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
-      const prompt =
-        '【セッション情報】\n' +
-        (wsLine ? wsLine + '\n' : '') +
-        '最近のユーザー発言：' + (userMsg || '（なし）') + '\n' +
-        'このターンのツール使用：' + toolLine + '\n' +
-        '前回の進捗サマリ：' + (prevSummary || '（なし）') + '\n' +
-        (blockingLine ? blockingLine + '\n' : '') +
-        kindLine
+      // Fix R2（Minor-B）：prompt 构造也放进 try —— 本区（含 wsLine/shardSummary/prevSummary 等）
+      // 一旦抛异常，必须走 catch 回退模板，绝不能把异常抛给调用方而丢掉整条播报。
+      // 不变量：**LLM 路径的任何异常都要能回退模板/放弃 LLM 句，绝不吞掉播报**。
       try {
+        const prompt =
+          '【セッション情報】\n' +
+          (wsLine ? wsLine + '\n' : '') +
+          '最近のユーザー発言：' + (userMsg || '（なし）') + '\n' +
+          'このターンのツール使用：' + toolLine + '\n' +
+          '前回の進捗サマリ：' + (prevSummary || '（なし）') + '\n' +
+          (blockingLine ? blockingLine + '\n' : '') +
+          kindLine
         const raw = await Promise.race([
           aiComplete(wsLine ? (NARR_LLM_SYSTEM + '\n' + NARR_LLM_WS_RULE) : NARR_LLM_SYSTEM, [{ role: 'user', content: prompt }], 160),
           ctx.timeout(30000).then(() => { throw new Error('narrate llm timeout') }),
@@ -1954,7 +1957,16 @@ export function apply(ctx) {
       // 因此期间存在被其它并发交付取代的可能 → 需要返回后重核。
       const llmAttempted = llmEligible
       if (llmEligible) {
-        const llm = await narrateSummary(intent, opts) // lastLLMAt 于 narrateSummary 入口登记（先于其 await）
+        // Fix R2（Minor-B）：调用侧兜底 —— narrateSummary 内部虽已自兜底（含 prompt 构造的 try），
+        // 但这里再包一层：**LLM 路径的任何异常都只降级为「放弃 LLM 句、走模板」，绝不冒泡到
+        // deliverNarration 之外**（否则整条播报会被丢掉，只留一行 console.error）。
+        let llm = null
+        try {
+          llm = await narrateSummary(intent, opts) // lastLLMAt 于 narrateSummary 入口登记（先于其 await）
+        } catch (e) {
+          console.warn('[amadeus] 进度总结异常，回退模板:', e && e.message ? e.message : String(e))
+          llm = null
+        }
         if (llm !== null) { line = llm; source = 'llm' }
       }
       if (line === null) {
