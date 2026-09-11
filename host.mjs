@@ -1328,6 +1328,11 @@ export function apply(ctx) {
       if (config.multiSession === false) return [defaultSlot.state]
       const out = []
       for (const rec of sessions.values()) out.push(rec.state)
+      // Fix R1（Minor-1）：multiSession:true 下若事件无归属（session 为 falsy → 状态落默认槽），
+      // 该回合也要被 30s 巡检覆盖——步数型里程碑在 tool/call 分支内即时判定，时间型只能靠巡检，
+      // 漏掉默认槽会让「无归属回合」的时间型里程碑永不触发（并入后才是真正等价旧单一槽行为）。
+      // 默认槽空闲（turnActive!==true）时不并入：多会话常态下巡检规模与之前一致。
+      if (defaultSlot.state.turnActive === true) out.push(defaultSlot.state)
       return out
     }
     // 焦点状态（narratorStatus.state）：单一默认槽，或最近活跃的会话态
@@ -1338,6 +1343,33 @@ export function apply(ctx) {
         if (best === null || rec.lastActiveAt > best.lastActiveAt) best = rec
       }
       return best === null ? defaultSlot.state : best.state
+    }
+    // 复位一个回合态（保留 sid 与对象引用）：回合瞬态清零 + 节流占位清空。
+    // 注意与 resetTurn(st) 的区别：那个是「开新回合」，本函数是「抹掉现有回合」。
+    function clearTurnState(st) {
+      st.turnActive = false
+      st.turnStartAt = 0
+      st.stepCount = 0
+      st.startSpoken = false
+      st.milestoneSpoken = false
+      st.turnGoalDone = false
+      st.blocking = null
+      st.lastUserText = ''
+      st.toolNames = {}
+      st.lastDoneFamilyAt = 0
+      st.lastSpokeByIntent.clear()
+    }
+    // Fix R1（Important-2）：multiSession false→true 回切时复位保留的分片态。
+    // false 期间所有事件只写默认槽，各会话分片停在回切前的旧值；直接复活会造成：
+    //   ① 30s 巡检为早已结束的回合补播里程碑（陈旧 turnActive/turnStartAt/stepCount）；
+    //   ② 陈旧 blocking 长期抑制该会话的里程碑；
+    //   ③ 陈旧 turnActive=true 使该记录永不被 evictSessions 淘汰（超上限时直接 break）。
+    // 因此回切即清空各会话态与默认槽（label/cwd/title/lastActiveAt/注册表条目全部保留；
+    // 正在 in-flight 的回合会回到「未开口」状态，其后续 tool/call 会重新走 START——这是回切语义的已知代价）。
+    function resetRetainedStates() {
+      for (const rec of sessions.values()) clearTurnState(rec.state)
+      clearTurnState(defaultSlot.state)
+      return sessions.size
     }
 
     const poolLastUsed = new Map()      // 每池最近使用的一条（供状态查看 / LRU 沉底确认）
@@ -1569,15 +1601,31 @@ export function apply(ctx) {
     function flushNarrBatch() {
       const batch = narrPendingBatch.splice(0, narrPendingBatch.length)
       if (batch.length === 0) return
-      // 同一时刻多事件：只取最高优先级一条（BLOCK40 > FAIL30 > DONE/GOAL20 > SPECIAL15 > MILESTONE10 > START5）
-      let best = batch[0]
-      for (let i = 1; i < batch.length; i++) {
-        const c = batch[i]
-        if ((NARR_PRIORITY[c.intent] || 0) > (NARR_PRIORITY[best.intent] || 0)) best = c
+      // 同一时刻多事件：**按 sid 分组**，每组只取最高优先级一条
+      // （BLOCK40 > FAIL30 > DONE/GOAL20 > SPECIAL15 > MILESTONE10 > START5）。
+      // 多工作区（Fix R1 / spec §4「同刻批内取最高 → per-session」）：分组键 = opts.sid（无归属事件归 '' 默认槽）——
+      //   A、B 在同一同步 tick 内各自的 START/DONE 都会各播一条（全局队列串行播放，不吞句）；
+      //   单会话（或整批都无 sid）时只有一组，取最高优先级的语义与现状逐字相同（零回归）；
+      //   组内比较用严格大于 → 同优先级先入者胜（与现状口径一致）；组间按首次出现顺序依次交付，顺序确定。
+      const groups = new Map()
+      for (let i = 0; i < batch.length; i++) {
+        const item = batch[i]
+        const key = (item.opts && typeof item.opts.sid === 'string' && item.opts.sid.length > 0) ? item.opts.sid : ''
+        const list = groups.get(key)
+        if (list === undefined) groups.set(key, [item])
+        else list.push(item)
       }
-      deliverNarration(best.intent, best.opts).catch((e) => {
-        console.error('[amadeus] 进度播报失败:', e && e.message ? e.message : String(e))
-      })
+      for (const list of groups.values()) {
+        let best = list[0]
+        for (let i = 1; i < list.length; i++) {
+          const c = list[i]
+          if ((NARR_PRIORITY[c.intent] || 0) > (NARR_PRIORITY[best.intent] || 0)) best = c
+        }
+        // 逐组 fire-and-forget：各组交付入口同步完成门检查与占位登记（Fix R1 的并发不变量不变）
+        deliverNarration(best.intent, best.opts).catch((e) => {
+          console.error('[amadeus] 进度播报失败:', e && e.message ? e.message : String(e))
+        })
+      }
     }
 
     // 决定台词 → 留痕 → 出声（speakSynced 队列串行，不叠播）
@@ -2626,7 +2674,11 @@ export function apply(ctx) {
 
     ctx.effect(() => harnessLocal.handle('setConfig', async (patch) => {
       const clean = sanitizePatch(patch)
+      const wasMultiSession = config.multiSession !== false
       config = Object.assign({}, config, clean)
+      // Fix R1（Important-2）：multiSession false→true 回切 → 复位保留的分片态，
+      // 避免陈旧 turnActive/blocking/stepCount 复活（见 resetRetainedStates 注释）
+      if (wasMultiSession === false && config.multiSession !== false) resetRetainedStates()
       await saveConfig()
       return config
     }))
