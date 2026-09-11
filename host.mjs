@@ -1542,6 +1542,14 @@ export function apply(ctx) {
       }
       return out
     }
+    // 与注册表侧 `sessionBlocksEviction(rec, now)` 对称只读判据：该 sid 的分片是否受保护（会话仍在活跃推进）。
+    // 两侧共用同一套「turnActive 且 lastActiveAt 新鲜（<= NARR_AUTO_IDLE_MS）」语义，避免出现
+    // 「注册表认为某会话仍在跑、分片却把它当空闲淘汰」的不一致。
+    function progressShardIsLive(sid, now) {
+      const rec = sessions.get(sid)
+      if (rec === undefined) return false
+      return rec.state.turnActive === true && (now - rec.lastActiveAt) <= NARR_AUTO_IDLE_MS
+    }
     // 写入/累加某会话的进度记忆；无归属（sid 为空）不计入
     function recordProgress(sid, patch) {
       const key = (typeof sid === 'string' && sid.length > 0) ? sid : ''
@@ -1557,7 +1565,12 @@ export function apply(ctx) {
       }
       const p = patch && typeof patch === 'object' ? patch : {}
       if (typeof p.lastUserText === 'string' && p.lastUserText.length > 0) e.lastUserText = p.lastUserText.slice(0, 200)
-      if (p.tools && typeof p.tools === 'object' && !Array.isArray(p.tools)) e.tools = Object.assign({}, p.tools)
+      // Fix R1（Minor-1）：tools 只在**本轮确实用过工具**时才覆盖（与 lastUserText 的 length>0 守卫语义对称）。
+      // 否则一个纯聊天回合（无 tool/call）会把上一次的工具集清成 {}，使字段语义不稳定。
+      // 字段语义由此固定为：「最近一轮**有工具的**回合的工具集」。
+      if (p.tools && typeof p.tools === 'object' && !Array.isArray(p.tools)) {
+        if (Object.keys(p.tools).length > 0) e.tools = Object.assign({}, p.tools)
+      }
       if (p.milestoneBump === true) e.milestoneCount += 1
       if (typeof p.lastSummary === 'string' && p.lastSummary.length > 0) e.lastSummary = p.lastSummary.slice(0, 200)
       e.updatedAt = Date.now()
@@ -1569,13 +1582,22 @@ export function apply(ctx) {
         lastSummary: typeof e.lastSummary === 'string' ? e.lastSummary : '',
         updatedAt: e.updatedAt,
       }
-      // 上限淘汰：超出时分片与摘要一起丢最老者（防长跑宿主无限增长）
+      // 上限淘汰（Fix R1 / Minor-2）：与注册表侧 `sessionBlocksEviction(rec, now)` 语义**对称**——
+      // 「sid 仍在注册表内且 turnActive 且新鲜」的分片受保护，先淘汰「不在注册表内**或**非活跃」的最老者；
+      // 若这样腾不出名额（候选全是仍在跑的会话），再退化为按 updatedAt 全量淘汰最老者，保证硬上限不被突破。
       const keys = Object.keys(memory.progress)
       if (keys.length > NARR_PROGRESS_MAX) {
-        keys.sort((a, b) => ((memory.progress[a] && memory.progress[a].updatedAt) || 0) - ((memory.progress[b] && memory.progress[b].updatedAt) || 0))
-        for (let i = 0; i < keys.length - NARR_PROGRESS_MAX; i++) {
-          delete memory.progress[keys[i]]
-          delete narrGlobal.sessions[keys[i]]
+        const need = keys.length - NARR_PROGRESS_MAX
+        const nowMs = Date.now()
+        const byOldest = (a, b) => ((memory.progress[a] && memory.progress[a].updatedAt) || 0) - ((memory.progress[b] && memory.progress[b].updatedAt) || 0)
+        const doomed = keys.filter((k) => !progressShardIsLive(k, nowMs)).sort(byOldest).slice(0, need)
+        if (doomed.length < need) {
+          const rest = keys.filter((k) => doomed.indexOf(k) < 0).sort(byOldest)
+          for (let i = 0; i < rest.length && doomed.length < need; i++) doomed.push(rest[i])
+        }
+        for (let i = 0; i < doomed.length; i++) {
+          delete memory.progress[doomed[i]]
+          delete narrGlobal.sessions[doomed[i]]
         }
       }
       scheduleSaveMemory()
@@ -1752,7 +1774,6 @@ export function apply(ctx) {
         : '（ツール呼び出しなし）'
       const isBlocked = (o.blocking !== undefined) ? !!o.blocking : !!st.blocking
       const blockingLine = isBlocked ? '（ユーザーの確認・返答を待っています）' : ''
-      const prevSummary = narrGlobal.lastSummary ? narrGlobal.lastSummary.slice(0, 200) : ''
       // Task 2：工作区名注入（label 来自注册表；cwd basename 在可用且与 label 不同时附注）。
       // 无归属（无 sid / 标签不可得）或 multiSession:false（总开关关闭=完全退回现状）→ 不注入，
       // system/prompt 与改前逐字相同（零回归 + 一键回退语义）。
@@ -1764,6 +1785,13 @@ export function apply(ctx) {
       const wsLine = wsName.length > 0
         ? '作業中のワークスペース：' + wsName + (wsBase.length > 0 && wsBase !== wsName ? '（フォルダ名：' + wsBase + '）' : '')
         : ''
+      // Fix R1（Minor-4）：上一句总结优先取**本会话**的分片（更贴题：说的是这个工作区自己的进展）；
+      // 分片缺失/为空（老档、未写过、无归属事件）→ 回落全局 `narrGlobal.lastSummary`，
+      // 因此单会话与无分片场景的 prompt 与改动前逐字相同。全局 lastSummary 仍是写入侧与兼容读的兜底。
+      const shardProgress = (wsSid.length > 0 && memory.progress && typeof memory.progress === 'object') ? memory.progress[wsSid] : undefined
+      const shardSummary = (shardProgress && typeof shardProgress.lastSummary === 'string' && shardProgress.lastSummary.length > 0) ? shardProgress.lastSummary : ''
+      const globalSummary = (typeof narrGlobal.lastSummary === 'string' && narrGlobal.lastSummary.length > 0) ? narrGlobal.lastSummary : ''
+      const prevSummary = String(shardSummary || globalSummary).slice(0, 200)
       const kindLine = kind === 'milestone'
         ? '作業が長引いているので、順調であることと継続を伝える一言を。'
         : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
@@ -2910,6 +2938,8 @@ export function apply(ctx) {
           lastActiveAt: rec.lastActiveAt,
           lastUserText: (pe && typeof pe.lastUserText === 'string') ? pe.lastUserText.slice(0, 100) : '',
           milestoneCount: (pe && typeof pe.milestoneCount === 'number') ? pe.milestoneCount : 0,
+          // Fix R1（Minor-4）：暴露分会话最近总结（供 Task 5 核对 LLM 输入的来源）
+          lastSummary: (pe && typeof pe.lastSummary === 'string') ? pe.lastSummary.slice(0, 100) : '',
         })
       }
       sessionRows.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
