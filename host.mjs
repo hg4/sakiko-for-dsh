@@ -412,7 +412,8 @@ export function apply(ctx) {
       return s.length > n ? s.slice(0, n) : s
     }
     // tags 只取 announce/narrate/sid/label 四个可控字段并入日志（其它 tags 不入日志，避免夹带敏感数据）
-    // sid/label（Task 2 播报归属）：push / synth_start / synth_done 三类行随之带上工作区标签，便于按会话排查
+    // sid/label（Task 2 播报归属）：`push` / `synth_start` 两类行随之带上工作区标签，便于按会话排查。
+    // 注：`synth_done` / `synth_fail` 只记耗时（Fix R1 / M3：那两行本就没有 tags 字段，保持既有日志结构不变）。
     function tlTagFields(tags) {
       const o = {}
       if (tags && typeof tags === 'object') {
@@ -1050,6 +1051,9 @@ export function apply(ctx) {
       })
     }
 
+    // Fix R1（M5）：队列条目的 tags 白名单——只允许这些已知键由调用方透传到面板条目与日志
+    const QUEUE_TAG_KEYS = ['announce', 'narrate', 'sid', 'label', 'idle']
+
     function pushUtterances(texts, force, emotion, cn, tags) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
       for (let i = 0; i < texts.length; i++) {
@@ -1061,8 +1065,14 @@ export function apply(ctx) {
           if (per !== 'neutral') e = per
         }
         const item = { id: nextId, kind: 'say', text: t.trim(), cn: i === texts.length - 1 ? (cn || '') : '', force: !!force, emotion: e, expr: EMOTION_EXPR[e] || '', ts: Date.now() }
+        // Fix R1（M5）：tags → 条目的透传改为**白名单**（防御性）。此前是 `for (const k in tags)`，
+        // 调用方误传大对象/敏感字段会直接进队列条目与时间线日志。已知键：announce/narrate（播报标记）、
+        // sid/label（Task 2 归属）、idle（空闲闲聊）。其余键一律忽略。
         if (tags && typeof tags === 'object') {
-          for (const k in tags) item[k] = tags[k]
+          for (let k = 0; k < QUEUE_TAG_KEYS.length; k++) {
+            const key = QUEUE_TAG_KEYS[k]
+            if (tags[key] !== undefined) item[key] = tags[key]
+          }
         }
         queue.push(item)
         nextId += 1
@@ -1136,6 +1146,15 @@ export function apply(ctx) {
     // ============================================================
     const NARR_INTENT_GAP_MS = 8000   // 同意图 8s 合并窗
     const NARR_LLM_GAP_MS = 8000      // LLM 总结最低间隔（防连续回合烧 token）
+    // Fix R1（Important-1）：刚收尾的会话仍计入「活跃」的宽限窗。
+    // 原因：handleTurnEnd 先把 turnActive 置 false 再 narrate('done')，交付又发生在微任务之后——
+    // 若判定只看 turnActive，并发/先后收尾时最后一个收尾者会看到「只剩自己」→ auto 掉前缀。
+    // 取值与 done/goal 同族 8s 窗一致：8s 内的收尾视为同一次「多工作区收尾」。
+    const NARR_ACTIVE_GRACE_MS = 8000
+    // Fix R1（Important-2）：turnActive 的陈旧上限——超过此时长没有任何事件（lastActiveAt 过旧）的会话
+    // 按空闲处理（漏收尾/窗口中途关闭的会话不再长期污染 auto 判定，也不再永占注册表名额）。
+    // 30 分钟：长工具调用期间 session/event 事件流不断，正常回合不会 30 分钟无事件。
+    const NARR_AUTO_IDLE_MS = 1800000
     const NARR_PRIORITY = { block: 40, fail: 30, done: 20, goal: 20, special: 15, milestone: 10, start: 5 }
     const NARR_LLM_EMOTIONS = ['happy', 'soft', 'neutral', 'question', 'excited']
 
@@ -1200,6 +1219,7 @@ export function apply(ctx) {
         blocking: null,        // 'b1'..'b4' | null
         lastUserText: '',
         toolNames: {},         // 本轮工具名 → 次数
+        turnEndedAt: 0,        // 本回合收尾时刻（Fix R1：auto 活跃判定的 8s 宽限窗依据）
         // ---- 节流占位（per-session：Task 3 在此之上加跨会话互斥窗） ----
         lastDoneFamilyAt: 0,             // done/goal 完成语义 8s 互斥窗
         lastSpokeByIntent: new Map(),    // 同意图最近发声时刻
@@ -1283,7 +1303,7 @@ export function apply(ctx) {
       if (sessions.size <= SESSIONS_MAX) return
       if (!sessionsWarnedFull) {
         sessionsWarnedFull = true
-        console.warn('[amadeus] 会话注册表达上限 ' + SESSIONS_MAX + '：开始淘汰最久未活跃的会话（被淘汰会话的标签/回合状态将失效）')
+        console.warn('[amadeus] 会话注册表已满：上限 ' + SESSIONS_MAX + ' 条，开始淘汰最久未活跃的会话（被淘汰会话的标签/回合状态将失效）')
       }
       while (sessions.size > SESSIONS_MAX) {
         let victimKey = null
@@ -1379,6 +1399,7 @@ export function apply(ctx) {
       st.blocking = null
       st.lastUserText = ''
       st.toolNames = {}
+      st.turnEndedAt = 0
       st.lastDoneFamilyAt = 0
       st.lastSpokeByIntent.clear()
     }
@@ -1408,21 +1429,48 @@ export function apply(ctx) {
       if (rec === undefined) return ''
       return typeof rec.label === 'string' ? rec.label : ''
     }
-    // 活跃会话数（prefix='auto' 的判定）：注册表中 turnActive===true 的会话数；
-    // 简报口径「含本次事件所属会话」→ includeSid 即使尚未置 turnActive 也算一份（首个事件即 tool/call 的情形）；
-    // 无归属事件（sid 为空）不计入；multiSession:false 时全部会话共用一个槽 → 活跃数取默认槽（0/1），
-    // 因此 auto 在单一槽模式下恒不加前缀 = 现状。
+    // 单个会话此刻是否算「活跃」（prefix='auto' 判定的基础，Fix R1 重构）：
+    //   ① 回合进行中且回合没有久到失去联系（lastActiveAt 在 NARR_AUTO_IDLE_MS 内）→ 活跃
+    //      （Important-2：漏收尾/窗口中途关闭而永久 turnActive 的会话，30 分钟后不再算活跃）
+    //   ② 或 刚收尾（turnEndedAt 在 NARR_ACTIVE_GRACE_MS 宽限窗内）→ 活跃
+    //      （Important-1：并发/先后收尾时，各自的 DONE 都能看到「有多个工作区在收尾」→ 都带前缀）
+    function sessionCountsAsActive(rec, now) {
+      const st = rec.state
+      if (st.turnActive === true && (now - rec.lastActiveAt) <= NARR_AUTO_IDLE_MS) return true
+      if (typeof st.turnEndedAt === 'number' && st.turnEndedAt > 0 && (now - st.turnEndedAt) <= NARR_ACTIVE_GRACE_MS) return true
+      return false
+    }
+    // 活跃会话数（prefix='auto' 的判定）：
+    //   - 逐会话按 sessionCountsAsActive 计（每个会话最多计一次）；
+    //   - 简报口径「含本次事件所属会话」→ includeSid 即使两项都不成立也算一份（首个事件即 tool/call、或本次事件刚把它激活）；
+    //   - 无归属事件（sid 为空）不计入；multiSession:false 时全部会话共用一个槽 → 取默认槽（0/1），auto 恒不加前缀 = 现状。
     function activeSessionCount(includeSid) {
       if (config.multiSession === false) return defaultSlot.state.turnActive === true ? 1 : 0
+      const now = Date.now()
       let n = 0
       for (const rec of sessions.values()) {
-        if (rec.state.turnActive === true) n += 1
+        if (sessionCountsAsActive(rec, now)) n += 1
       }
       if (typeof includeSid === 'string' && includeSid.length > 0) {
         const rec = sessions.get(includeSid)
-        if (rec !== undefined && rec.state.turnActive !== true) n += 1
+        if (rec !== undefined && !sessionCountsAsActive(rec, now)) n += 1
       }
       return n
+    }
+    // Fix R1（Important-2 加固）：把「久无事件却仍 turnActive」的会话按空闲收尾。
+    // 既让 auto 判定不再被污染，也让这些记录重新可被 evictSessions 淘汰（否则永占注册表名额）。
+    // 只在 multiSession:true 下执行（单一槽模式由默认槽承担，各分片本就冻结）。
+    function sweepStaleTurns() {
+      if (config.multiSession === false) return 0
+      const now = Date.now()
+      let cleared = 0
+      for (const rec of sessions.values()) {
+        if (rec.state.turnActive !== true) continue
+        if ((now - rec.lastActiveAt) <= NARR_AUTO_IDLE_MS) continue
+        clearTurnState(rec.state)
+        cleared += 1
+      }
+      return cleared
     }
     // 气泡前缀：'always' → 有归属即带；'auto' → 活跃会话 ≥2 才有；标签不可得（无 sid/未注册/空 label）→ 恒为 ''
     // multiSession:false（总开关关闭）→ 恒为 ''：spec §4「关=退回现状单例行为」/§5.5「完全退回现状」，
@@ -1508,6 +1556,7 @@ export function apply(ctx) {
       st.turnActive = true
       st.turnStartAt = now
       st.toolNames = {}
+      st.turnEndedAt = 0   // 新回合开始 → 不再算「刚收尾」（Fix R1）
     }
 
     function userMessageText(d) {
@@ -1664,6 +1713,9 @@ export function apply(ctx) {
     //   同意图 8s 合并（按 opts.sid 所属会话计入其 lastSpokeByIntent）；同一时刻多事件由微任务批收集后取最高优先级一条；
     //   done 受 narratorDone 开关；force=true（testNarrator）绕过节流/回合内一次性标记，仍受 narratorOn/voiceOn 约束。
     //   opts.sid 缺省（子代理/工作流/后台任务/testNarrator）→ 落默认槽：与任何会话的节流互不干扰。
+    //   气泡前缀在**本入口（事件处理同步段内）**算好并写入 opts（Fix R1 / Important-1）——
+    //   交付发生在微任务之后，届时 turnActive 可能已被 handleTurnEnd 清掉；事件时刻快照才能反映
+    //   「此刻有几个工作区在跑」的真实时序（并发收尾的最后一位也能带前缀）。
     function narrate(intent, opts) {
       const o = opts && typeof opts === 'object' ? opts : {}
       const now = Date.now()
@@ -1675,6 +1727,7 @@ export function apply(ctx) {
         const last = st.lastSpokeByIntent.get(intent)
         if (typeof last === 'number' && now - last < NARR_INTENT_GAP_MS) return { ok: false, reason: 'merged-same-intent' }
       }
+      if (typeof o.bubblePrefix !== 'string') o.bubblePrefix = bubblePrefixFor(o.sid)
       narrPendingBatch.push({ intent, opts: o, at: now })
       if (!narrBatchScheduled) {
         narrBatchScheduled = true
@@ -1775,7 +1828,9 @@ export function apply(ctx) {
       // memory.history 仍存不带前缀的原文（避免污染聊天上下文；{sid,label} 字段留 Task 4 记忆分层）。
       const sidKey = (typeof opts.sid === 'string' && opts.sid.length > 0) ? opts.sid : ''
       const narrLabel = labelForSid(sidKey)
-      const prefix = bubblePrefixFor(sidKey)
+      // Fix R1（Important-1）：优先用 narrate() 入口写下的**事件时刻快照**；仅当调用方没走 narrate
+      // （或快照缺失）时回落到此刻现算。这样「最后一个收尾者」也不会因为 turnActive 已被清掉而掉前缀。
+      const prefix = (typeof opts.bubblePrefix === 'string') ? opts.bubblePrefix : bubblePrefixFor(sidKey)
       const bubbleCn = prefix.length > 0 ? prefix + cnText : cnText
       memory.history.push({ role: 'assistant', jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral', announce: true, narrate: intent, t: Date.now() })
       if (memory.history.length > 60) maybeCompactHistory()
@@ -1815,6 +1870,7 @@ export function apply(ctx) {
       const skipKinds = ['blocked', 'error', 'aborted', 'interrupted', 'max-tokens']
       if (kind !== undefined && skipKinds.indexOf(kind) >= 0) {
         st.turnActive = false
+        st.turnEndedAt = Date.now()   // Fix R1：收尾时刻（auto 活跃宽限窗依据）
         return
       }
       const goalDone = st.turnGoalDone === true
@@ -1826,6 +1882,7 @@ export function apply(ctx) {
         blocking: st.blocking,
       }
       st.turnActive = false
+      st.turnEndedAt = Date.now()   // Fix R1：先记收尾时刻，再 narrate（快照判定时本会话即「刚收尾」）
       st.blocking = null
       st.milestoneSpoken = false
       st.startSpoken = false
@@ -3023,8 +3080,11 @@ export function apply(ctx) {
 
     // 进度叙事：里程碑巡检（30s 独立 tick；遍历各活跃会话，各按自己的时间/步数与 milestoneSpoken 判定；
     // 空闲会话（无 turnActive）在 maybeMilestone 内直接跳过；multiSession:false 时只有默认槽一项 = 现状行为）
+    // Fix R1（Important-2 加固）：先做一次「陈旧回合收尾」清扫——久无事件仍 turnActive 的会话按空闲处理，
+    // 避免它们长期污染 auto 前缀判定、并让这些记录重新可被 evictSessions 淘汰。
     ctx.effect(() => ctx.interval(() => {
       let states
+      try { sweepStaleTurns() } catch (e) { /* ignore */ }
       try { states = activeStates() } catch (e) { return }
       for (let i = 0; i < states.length; i++) {
         try { maybeMilestone(states[i]) } catch (e) { /* ignore */ }
