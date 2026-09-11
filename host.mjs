@@ -1296,25 +1296,32 @@ export function apply(ctx) {
     // 注册表满员淘汰。Task 2 修既存缺陷（复审 probe6）：候选**排除刚注册的 sid**（keepKey）——
     // 改前若全部记录都 turnActive===true，唯一候选恰好是刚注册的新记录 → 新人自我淘汰 →
     // 该会话每来一个事件就重建分片（同回合重复 START、stepCount 读不到）。
-    // 现语义：① 优先淘汰「非回合进行中且非刚注册」的最久未活跃者；
-    //          ② 无空闲候选时退化为淘汰最久未活跃者（含回合进行中，仍排除刚注册者）；
+    // 现语义：① 优先淘汰「非活跃且非刚注册」的最久未活跃者；
+    //          ② 无空闲候选时退化为淘汰最久未活跃者（含活跃者，仍排除刚注册者）；
     //          ③ 极端情形（注册表里除刚注册者外已无记录）不淘汰——宁可短暂超限，也不让新人自我淘汰。
+    // Fix R2（Important-新-1）：「活跃」判据放宽为「turnActive 且 lastActiveAt 新鲜（<= NARR_AUTO_IDLE_MS）」——
+    // 久无事件却仍 turnActive 的陈旧记录因此可以被淘汰（这是清扫函数被删除后唯一的功能缺口），
+    // 且这里是**只读判断**，不会破坏该会话仍在推进的回合态（不重复 START、不丢里程碑、不降级 goal）。
+    function sessionBlocksEviction(rec, now) {
+      return rec.state.turnActive === true && (now - rec.lastActiveAt) <= NARR_AUTO_IDLE_MS
+    }
     function evictSessions(keepKey) {
       if (sessions.size <= SESSIONS_MAX) return
       if (!sessionsWarnedFull) {
         sessionsWarnedFull = true
         console.warn('[amadeus] 会话注册表已满：上限 ' + SESSIONS_MAX + ' 条，开始淘汰最久未活跃的会话（被淘汰会话的标签/回合状态将失效）')
       }
+      const now = Date.now()
       while (sessions.size > SESSIONS_MAX) {
         let victimKey = null
         let victimAt = Infinity
         for (const [key, rec] of sessions) {
           if (key === keepKey) continue                    // 绝不淘汰刚注册者
-          if (rec.state.turnActive === true) continue      // 优先：回合进行中的会话不动
+          if (sessionBlocksEviction(rec, now)) continue    // 优先：仍在活跃推进的会话不动
           if (rec.lastActiveAt < victimAt) { victimAt = rec.lastActiveAt; victimKey = key }
         }
         if (victimKey === null) {
-          // 第二轮：没有空闲候选（例如全部会话都在回合中）→ 退化为淘汰最久未活跃者
+          // 第二轮：没有空闲候选（例如全部会话都在活跃推进）→ 退化为淘汰最久未活跃者
           for (const [key, rec] of sessions) {
             if (key === keepKey) continue
             if (rec.lastActiveAt < victimAt) { victimAt = rec.lastActiveAt; victimKey = key }
@@ -1457,21 +1464,12 @@ export function apply(ctx) {
       }
       return n
     }
-    // Fix R1（Important-2 加固）：把「久无事件却仍 turnActive」的会话按空闲收尾。
-    // 既让 auto 判定不再被污染，也让这些记录重新可被 evictSessions 淘汰（否则永占注册表名额）。
-    // 只在 multiSession:true 下执行（单一槽模式由默认槽承担，各分片本就冻结）。
-    function sweepStaleTurns() {
-      if (config.multiSession === false) return 0
-      const now = Date.now()
-      let cleared = 0
-      for (const rec of sessions.values()) {
-        if (rec.state.turnActive !== true) continue
-        if ((now - rec.lastActiveAt) <= NARR_AUTO_IDLE_MS) continue
-        clearTurnState(rec.state)
-        cleared += 1
-      }
-      return cleared
-    }
+    // 注（Fix R2 / Important-新-1）：这里**不再**做「清扫陈旧回合」的破坏性收尾。
+    // 只读诉求（恢复可淘汰性）已在 evictSessions 的淘汰判据里用一行新鲜度判断实现；
+    // 而 clearTurnState 是破坏性的，会把一个「真在跑但静默 >30 分钟」的回合清掉，导致
+    //   ① 同回合下一个工具调用重复播报 START（startSpoken 被清）；
+    //   ② 该回合剩余里程碑全部失效（maybeMilestone 要求 turnActive===true）；
+    //   ③ turnGoalDone 被清 → 收尾由 A3「goal」降级为 done。
     // 气泡前缀：'always' → 有归属即带；'auto' → 活跃会话 ≥2 才有；标签不可得（无 sid/未注册/空 label）→ 恒为 ''
     // multiSession:false（总开关关闭）→ 恒为 ''：spec §4「关=退回现状单例行为」/§5.5「完全退回现状」，
     // 且保证 multiSession 仍是「一键回退到基线」的开关（前缀与 LLM 注入同属该特性）。
@@ -3080,11 +3078,10 @@ export function apply(ctx) {
 
     // 进度叙事：里程碑巡检（30s 独立 tick；遍历各活跃会话，各按自己的时间/步数与 milestoneSpoken 判定；
     // 空闲会话（无 turnActive）在 maybeMilestone 内直接跳过；multiSession:false 时只有默认槽一项 = 现状行为）
-    // Fix R1（Important-2 加固）：先做一次「陈旧回合收尾」清扫——久无事件仍 turnActive 的会话按空闲处理，
-    // 避免它们长期污染 auto 前缀判定、并让这些记录重新可被 evictSessions 淘汰。
+    // Fix R2（Important-新-1）：本 tick **只读**——不做任何「陈旧回合收尾」清扫（那会破坏静默但仍在跑的回合）。
+    // 陈旧 turnActive 的两处影响改由只读判据处理：auto 判定见 sessionCountsAsActive，淘汰见 sessionBlocksEviction。
     ctx.effect(() => ctx.interval(() => {
       let states
-      try { sweepStaleTurns() } catch (e) { /* ignore */ }
       try { states = activeStates() } catch (e) { return }
       for (let i = 0; i < states.length; i++) {
         try { maybeMilestone(states[i]) } catch (e) { /* ignore */ }
