@@ -411,12 +411,15 @@ export function apply(ctx) {
       const s = String(v === undefined || v === null ? '' : v)
       return s.length > n ? s.slice(0, n) : s
     }
-    // tags 只取 announce/narrate 两个可控字段并入日志（其它 tags 不入日志，避免夹带敏感数据）
+    // tags 只取 announce/narrate/sid/label 四个可控字段并入日志（其它 tags 不入日志，避免夹带敏感数据）
+    // sid/label（Task 2 播报归属）：push / synth_start / synth_done 三类行随之带上工作区标签，便于按会话排查
     function tlTagFields(tags) {
       const o = {}
       if (tags && typeof tags === 'object') {
         if (tags.announce === true) o.announce = true
         if (tags.narrate !== undefined) o.narrate = tags.narrate
+        if (typeof tags.sid === 'string' && tags.sid.length > 0) o.sid = tlTrunc(tags.sid, 64)
+        if (typeof tags.label === 'string' && tags.label.length > 0) o.label = tlTrunc(tags.label, 40)
       }
       return o
     }
@@ -1207,7 +1210,8 @@ export function apply(ctx) {
     const defaultSlot = { state: makeTurnState('') }
     // 会话注册表：sid → { sid, label, cwd, title, lastActiveAt, state }
     const sessions = new Map()
-    const SESSIONS_MAX = 64   // 注册表上限（只淘汰非回合进行中的最久未活跃者）
+    const SESSIONS_MAX = 64   // 注册表上限（满员淘汰：优先非回合进行中者，见 evictSessions）
+    let sessionsWarnedFull = false   // 满员告警只打一次（Task 2）
 
     // ---- 标签三级回退：① session/title 标题 → ② basename(cwd) → ③ basename(cwd)·sid4（撞车双方都加） ----
     function sidOf(session) {
@@ -1269,13 +1273,32 @@ export function apply(ctx) {
         }
       }
     }
-    function evictSessions() {
+    // 注册表满员淘汰。Task 2 修既存缺陷（复审 probe6）：候选**排除刚注册的 sid**（keepKey）——
+    // 改前若全部记录都 turnActive===true，唯一候选恰好是刚注册的新记录 → 新人自我淘汰 →
+    // 该会话每来一个事件就重建分片（同回合重复 START、stepCount 读不到）。
+    // 现语义：① 优先淘汰「非回合进行中且非刚注册」的最久未活跃者；
+    //          ② 无空闲候选时退化为淘汰最久未活跃者（含回合进行中，仍排除刚注册者）；
+    //          ③ 极端情形（注册表里除刚注册者外已无记录）不淘汰——宁可短暂超限，也不让新人自我淘汰。
+    function evictSessions(keepKey) {
+      if (sessions.size <= SESSIONS_MAX) return
+      if (!sessionsWarnedFull) {
+        sessionsWarnedFull = true
+        console.warn('[amadeus] 会话注册表达上限 ' + SESSIONS_MAX + '：开始淘汰最久未活跃的会话（被淘汰会话的标签/回合状态将失效）')
+      }
       while (sessions.size > SESSIONS_MAX) {
         let victimKey = null
         let victimAt = Infinity
         for (const [key, rec] of sessions) {
-          if (rec.state.turnActive === true) continue   // 回合进行中的会话绝不淘汰
+          if (key === keepKey) continue                    // 绝不淘汰刚注册者
+          if (rec.state.turnActive === true) continue      // 优先：回合进行中的会话不动
           if (rec.lastActiveAt < victimAt) { victimAt = rec.lastActiveAt; victimKey = key }
+        }
+        if (victimKey === null) {
+          // 第二轮：没有空闲候选（例如全部会话都在回合中）→ 退化为淘汰最久未活跃者
+          for (const [key, rec] of sessions) {
+            if (key === keepKey) continue
+            if (rec.lastActiveAt < victimAt) { victimAt = rec.lastActiveAt; victimKey = key }
+          }
         }
         if (victimKey === null) break
         sessions.delete(victimKey)
@@ -1292,7 +1315,7 @@ export function apply(ctx) {
       }
       sessions.set(sid, rec)
       refreshLabels()
-      evictSessions()
+      evictSessions(sid)   // 传入刚注册的 sid：满员时绝不淘汰新人（Task 2 修复）
       return rec
     }
     // 每次 session/event 续活：首见注册；cwd 变化时重算标签；lastActiveAt 每次事件刷新
@@ -1370,6 +1393,48 @@ export function apply(ctx) {
       for (const rec of sessions.values()) clearTurnState(rec.state)
       clearTurnState(defaultSlot.state)
       return sessions.size
+    }
+
+    // ============================================================
+    // Task 2：播报归属与工作区标签（气泡前缀 + LLM 注入）
+    //   标签来源 = Task 1 注册表的 label（会话标题 → basename(cwd) → basename(cwd)·sid4）
+    //   口径（用户已确认）：气泡 CN 带「〔<label>〕」；jp 语音文本一律不改（不把中文名塞进日文 TTS）；
+    //   无归属播报（无 sid：启动欢迎语 / 空闲闲聊 / 来电 / 子代理·工作流·后台任务 special / testNarrator）
+    //   一律不加前缀。
+    // ============================================================
+    function labelForSid(sid) {
+      if (typeof sid !== 'string' || sid.length === 0) return ''
+      const rec = sessions.get(sid)
+      if (rec === undefined) return ''
+      return typeof rec.label === 'string' ? rec.label : ''
+    }
+    // 活跃会话数（prefix='auto' 的判定）：注册表中 turnActive===true 的会话数；
+    // 简报口径「含本次事件所属会话」→ includeSid 即使尚未置 turnActive 也算一份（首个事件即 tool/call 的情形）；
+    // 无归属事件（sid 为空）不计入；multiSession:false 时全部会话共用一个槽 → 活跃数取默认槽（0/1），
+    // 因此 auto 在单一槽模式下恒不加前缀 = 现状。
+    function activeSessionCount(includeSid) {
+      if (config.multiSession === false) return defaultSlot.state.turnActive === true ? 1 : 0
+      let n = 0
+      for (const rec of sessions.values()) {
+        if (rec.state.turnActive === true) n += 1
+      }
+      if (typeof includeSid === 'string' && includeSid.length > 0) {
+        const rec = sessions.get(includeSid)
+        if (rec !== undefined && rec.state.turnActive !== true) n += 1
+      }
+      return n
+    }
+    // 气泡前缀：'always' → 有归属即带；'auto' → 活跃会话 ≥2 才有；标签不可得（无 sid/未注册/空 label）→ 恒为 ''
+    // multiSession:false（总开关关闭）→ 恒为 ''：spec §4「关=退回现状单例行为」/§5.5「完全退回现状」，
+    // 且保证 multiSession 仍是「一键回退到基线」的开关（前缀与 LLM 注入同属该特性）。
+    function bubblePrefixFor(sid) {
+      if (config.multiSession === false) return ''
+      const label = labelForSid(sid)
+      if (label.length === 0) return ''
+      const mode = typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'auto'
+      if (mode === 'always') return '〔' + label + '〕'
+      if (mode === 'auto') return activeSessionCount(sid) >= 2 ? '〔' + label + '〕' : ''
+      return ''
     }
 
     const poolLastUsed = new Map()      // 每池最近使用的一条（供状态查看 / LRU 沉底确认）
@@ -1506,6 +1571,16 @@ export function apply(ctx) {
       '3行目：「CN: 」で始まる中国語（JPと同じ意味・80字以内）。\n' +
       'それ以外は何も出力しない。'
 
+    // Task 2：工作区标签注入（仅在能解析出归属标签时追加到 system 末尾）。
+    // 目的：让 LLM 总结自然区分「哪个工作区/项目那边」；同时明确禁止编造未提供的作业场所/事件，
+    // 并重申白祥语域红线不因加了工作区名而改变（与 NARR_LLM_SYSTEM 的既有约束一致，不放松）。
+    const NARR_LLM_WS_RULE =
+      'ワークスペースについての追加の約束：下の「作業中のワークスペース」は、いま見ている作業場所の名前です。' +
+      'ユーザーは複数の作業場所を同時に進めていることがあるので、「〜のほうでは」「例のプロジェクトでは」のように、' +
+      'どの作業場所の話かを一言添えてよい。' +
+      'ただし与えられた名前以外の作業場所・作業内容・結果を想像で足してはならない（事実だけを述べる）。' +
+      '名前を毎回必ず唱える必要はなく、口調の約束（ですわ系・白祥）はそのまま守ること。'
+
     async function narrateSummary(kind, opts) {
       if (config.narratorLLMSummary !== true) return null
       const now = Date.now()
@@ -1527,11 +1602,23 @@ export function apply(ctx) {
       const isBlocked = (o.blocking !== undefined) ? !!o.blocking : !!st.blocking
       const blockingLine = isBlocked ? '（ユーザーの確認・返答を待っています）' : ''
       const prevSummary = narrGlobal.lastSummary ? narrGlobal.lastSummary.slice(0, 200) : ''
+      // Task 2：工作区名注入（label 来自注册表；cwd basename 在可用且与 label 不同时附注）。
+      // 无归属（无 sid / 标签不可得）或 multiSession:false（总开关关闭=完全退回现状）→ 不注入，
+      // system/prompt 与改前逐字相同（零回归 + 一键回退语义）。
+      const wsSid = (typeof o.sid === 'string' && o.sid.length > 0) ? o.sid : ''
+      const wsLabel = labelForSid(wsSid)
+      const wsRec = wsSid.length > 0 ? sessions.get(wsSid) : undefined
+      const wsBase = (wsRec !== undefined) ? basenameOf(wsRec.cwd) : ''
+      const wsName = config.multiSession === false ? '' : (wsLabel.length > 0 ? wsLabel : wsBase)
+      const wsLine = wsName.length > 0
+        ? '作業中のワークスペース：' + wsName + (wsBase.length > 0 && wsBase !== wsName ? '（フォルダ名：' + wsBase + '）' : '')
+        : ''
       const kindLine = kind === 'milestone'
         ? '作業が長引いているので、順調であることと継続を伝える一言を。'
         : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
       const prompt =
         '【セッション情報】\n' +
+        (wsLine ? wsLine + '\n' : '') +
         '最近のユーザー発言：' + (userMsg || '（なし）') + '\n' +
         'このターンのツール使用：' + toolLine + '\n' +
         '前回の進捗サマリ：' + (prevSummary || '（なし）') + '\n' +
@@ -1539,7 +1626,7 @@ export function apply(ctx) {
         kindLine
       try {
         const raw = await Promise.race([
-          aiComplete(NARR_LLM_SYSTEM, [{ role: 'user', content: prompt }], 160),
+          aiComplete(wsLine ? (NARR_LLM_SYSTEM + '\n' + NARR_LLM_WS_RULE) : NARR_LLM_SYSTEM, [{ role: 'user', content: prompt }], 160),
           ctx.timeout(30000).then(() => { throw new Error('narrate llm timeout') }),
         ])
         const parsed = parseStructured(raw)
@@ -1683,14 +1770,22 @@ export function apply(ctx) {
       }
       // 留痕对话历史（沿用 announce 语义：无论语音开关都记录）
       const cnText = (typeof line.cn === 'string' && line.cn.length > 0) ? line.cn : line.jp
+      // Task 2：播报归属与气泡前缀。sid/label 随队列条目与时间线日志下发；
+      // 气泡 CN = 「〔label〕」+ 原 cn（前缀策略见 bubblePrefixFor）；line.jp 原样送给 TTS（语音不念工作区名）。
+      // memory.history 仍存不带前缀的原文（避免污染聊天上下文；{sid,label} 字段留 Task 4 记忆分层）。
+      const sidKey = (typeof opts.sid === 'string' && opts.sid.length > 0) ? opts.sid : ''
+      const narrLabel = labelForSid(sidKey)
+      const prefix = bubblePrefixFor(sidKey)
+      const bubbleCn = prefix.length > 0 ? prefix + cnText : cnText
       memory.history.push({ role: 'assistant', jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral', announce: true, narrate: intent, t: Date.now() })
       if (memory.history.length > 60) maybeCompactHistory()
       narrGlobal.counts[intent] = (narrGlobal.counts[intent] || 0) + 1   // counts 全局聚合（跨会话累加）
-      lastNarrSpeaks.push({ at: Date.now(), intent, source, jp: line.jp, cn: cnText, emotion: line.emotion || 'neutral' })
+      lastNarrSpeaks.push({ at: Date.now(), intent, source, jp: line.jp, cn: cnText, bubble: bubbleCn, sid: sidKey, label: narrLabel, emotion: line.emotion || 'neutral' })
       if (lastNarrSpeaks.length > 8) lastNarrSpeaks.shift()
       scheduleSaveNarrator()
       if (config.voiceOn !== true) return
-      await speakSynced(line.jp, cnText, line.emotion || 'neutral', 'force', { announce: true, narrate: intent })
+      // tags 里的 sid/label 会被 pushUtterances 拷进队列条目（面板端不消费，供日志/调试/后续 Task 使用）
+      await speakSynced(line.jp, bubbleCn, line.emotion || 'neutral', 'force', { announce: true, narrate: intent, sid: sidKey, label: narrLabel })
     }
 
     // ---------------- 里程碑巡检（per-session：时间/步数，各自单回合一次） ----------------
