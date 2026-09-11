@@ -1706,6 +1706,11 @@ export function apply(ctx) {
     const NARR_INTENTS = ['start', 'done', 'milestone', 'block', 'fail', 'special', 'goal']
     const narrPendingBatch = []
     let narrBatchScheduled = false
+    // Fix T3（简报需求 4）：每 tick 交付上限行为 = 「**全量交付 + 超阈值告警**」，绝不静默丢弃。
+    //   · 天然上限：本批不同 sid 数（每组最多交付 1 条——组内取最高优先级），无 sid 的整批算作 '' 一组；
+    //   · 超过阈值（8）时 console.warn 记录 sid 数与意图分布，但所有组仍逐条交付（全局 speakSynced 队列串行播放）；
+    //   · 理由：静默丢弃会违反 spec §5.1「不吞句：A 与 B 的 DONE 都能听到」，故只做可观测的告警。
+    const NARR_TICK_DELIVER_WARN = 8
 
     // narrate(intent, opts)：
     //   同意图 8s 合并（按 opts.sid 所属会话计入其 lastSpokeByIntent）；同一时刻多事件由微任务批收集后取最高优先级一条；
@@ -1753,14 +1758,30 @@ export function apply(ctx) {
         if (list === undefined) groups.set(key, [item])
         else list.push(item)
       }
+      // 组内取最高优先级一条（严格大于 → 同优先级先入者胜，与现状口径一致）
+      const winners = []
       for (const list of groups.values()) {
         let best = list[0]
         for (let i = 1; i < list.length; i++) {
           const c = list[i]
           if ((NARR_PRIORITY[c.intent] || 0) > (NARR_PRIORITY[best.intent] || 0)) best = c
         }
-        // 逐组 fire-and-forget：各组交付入口同步完成门检查与占位登记（Fix R1 的并发不变量不变）
-        deliverNarration(best.intent, best.opts).catch((e) => {
+        winners.push(best)
+      }
+      // Fix T3（需求 4）：超阈值只告警不改行为（绝不静默丢弃；winners 全量交付）
+      if (winners.length > NARR_TICK_DELIVER_WARN) {
+        const dist = {}
+        for (let i = 0; i < winners.length; i++) {
+          const it = winners[i].intent
+          dist[it] = (dist[it] || 0) + 1
+        }
+        console.warn('[amadeus] 同刻播报批次的 sid 数 ' + winners.length + ' 超过阈值 ' + NARR_TICK_DELIVER_WARN +
+          '：仍全量交付（不丢弃），由全局队列串行播放；意图分布=' + JSON.stringify(dist))
+      }
+      // 逐组 fire-and-forget：各组交付入口同步完成门检查与占位登记（Fix R1 的并发不变量不变）
+      for (let i = 0; i < winners.length; i++) {
+        const w = winners[i]
+        deliverNarration(w.intent, w.opts).catch((e) => {
           console.error('[amadeus] 进度播报失败:', e && e.message ? e.message : String(e))
         })
       }
