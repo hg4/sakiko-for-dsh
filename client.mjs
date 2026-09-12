@@ -689,7 +689,7 @@ export function apply(ctx) {
         Row({ label: '进度播报', desc: '祥子播报任务进展：开工、完成、里程碑与阻塞', control: Check({ checked: config.narratorOn !== false, onChange: (v) => patchConfig({ narratorOn: v }) }) }),
         Row({ label: 'LLM 回合总结', desc: '每回合完成时由 LLM 总结做了什么+下一步（失败自动退回模板句）', control: Check({ checked: config.narratorLLMSummary !== false, onChange: (v) => patchConfig({ narratorLLMSummary: v }) }) }),
         Row({ label: '每回合完成播报', desc: '关闭后只保留里程碑与阻塞等关键节点', control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
-        Row({ label: '播报子代理会话', desc: '子代理/后台会话的开工与完成也会播报；关闭后只播报你自己的会话', control: Check({ checked: config.narrateSubagents !== false, onChange: (v) => patchConfig({ narrateSubagents: v }) }) }),
+        Row({ label: '播报子代理会话', desc: '子代理/后台会话的开工与完成也会播报；关闭后不再播报（子代理完成提示仍会保留）', control: Check({ checked: config.narrateSubagents !== false, onChange: (v) => patchConfig({ narrateSubagents: v }) }) }),
         Row({ label: '里程碑间隔', desc: '单回合跑满该时长即播报一次进展', control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
 
         group('外观与布局'),

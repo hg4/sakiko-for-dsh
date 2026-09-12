@@ -3193,7 +3193,13 @@ export function apply(ctx) {
         // 判定信号 ③：子代理子会话的日志里带一条 subagent/descriptor（dsh-subagent 建子会话时写入）
         if (t === 'subagent/descriptor') {
           const cid = sidOf(session)
-          if (cid.length > 0) childSids.add(cid)
+          if (cid.length > 0) {
+            childSids.add(cid)
+            // Fix R1（Minor-1）：descriptor **迟到**（首个事件之后才到）时就地纠正已注册记录，
+            // 否则该记录的 isSubagent 会以 false 定格 → 30s 巡检仍会为它补播里程碑。
+            const recKnown = sessions.get(cid)
+            if (recKnown !== undefined && recKnown.isSubagent !== true) recKnown.isSubagent = true
+          }
           return
         }
         // Task 5：开关关闭时，子代理会话的事件在此一刀切断（最省资源、最彻底）
@@ -3330,9 +3336,11 @@ export function apply(ctx) {
         const st = states[i]
         try {
           // Task 5：开关关闭时也要挡住「开关关之前就已注册」的子代理会话（否则巡检仍可能为其补播里程碑）
+          // Fix R1（Minor-1）：除记录上的定格标记外，同时判 childSids —— 覆盖 descriptor 迟到时
+          // 「记录先以 isSubagent=false 注册、随后 descriptor 才到达」的窗口（双保险）。
           if (config.narrateSubagents === false && typeof st.sid === 'string' && st.sid.length > 0) {
             const rec = sessions.get(st.sid)
-            if (rec !== undefined && rec.isSubagent === true) continue
+            if ((rec !== undefined && rec.isSubagent === true) || childSids.has(st.sid)) continue
           }
           maybeMilestone(st)
         } catch (e) { /* ignore */ }
