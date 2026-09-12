@@ -1362,6 +1362,7 @@ export function apply(ctx) {
         turnGoalDone: false,
         blocking: null,        // 'b1'..'b4' | null
         lastUserText: '',
+        lastAssistantText: '', // 本回合**最近一条非空**助手文本（A：DONE 总结的「结尾最核心的输出」，仅回合内使用，不落盘）
         toolNames: {},         // 本轮工具名 → 次数
         turnEndedAt: 0,        // 本回合收尾时刻（Fix R1：auto 活跃判定的 8s 宽限窗依据）
         // ---- 节流占位（per-session：Task 3 在此之上加跨会话互斥窗） ----
@@ -1657,6 +1658,7 @@ export function apply(ctx) {
       st.turnGoalDone = false
       st.blocking = null
       st.lastUserText = ''
+      st.lastAssistantText = ''
       st.toolNames = {}
       st.turnEndedAt = 0
       st.lastDoneFamilyAt = 0
@@ -1936,6 +1938,10 @@ export function apply(ctx) {
       st.turnStartAt = now
       st.toolNames = {}
       st.turnEndedAt = 0   // 新回合开始 → 不再算「刚收尾」（Fix R1）
+      // A：新回合开始 → 助手文本必须清空。否则上一回合的收尾文本会被本回合的 DONE 总结
+      //    当成「本回合的结尾输出」喂给 LLM（跨回合串台 = 另一种「说成已发生」的失真来源）。
+      //    注：lastUserText 不在此清（user/message 分支先写入再 resetTurn，清了会丢本轮输入）。
+      st.lastAssistantText = ''
     }
 
     function userMessageText(d) {
@@ -1949,6 +1955,17 @@ export function apply(ctx) {
         return parts.join('\n')
       }
       return ''
+    }
+
+    // A：助手消息文本提取——与 userMessageText 同构（同一份 Message.content: ContentBlock[] 形状）。
+    //   真实形状（据 dsh-session/dsh-llm 类型定义核对，非推测）：
+    //     assistant/message 事件 data = { turn, step, message: AssistantMessage, usage?, interrupted? }；
+    //     AssistantMessage.content = ContentBlock[]，文本块 = { type:'text', text:string }。
+    //   只取 type==='text'（reasoning 思考块不算用户可见输出）；多块按 '\n' 连接（与 userMessageText 同规则）。
+    //   注意：仅承载 usage 的**空 content** 助手消息真实存在（dsh-session surface：empty-content assistant/message），
+    //   此时返回 ''，由调用方「非空才覆盖」的守卫兜住，不会清掉本回合已有的助手文本。
+    function assistantMessageText(msg) {
+      return userMessageText(msg)
     }
 
     // 泛化工具调用扫描（旧 isTaskCompleteMessage 思路）：assistant message 是否含指定名称的工具调用
@@ -2022,6 +2039,11 @@ export function apply(ctx) {
       // 会话态兜底：调用方未显式传 userMsg/tools/blocking 时，取该 sid 的回合态
       const st = stateFor(o.sid)
       const userMsg = truncCps(o.userMsg || st.lastUserText || '', 200)
+      // A：本轮**结尾最核心的输出**（助手最后一条非空文本，回合内累积，见 assistant/message 分支）。
+      //   取值方式与 userMsg 对称：显式 opts 优先，其次回合态；预算是 400 可见字符（存储侧已截 400，此处幂等）。
+      //   动机（故障取证）：此前 prompt 只有「用户说的话 + 工具调用计数」，LLM 无从知道本轮**实际产出/结论**，
+      //   而用户指令（如「你跑到20再停下」）恰好落在 最近のユーザー発言 里 → 模型只能把**要求**当成**已发生的结果**。
+      const assistantText = truncCps(o.assistantText || st.lastAssistantText || '', 400)
       const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (st.toolNames || {})
       const toolNames = Object.keys(tools)
       const toolLine = toolNames.length > 0
@@ -2047,9 +2069,13 @@ export function apply(ctx) {
       const shardSummary = (shardProgress && typeof shardProgress.lastSummary === 'string' && shardProgress.lastSummary.length > 0) ? shardProgress.lastSummary : ''
       const globalSummary = (typeof narrGlobal.lastSummary === 'string' && narrGlobal.lastSummary.length > 0) ? narrGlobal.lastSummary : ''
       const prevSummary = truncCps(shardSummary || globalSummary, 200)
+      // C：kind 文案——旧 done 句「進んだこと＋次の一手を伝える」在**本回合没有进展**时（只是启动了长任务、
+      //   或正在等待）会诱导模型「报成绩」，把**计划**包装成**已完成的成果**（用户实测故障的另一半根因）。
+      //   改为先判断此刻状态（进行中／完了／待ち）再说下一步；milestone 句同步去掉「順調であること」这一
+      //   **无据的状态断言**（里程碑只证明「还在跑」，不证明「顺利」），保留「长任务 + 継続」原意。
       const kindLine = kind === 'milestone'
-        ? '作業が長引いているので、順調であることと継続を伝える一言を。'
-        : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
+        ? '作業が長引いているので、いまも続いていることをふまえて、継続を伝える一言を。'
+        : 'このターンの節目なので、いま何が起きているか（進行中／完了／待ち）をふまえて、次の一手を伝える一言を。'
       // Fix R2（Minor-B）：prompt 构造也放进 try —— 本区（含 wsLine/shardSummary/prevSummary 等）
       // 一旦抛异常，必须走 catch 回退模板，绝不能把异常抛给调用方而丢掉整条播报。
       // 不变量：**LLM 路径的任何异常都要能回退模板/放弃 LLM 句，绝不吞掉播报**。
@@ -2058,6 +2084,7 @@ export function apply(ctx) {
           '【セッション情報】\n' +
           (wsLine ? wsLine + '\n' : '') +
           '最近のユーザー発言：' + (userMsg || '（なし）') + '\n' +
+          'アシスタントの最後の応答：' + (assistantText || '（なし）') + '\n' +
           'このターンのツール使用：' + toolLine + '\n' +
           '前回の進捗サマリ：' + (prevSummary || '（なし）') + '\n' +
           (blockingLine ? blockingLine + '\n' : '') +
@@ -2306,6 +2333,7 @@ export function apply(ctx) {
       const doneOpts = {
         sid: st.sid,
         userMsg: st.lastUserText,
+        assistantText: st.lastAssistantText,   // A：与 userMsg 一并快照（随后清态，LLM 异步只能吃快照）
         tools: Object.assign({}, st.toolNames),
         blocking: st.blocking,
       }
@@ -3479,6 +3507,12 @@ export function apply(ctx) {
         if (t === 'assistant/message') {
           const msg = d && d.message
           if (msg && typeof msg === 'object') {
+            // A：保存本回合**最近一条非空**助手文本（「结尾最核心的输出」）供 DONE/里程碑总结使用。
+            //   只取 type==='text' 的块（见 assistantMessageText）；每来一条非空就覆盖 —— 同一回合内
+            //   带工具调用的中途消息会被后续收尾消息覆盖，最终留下的就是结尾那一条。
+            //   空文本（仅承载 usage 的 assistant/message）不覆盖，避免把已有文本擦掉。
+            const aText = assistantMessageText(msg).trim()
+            if (aText.length > 0) st.lastAssistantText = truncCps(aText, 400)
             if (msgHasToolCall(msg, ['ask_user_question'])) {
               st.blocking = 'b2'
               narrate('block', { sid, variant: 'b2' })
