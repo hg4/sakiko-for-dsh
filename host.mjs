@@ -301,9 +301,13 @@ export function apply(ctx) {
       const out = []
       for (let i = 0; i < parts.length && out.length < 12; i++) {
         let p = parts[i].replace(/\s+/g, ' ').trim()
-        while (p.length > 200) {
-          out.push(p.slice(0, 200))
-          p = p.slice(200)
+        // Fix R4（同 R3 的缺陷类，自由文本侧）：原 `p.slice(0,200)` / `p.slice(200)` 按 UTF-16 码元切——
+        //   emoji 代理对正好跨 200 时，前一块以孤立**高位**代理项结尾、后一块以孤立**低位**代理项开头
+        //   （两块都成坏字符）。改按**码点**切块（复用 truncCps 单一实现）：预算仍是 200 个可见字符
+        //   （一个 emoji 算 1 字），ASCII/CJK 逐字不变（码元数==码点数时两种切法输出完全相同）。
+        while (Array.from(p).length > 200) {
+          out.push(truncCps(p, 200))
+          p = Array.from(p).slice(200).join('')
           if (out.length >= 12) break
         }
         if (p.length > 0) out.push(p)
@@ -1310,6 +1314,15 @@ export function apply(ctx) {
       const cps = Array.from(t)
       return cps.length > keep ? cps.slice(0, keep).join('') : t
     }
+    // 按码点保留**尾部**的配套版本（R5）：`s.slice(-keep)` 与 `s.slice(0, keep)` 是同一缺陷的两半——
+    //   按码元切时若切点落在代理对中间，前者会在**字符串开头**留下孤立低位代理项（低位先行），
+    //   危害与头部版同构：写盘 → JSON 里成 \udXXX、面板渲染成 �。判定与切分一律按码点，
+    //   未超长（码点数 ≤ keep）返回原串。纯 ASCII/CJK 与旧的 slice(-keep) 逐字一致。
+    function tailCps(s, keep) {
+      const t = String(s)
+      const cps = Array.from(t)
+      return cps.length > keep ? cps.slice(-keep).join('') : t
+    }
     function normTitle(v) {
       return (typeof v === 'string' && v.trim().length > 0) ? truncCps(v.trim(), 40) : ''
     }
@@ -1599,25 +1612,31 @@ export function apply(ctx) {
     //     · memory.facts（人格/偏好）与直聊 chat 历史**保持全局**，本任务不动；
     //     · memory.history 的归属用**结构化字段** {sid,label} 承载（cn 文本一律不带「〔label〕」，Task 2 口径）。
     //   写入时机：回合收尾（DONE/goal）与里程碑触发；读取：LLM 总结输入侧可引用、narratorStatus 摘要暴露。
+    // Fix R4（缺陷类同 R3，本轮收口到**自由文本**字段）：本段所有**内容文本**字段（cwd / lastUserText /
+    //   lastSummary / 工具名 / narrator.lastSummary / prompt 片段）的截断一律走 truncCps（按码点），
+    //   不再用 String.prototype.slice（按 UTF-16 码元，会把 emoji 代理对切成孤立代理项 → 落盘坏字符）。
+    //   预算数值（40/120/200/400/500）与既有语义（keep = 保留的可见字符数）完全不变；ASCII/CJK 逐字不变。
+    //   注意：**对象键**（progress/narrator 的 sid 键，slice(0,80)）与 sid 短码（slice(0,4)/slice(0,8)）
+    //   是结构性 ASCII 标识符，不是自由文本，**不在本轮范围内**（理由见 task-5-fix4-report.md）。
     // ============================================================
     const NARR_PROGRESS_MAX = 64   // 分片条目上限（与注册表同量级；超出淘汰 updatedAt 最老者）
     function sanitizeProgressEntry(v) {
       if (!v || typeof v !== 'object' || Array.isArray(v)) return null
       const out = {}
       if (typeof v.label === 'string') out.label = truncCps(v.label, 40)
-      if (typeof v.cwd === 'string') out.cwd = v.cwd.slice(0, 400)
-      if (typeof v.lastUserText === 'string') out.lastUserText = v.lastUserText.slice(0, 200)
+      if (typeof v.cwd === 'string') out.cwd = truncCps(v.cwd, 400)
+      if (typeof v.lastUserText === 'string') out.lastUserText = truncCps(v.lastUserText, 200)
       if (v.tools && typeof v.tools === 'object' && !Array.isArray(v.tools)) {
         const t = {}
         const ks = Object.keys(v.tools).slice(0, 40)
         for (let i = 0; i < ks.length; i++) {
           const n = v.tools[ks[i]]
-          if (typeof n === 'number' && isFinite(n)) t[String(ks[i]).slice(0, 120)] = Math.max(0, Math.floor(n))
+          if (typeof n === 'number' && isFinite(n)) t[truncCps(ks[i], 120)] = Math.max(0, Math.floor(n))
         }
         out.tools = t
       }
       out.milestoneCount = (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0
-      if (typeof v.lastSummary === 'string' && v.lastSummary.length > 0) out.lastSummary = v.lastSummary.slice(0, 200)
+      if (typeof v.lastSummary === 'string' && v.lastSummary.length > 0) out.lastSummary = truncCps(v.lastSummary, 200)
       if (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) out.updatedAt = v.updatedAt
       return out
     }
@@ -1641,7 +1660,7 @@ export function apply(ctx) {
         out[String(keys[i]).slice(0, 80)] = {
           label: typeof v.label === 'string' ? truncCps(v.label, 40) : '',
           milestoneCount: (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0,
-          lastSummary: typeof v.lastSummary === 'string' ? v.lastSummary.slice(0, 200) : '',
+          lastSummary: typeof v.lastSummary === 'string' ? truncCps(v.lastSummary, 200) : '',
           updatedAt: (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) ? v.updatedAt : 0,
         }
       }
@@ -1669,7 +1688,7 @@ export function apply(ctx) {
         if (typeof rec.cwd === 'string' && rec.cwd.length > 0) e.cwd = rec.cwd
       }
       const p = patch && typeof patch === 'object' ? patch : {}
-      if (typeof p.lastUserText === 'string' && p.lastUserText.length > 0) e.lastUserText = p.lastUserText.slice(0, 200)
+      if (typeof p.lastUserText === 'string' && p.lastUserText.length > 0) e.lastUserText = truncCps(p.lastUserText, 200)
       // Fix R1（Minor-1）：tools 只在**本轮确实用过工具**时才覆盖（与 lastUserText 的 length>0 守卫语义对称）。
       // 否则一个纯聊天回合（无 tool/call）会把上一次的工具集清成 {}，使字段语义不稳定。
       // 字段语义由此固定为：「最近一轮**有工具的**回合的工具集」。
@@ -1677,7 +1696,7 @@ export function apply(ctx) {
         if (Object.keys(p.tools).length > 0) e.tools = Object.assign({}, p.tools)
       }
       if (p.milestoneBump === true) e.milestoneCount += 1
-      if (typeof p.lastSummary === 'string' && p.lastSummary.length > 0) e.lastSummary = p.lastSummary.slice(0, 200)
+      if (typeof p.lastSummary === 'string' && p.lastSummary.length > 0) e.lastSummary = truncCps(p.lastSummary, 200)
       e.updatedAt = Date.now()
       memory.progress[key] = e
       // narrator.json 侧的精简分片摘要（同源数据）
@@ -1717,7 +1736,7 @@ export function apply(ctx) {
     function narrPersistSnapshot() {
       return {
         counts: narrGlobal.counts,
-        lastSummary: typeof narrGlobal.lastSummary === 'string' ? narrGlobal.lastSummary.slice(0, 500) : '',
+        lastSummary: typeof narrGlobal.lastSummary === 'string' ? truncCps(narrGlobal.lastSummary, 500) : '',
         lastLLMAt: narrGlobal.lastLLMAt || 0,
         poolCursor: narrGlobal.poolCursor || {},
         // Fix T4：per-session 分片摘要（旧档缺该键 → 视为空，正常工作）
@@ -1737,7 +1756,7 @@ export function apply(ctx) {
             if (typeof c[k] === 'number' && isFinite(c[k])) narrGlobal.counts[k] = Math.max(0, Math.floor(c[k]))
           }
         }
-        if (typeof parsed.lastSummary === 'string') narrGlobal.lastSummary = parsed.lastSummary.slice(0, 500)
+        if (typeof parsed.lastSummary === 'string') narrGlobal.lastSummary = truncCps(parsed.lastSummary, 500)
         if (typeof parsed.lastLLMAt === 'number' && isFinite(parsed.lastLLMAt)) narrGlobal.lastLLMAt = parsed.lastLLMAt
         if (parsed.poolCursor && typeof parsed.poolCursor === 'object') narrGlobal.poolCursor = parsed.poolCursor
         // Fix T4：per-session 分片摘要（旧档无此键 → 保持空对象，不报错）
@@ -1871,11 +1890,11 @@ export function apply(ctx) {
       const o = opts && typeof opts === 'object' ? opts : {}
       // 会话态兜底：调用方未显式传 userMsg/tools/blocking 时，取该 sid 的回合态
       const st = stateFor(o.sid)
-      const userMsg = String(o.userMsg || st.lastUserText || '').slice(0, 200)
+      const userMsg = truncCps(o.userMsg || st.lastUserText || '', 200)
       const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (st.toolNames || {})
       const toolNames = Object.keys(tools)
       const toolLine = toolNames.length > 0
-        ? toolNames.slice(0, 12).map((n) => String(n) + '×' + (tools[n] || 1)).join('、').slice(0, 300)
+        ? truncCps(toolNames.slice(0, 12).map((n) => String(n) + '×' + (tools[n] || 1)).join('、'), 300)
         : '（ツール呼び出しなし）'
       const isBlocked = (o.blocking !== undefined) ? !!o.blocking : !!st.blocking
       const blockingLine = isBlocked ? '（ユーザーの確認・返答を待っています）' : ''
@@ -1896,7 +1915,7 @@ export function apply(ctx) {
       const shardProgress = (wsSid.length > 0 && memory.progress && typeof memory.progress === 'object') ? memory.progress[wsSid] : undefined
       const shardSummary = (shardProgress && typeof shardProgress.lastSummary === 'string' && shardProgress.lastSummary.length > 0) ? shardProgress.lastSummary : ''
       const globalSummary = (typeof narrGlobal.lastSummary === 'string' && narrGlobal.lastSummary.length > 0) ? narrGlobal.lastSummary : ''
-      const prevSummary = String(shardSummary || globalSummary).slice(0, 200)
+      const prevSummary = truncCps(shardSummary || globalSummary, 200)
       const kindLine = kind === 'milestone'
         ? '作業が長引いているので、順調であることと継続を伝える一言を。'
         : 'このターンの節目なので、進んだこと＋次の一手を伝える一言を。'
@@ -1919,7 +1938,7 @@ export function apply(ctx) {
         const parsed = parseStructured(raw)
         if (typeof parsed.jp !== 'string' || parsed.jp.trim().length === 0) return null
         if (NARR_LLM_EMOTIONS.indexOf(parsed.emotion) < 0) return null
-        if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrGlobal.lastSummary = parsed.cn.slice(0, 120)
+        if (typeof parsed.cn === 'string' && parsed.cn.length > 0) narrGlobal.lastSummary = truncCps(parsed.cn, 120)
         // Fix T4：把该次总结同时写入**本会话**的进度分片（全局 lastSummary 语义不变，供兼容与 LLM 上下文）
         recordProgress(o.sid, { lastSummary: typeof parsed.cn === 'string' ? parsed.cn : '' })
         scheduleSaveNarrator()
@@ -2200,7 +2219,7 @@ export function apply(ctx) {
       })
       if (!resp.ok) {
         let detail = ''
-        try { detail = String((await resp.text()).slice(0, 300)) } catch (e) { /* ignore */ }
+        try { detail = truncCps(await resp.text(), 300) } catch (e) { /* ignore */ }
         throw new Error('llm http ' + resp.status + ' ' + detail)
       }
       const reader = resp.body && resp.body.getReader
@@ -2456,7 +2475,7 @@ export function apply(ctx) {
         const summary = String(raw || '').trim()
         if (summary.length > 10) {
           memory.summary = ((memory.summary || '') + '\n' + summary).trim()
-          if (memory.summary.length > 2000) memory.summary = memory.summary.slice(-2000)
+          if (memory.summary.length > 2000) memory.summary = tailCps(memory.summary, 2000)
         }
       } catch (e) {
         console.error('[amadeus] 历史压缩失败:', e && e.message ? e.message : e)
@@ -2866,7 +2885,7 @@ export function apply(ctx) {
         if (s === undefined) { sendJson(res, 200, { status: 'missing' }); return }
         sendJson(res, 200, {
           status: s.status,
-          raw: String(s.raw || '').slice(-2400),
+          raw: tailCps(String(s.raw || ''), 2400),
           jp: s.jp || '',
           cn: s.cn || '',
           emotion: s.emotion || 'neutral',
@@ -3044,6 +3063,8 @@ export function apply(ctx) {
         // 经 stateFor 取值：multiSession:false 时各行的回合态即共享默认槽（与 state 字段同源，不虚报）
         const rst = stateFor(rec.sid)
         // Fix T4：行内附带该会话的进度分片摘要（最近用户输入 + 里程碑次数），便于真机验收
+        // Fix R4：暴露给面板的 lastUserText/lastSummary 是**二次截断**（存 200 → 出 100），
+        //   同样必须按码点切（否则存储侧保留的 emoji 会在这一步被切成孤立代理项出现在响应 JSON 里）。
         const pe = (memory.progress && typeof memory.progress === 'object') ? memory.progress[rec.sid] : undefined
         sessionRows.push({
           sid: String(rec.sid).slice(0, 8),
@@ -3053,10 +3074,10 @@ export function apply(ctx) {
           stepCount: rst.stepCount,
           blocking: rst.blocking,
           lastActiveAt: rec.lastActiveAt,
-          lastUserText: (pe && typeof pe.lastUserText === 'string') ? pe.lastUserText.slice(0, 100) : '',
+          lastUserText: (pe && typeof pe.lastUserText === 'string') ? truncCps(pe.lastUserText, 100) : '',
           milestoneCount: (pe && typeof pe.milestoneCount === 'number') ? pe.milestoneCount : 0,
           // Fix R1（Minor-4）：暴露分会话最近总结（供 Task 5 核对 LLM 输入的来源）
-          lastSummary: (pe && typeof pe.lastSummary === 'string') ? pe.lastSummary.slice(0, 100) : '',
+          lastSummary: (pe && typeof pe.lastSummary === 'string') ? truncCps(pe.lastSummary, 100) : '',
         })
       }
       sessionRows.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
@@ -3079,7 +3100,7 @@ export function apply(ctx) {
           milestoneSpoken: st.milestoneSpoken,
           turnGoalDone: st.turnGoalDone,
           blocking: st.blocking,
-          lastUserText: String(st.lastUserText || '').slice(0, 100),
+          lastUserText: truncCps(st.lastUserText || '', 100),
           toolNames: st.toolNames || {},
         },
         sessions: sessionRows.slice(0, 10),
@@ -3128,7 +3149,7 @@ export function apply(ctx) {
           [{ role: 'user', content: 'Reply with exactly: OK' }],
           20
         )
-        return { ok: true, content: String(content || '').slice(0, 200) }
+        return { ok: true, content: truncCps(content || '', 200) }
       } catch (e) {
         return { ok: false, error: e && e.message ? e.message : String(e) }
       }
@@ -3184,7 +3205,7 @@ export function apply(ctx) {
     }))
 
     ctx.effect(() => harnessLocal.handle('clientReport', async (args) => {
-      const msg = args && typeof args.msg === 'string' ? args.msg.slice(0, 300) : ''
+      const msg = args && typeof args.msg === 'string' ? truncCps(args.msg, 300) : ''
       if (msg.length > 0) {
         clientReports.push({ t: new Date().toISOString(), msg: '[ui] ' + msg })
         if (clientReports.length > 60) clientReports.shift()
@@ -3199,7 +3220,7 @@ export function apply(ctx) {
       handler: async (req, res) => {
         try {
           const q = parseQuery(req.url)
-          const msg = typeof q.msg === 'string' ? q.msg.slice(0, 400) : ''
+          const msg = typeof q.msg === 'string' ? truncCps(q.msg, 400) : ''
           if (msg.length > 0) {
             clientReports.push({ t: new Date().toISOString(), msg })
             if (clientReports.length > 60) clientReports.shift()
@@ -3279,7 +3300,7 @@ export function apply(ctx) {
         if (t === 'user/message') {
           // 用户新消息到来：解除阻塞标记、记录输入、开启新回合（纯聊天回合不开口）——只动本会话
           st.blocking = null
-          const text = userMessageText(d).slice(0, 200)
+          const text = truncCps(userMessageText(d), 200)
           if (text.length > 0) st.lastUserText = text
           resetTurn(st)
           return
