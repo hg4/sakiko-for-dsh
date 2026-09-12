@@ -409,9 +409,11 @@ export function apply(ctx) {
     let tlRecent = []                 // 内存环：最近 200 条已解析行（/amadeus/logs 直读）
     const TL_MAX_LEN = 2000000        // 轮转阈值 ≈2MB（UTF-16 长度近似，见 tlLog）
 
+    // R3-2：timeline 的 label/text/cn 也走按码点截断（同一缺陷类：s.slice(0,n) 会把 emoji 代理对切成
+    //   孤立代理项写进 timeline JSONL）。预算数值（40/64/120/160）语义不变 = 保留 n 个可见字符。
     function tlTrunc(v, n) {
       const s = String(v === undefined || v === null ? '' : v)
-      return s.length > n ? s.slice(0, n) : s
+      return truncCps(s, n)
     }
     // tags 只取 announce/narrate/sid/label 四个可控字段并入日志（其它 tags 不入日志，避免夹带敏感数据）
     // sid/label（Task 2 播报归属）：`push` / `synth_start` 两类行随之带上工作区标签，便于按会话排查。
@@ -1299,8 +1301,17 @@ export function apply(ctx) {
       return i >= 0 ? s.slice(i + 1) : s
     }
     function sidShort(sid) { return String(sid).slice(0, 4) }
+    // 按**码点**截断的共享小工具（唯一实现）——String.prototype.slice 按 UTF-16 码元切，保留位数正好落在
+    //   emoji 代理对中间时会切出孤立代理项（面板渲染成 �、JSON 里是未配对 surrogate）。Array.from 按码点
+    //   迭代，keep = 保留的可见字符数（一个 emoji 由 2 码元算作 1 字）；纯 ASCII/CJK 行为逐字不变。
+    //   normTitle（标题 40 字）与 shortenSubagentLabel（子代理标签）共用，避免同一种缺陷写两遍。
+    function truncCps(s, keep) {
+      const t = String(s)
+      const cps = Array.from(t)
+      return cps.length > keep ? cps.slice(0, keep).join('') : t
+    }
     function normTitle(v) {
-      return (typeof v === 'string' && v.trim().length > 0) ? v.trim().slice(0, 40) : ''
+      return (typeof v === 'string' && v.trim().length > 0) ? truncCps(v.trim(), 40) : ''
     }
     // 会话标题也可从事件日志回折（插件晚挂载时首见即拿到既有标题；不可读则走 cwd 回退）
     function titleFromLog(session) {
@@ -1324,29 +1335,35 @@ export function apply(ctx) {
     //   · 非子代理会话（你自己的会话、用户 fork）标签**保持原样**（不截断、语义不变）；
     //   · 子代理判定复用 Task 5 的判据（rec.isSubagent 或 childSids）——迟到 descriptor 回写后
     //     会重跑 refreshLabels()，标签随即被截断。
+    //   · Fix R3（两个 cosmetic Minor）：① 按**码点**截断，不切开 emoji 代理对；② 带 ·sid4 后缀时
+    //     **先截前缀再补后缀**，不残留半截后缀（详见 shortenSubagentLabel 与第二段注释）。
     // ============================================================
     const SUBAGENT_LABEL_KEEP = 12          // 子代理标签保留字符数（超出 → 保留 12 字 + 「…」）
     const SUBAGENT_LABEL_TIE_KEEP = 7       // 截断后同名时的前缀预算（7 +「…」+「·sid4」= 13，与普通子代理标签同长）
     function recIsSubagent(rec) {
       return rec.isSubagent === true || childSids.has(rec.sid)
     }
+    // Minor-1（emoji 代理对被切开）：与 normTitle 共用 truncCps（按码点截断）——未发生截断时返回原串，
+    //   否则补「…」。keep 语义不变：「截断前保留的可见字符数」（中英文行为不变，一个 emoji 算 1 字）。
     function shortenSubagentLabel(s, keep) {
       const t = String(s)
-      return t.length > keep ? t.slice(0, keep) + '…' : t
+      const cut = truncCps(t, keep)
+      return cut === t ? t : cut + '…'
     }
     // 注册表级标签重算（Fix R2 起为两段式）：
     //   第一段（语义与既有完全一致）：有标题者用标题且不参与撞车判定；无标题者按 basename 分组，
     //     同一 basename 被 ≥2 个无标题会话占用（或无 cwd 的独苗）→ 本会话与冲突方都加 ·sid4。
-    //   第二段（仅子代理）：把第一段结果截断为 12 字 +「…」；若**截断后**出现同名（例如两个长
-    //     basename 前缀相同），则先截断再加后缀——前缀预算收窄到 7，再补 ·sid4（sid 前 4 位天然唯一），
-    //     因此「两个子代理截断后同名」仍可区分，且长度与普通子代理标签一致（≤12，截断时 13）。
+    //   第二段（仅子代理）：**从 rawBase 构造**标签并截断为 12 字 +「…」（第一段加的 ·sid4 原样
+    //     补回，且此时前缀预算收窄到 7，绝不把后缀切成半截——Minor-2）；若**截断后**出现同名（例如
+    //     两个长 basename 前缀相同），则先截断再加后缀——前缀预算同样为 7，再补 ·sid4（sid 前 4 位
+    //     天然唯一），因此「两个子代理截断后同名」仍可区分，且长度与普通子代理标签一致（≤12，截断时 13）。
     function refreshLabels() {
       // ---- 第一段：基础标签（保持既有语义） ----
       const groups = new Map()
       for (const rec of sessions.values()) {
         const t = normTitle(rec.title)
         rec.rawBase = t.length > 0 ? t : basenameOf(rec.cwd)
-        if (t.length > 0) { rec.baseLabel = t; continue }
+        if (t.length > 0) { rec.baseLabel = t; rec.baseSuffix = ''; continue }
         rec.baseLabel = rec.rawBase
         const key = rec.rawBase.toLowerCase()
         if (!groups.has(key)) groups.set(key, [])
@@ -1356,13 +1373,20 @@ export function apply(ctx) {
         if (normTitle(rec.title).length > 0) continue
         const list = groups.get(rec.rawBase.toLowerCase()) || []
         const collide = list.length >= 2 || rec.rawBase.length === 0
-        rec.baseLabel = (rec.rawBase.length > 0 ? rec.rawBase : '会话') + (collide ? '·' + sidShort(rec.sid) : '')
+        // baseSuffix 单列记下：第二段必须「先截前缀、再补后缀」，否则会把 ·sid4 切成半截（Minor-2）
+        rec.baseSuffix = collide ? '·' + sidShort(rec.sid) : ''
+        rec.baseLabel = (rec.rawBase.length > 0 ? rec.rawBase : '会话') + rec.baseSuffix
       }
       // ---- 第二段：子代理截断（存储层） ----
       const subGroups = new Map()
       for (const rec of sessions.values()) {
         if (!recIsSubagent(rec)) { rec.label = rec.baseLabel; continue }
-        rec.label = shortenSubagentLabel(rec.baseLabel, SUBAGENT_LABEL_KEEP)
+        // Minor-2：从 rawBase 构造前缀（与下方消歧分支同一套做法）再原样补回第一段已加过的后缀——
+        //   绝不截断「已经带后缀的 baseLabel」，否则 ·sid4 会残留半截（如 project-xy·s…）。
+        //   带后缀时前缀预算收窄到 TIE_KEEP，使「前缀…+·sid4」与下方消歧分支同长（≤13 字）。
+        const sfx = rec.baseSuffix || ''
+        const base = rec.rawBase.length > 0 ? rec.rawBase : '会话'
+        rec.label = shortenSubagentLabel(base, sfx.length > 0 ? SUBAGENT_LABEL_TIE_KEEP : SUBAGENT_LABEL_KEEP) + sfx
         const key = rec.label.toLowerCase()
         if (!subGroups.has(key)) subGroups.set(key, [])
         subGroups.get(key).push(rec)
@@ -1580,7 +1604,7 @@ export function apply(ctx) {
     function sanitizeProgressEntry(v) {
       if (!v || typeof v !== 'object' || Array.isArray(v)) return null
       const out = {}
-      if (typeof v.label === 'string') out.label = v.label.slice(0, 40)
+      if (typeof v.label === 'string') out.label = truncCps(v.label, 40)
       if (typeof v.cwd === 'string') out.cwd = v.cwd.slice(0, 400)
       if (typeof v.lastUserText === 'string') out.lastUserText = v.lastUserText.slice(0, 200)
       if (v.tools && typeof v.tools === 'object' && !Array.isArray(v.tools)) {
@@ -1615,7 +1639,7 @@ export function apply(ctx) {
         const v = m[keys[i]]
         if (!v || typeof v !== 'object' || Array.isArray(v)) continue
         out[String(keys[i]).slice(0, 80)] = {
-          label: typeof v.label === 'string' ? v.label.slice(0, 40) : '',
+          label: typeof v.label === 'string' ? truncCps(v.label, 40) : '',
           milestoneCount: (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0,
           lastSummary: typeof v.lastSummary === 'string' ? v.lastSummary.slice(0, 200) : '',
           updatedAt: (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) ? v.updatedAt : 0,
