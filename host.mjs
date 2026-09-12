@@ -730,6 +730,88 @@ export function apply(ctx) {
       return ttsSlot
     }
 
+    // ---------------- 槽 sidecar（重播命中） ----------------
+    // Fix R6：8 个固定播放槽（aqua-<slot>.wav 等）会被 nextSlot() 轮转复用，槽文件里不含任何
+    // 「文本 → 文件」信息。旧版重播只能走内存 ttsCache（120 条 FIFO）：一旦被挤掉，重播就必须
+    // 重新调 provider——provider 恰好失败时那条记录就彻底无声（用户实测的"聊天记录无法重播"）。
+    // 这里给每个槽配一个同名 sidecar `<槽文件>.key`，内容 = synthesize() 用的缓存 key：
+    //   * 只在**合成成功**后写（sidecar 即"提交记录"）；失败则清空 → 该槽永不被回放。
+    //     注意 curl -o 会把 bridge 失败时的 JSON 错误体写进槽文件，所以"文件存在"不等于"音频有效"，
+    //     回放必须以 sidecar 为准 + 复核音频有效性。
+    //   * 覆写槽文件时同步覆写 sidecar → 键与音频永远一一对应，不会错配（槽被覆盖后旧键自然失配）。
+    //   * 文件个数天然有界：8 个音频 + 8 个 sidecar，随 nextSlot() 轮转被覆盖，无新增目录。
+    const SLOT_CACHE_COUNT = 8
+
+    function slotKeyPath(oPath) {
+      return oPath + '.key'
+    }
+
+    async function writeSlotKey(oPath, key) {
+      try {
+        await writeTextSafe(slotKeyPath(oPath), String(key))
+      } catch (e) { /* sidecar 旁路失败不影响合成结果本身 */ }
+    }
+
+    async function clearSlotKey(oPath) {
+      try {
+        await writeTextSafe(slotKeyPath(oPath), '')
+      } catch (e) { /* ignore */ }
+    }
+
+    // 音频有效性判据：与各 provider 的 200 字节下限一致，另加"不是 JSON 错误体"。
+    // 单看长度是不够的——bridge 失败时返回 `{"error": str(e)[:300]}`，长度可达 300+ 字节，
+    // 会被 200 字节的下限误判成"音频"。WAV/MP3 都不会以 '{' 或 '[' 开头。
+    function looksLikeAudio(bytes) {
+      if (bytes === null || bytes === undefined || bytes.length < 200) return false
+      const n = Math.min(bytes.length, 16)
+      let head = ''
+      for (let i = 0; i < n; i++) head += String.fromCharCode(bytes[i])
+      head = head.replace(/^[\s\ufeff]+/, '')
+      return !(head.startsWith('{') || head.startsWith('['))
+    }
+
+    // 正向签名判据（复核 Minor-4）：aqua 槽里装的是 bridge 返回的 WAV，容器必须是 RIFF/WAVE。
+    // 只有否定判据（"不是 JSON"）时，任何 ≥200 字节的垃圾/半截/全零内容都会过关；配合"槽被 curl
+    // 中途截断"的场景，那正是错误音频的来源。这里只给 aqua 用（其 mime 恒为 audio/wav）。
+    // 偏移说明：RIFF 规范是 magic(0..3)='RIFF' + chunkSize(4..7) + formType(8..11)='WAVE'——
+    // 现场实测 GPT-SoVITS 的真实输出正是这种（'RIFF' + 4 字节长度 + 'WAVE'）。
+    // 也接受 formType 紧跟 magic 的无 size 头（'RIFFWAVE…'）：本仓库两套探针的合成 WAV 都写作
+    // 这种 shorthand，若只认偏移 8 会把它们全部误杀，反而让该判据无法被测试覆盖。
+    // 若日后把其它 provider 也纳入槽回放，需按各自格式补签名（mp3：'ID3' 或 0xFF 0xFB）。
+    function looksLikeWav(bytes) {
+      if (!looksLikeAudio(bytes)) return false
+      const magic = (i) => String.fromCharCode(bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3])
+      if (magic(0) !== 'RIFF') return false
+      return magic(8) === 'WAVE' || magic(4) === 'WAVE'
+    }
+
+    // 槽文件当前字节数：不存在 → null；查询失败 → NaN（NaN !== NaN，调用方据此 fail-closed 注销）
+    async function slotFileSize(absPath) {
+      try {
+        const t = await fs.resolve(absPath)
+        const info = await fs.stat(t)
+        if (info === undefined) return null
+        return typeof info.size === 'number' ? info.size : null
+      } catch (e) {
+        return NaN
+      }
+    }
+
+    // ② 槽回放查找：扫 8 个 aqua 槽的 sidecar，键一致且音频有效 → 直接回放该槽文件，不调 provider。
+    // 只覆盖 aqua（用户实测故障所在、也是当前实际使用的 provider）；edge 的槽名带自增 ttsFileSeq
+    // （无界增长），刻意不参与，以免把无界文件数扩散到 sidecar。
+    async function findSlotAudio(key) {
+      for (let i = 0; i < SLOT_CACHE_COUNT; i++) {
+        const p = TMP_DIR + '/aqua-' + i + '.wav'
+        const k = await readTextFile(slotKeyPath(p))
+        if (k === null || k.length === 0 || k !== key) continue
+        const bytes = await readFileBytes(p, MAX_TTS_BYTES)
+        if (!looksLikeWav(bytes)) continue
+        return { bytes, words: [], mime: 'audio/wav' }
+      }
+      return null
+    }
+
     // ---------------- TTS Provider ----------------
     // 常驻 Edge-TTS worker：省去每句重新启动 Python + 导入 edge-tts 的开销（约 0.5~1s/句）。
     // 懒启动、失败自动回退到逐句 python 子进程；外部无法使用时 ttsWorker 置 {disabled:true}。
@@ -924,10 +1006,34 @@ export function apply(ctx) {
       const args = ['-sS', '--max-time', '35', '-X', 'POST', api]
       if (config.aquaApiKey) args.push('-H', 'Authorization: Bearer ' + config.aquaApiKey)
       args.push('-o', oPath)
-      await runCurl(args)
+      // Fix R6b（复核 Important-1）：**认领即失效、成功才提交**。
+      //   为什么不能等失败时再清：`curl -o` 从第一个字节起就**渐进覆盖**该槽；`runCurl` 抛错
+      //   （`--max-time 35` 被砍 → exit 28）时槽里留下的是**别的文本的半截音频**，而 sidecar 还是
+      //   上一个文本的 key → 下次重播那条旧文本会命中该槽、播出错误/截断的音频（比原来的静音更隐蔽）。
+      //   所以：先记下旧 key 与旧字节数，**立刻注销**该槽（此后整段传输期间都不可回放），
+      //   只有"curl 失败 **且** 槽一个字节都没被改动"（未写盘就失败，如连接被拒/可执行文件缺失）
+      //   才把旧 key 还原——那种情况下键与音频仍然自洽，没必要白白丢掉一个有效槽。
+      const prevKey = await readTextFile(slotKeyPath(oPath))
+      const prevSize = await slotFileSize(oPath)
+      if (prevKey !== null && prevKey.length > 0) await clearSlotKey(oPath)   // 无有效 key 时无需写盘
+      try {
+        await runCurl(args)
+      } catch (e) {
+        if (prevKey !== null && prevKey.length > 0 && (await slotFileSize(oPath)) === prevSize) {
+          await writeSlotKey(oPath, prevKey)
+        }
+        throw e
+      }
       const bytes = await readFileBytes(oPath, MAX_TTS_BYTES)
-      if (bytes === null || bytes.length < 200) throw new Error('aqua: empty audio')
-      return { bytes, words: [], mime: 'audio/wav' }
+      // Fix R6（复核 Minor-3 更正）：bridge 失败时 `curl -o` 会把 HTTP 500 的 JSON 错误体原样写进
+      // 播放槽（现场是 41 字节的 {"error": "IncompleteRead(0 bytes read)"}）。但要分清两件事：
+      //   * **41 字节那种（<200）旧判据本来也会拒绝**，它只是残留在槽文件里，从未被播出
+      //     （没有任何路由服务 TMP_DIR；面板只用 /amadeus/tts?text=… 重取音频）。
+      //   * 真正的漏洞是 **>200 字节**的错误体：bridge 用 `{"error": str(e)[:300]}`，str(e) 截到
+      //     300 字符 → 错误体可达 400+ 字节，会被纯长度判据当成音频放出去。这才是 looksLikeWav
+      //     （长度 + 非 JSON + RIFF/WAVE 签名）存在的理由。
+      if (!looksLikeWav(bytes)) throw new Error('aqua: empty audio')
+      return { bytes, words: [], mime: 'audio/wav', slotPath: oPath }
     }
 
     async function synthesize(text, voice, rate, pitch, emotion) {
@@ -950,6 +1056,23 @@ export function apply(ctx) {
         // 预热和前端取流可能同时合成同一句：并发合并到同一个任务，避免重复合成拖慢双方。
         const running = ttsInflight.get(key)
         if (running) return running
+      }
+      // ② 槽回放：内存缓存未命中时，先看 8 个播放槽里是否还留着**同一 key** 的有效音频；
+      // 命中就直接回放槽文件，不重新调 provider——这是"聊天记录无法重播"的根治。
+      // 与 ttsCache 同一策略：auto 模式不参与（换后端后槽里的旧音色会串）。
+      if (useCache) {
+        const replayed = await findSlotAudio(key)
+        if (replayed !== null) {
+          if (!ttsCache.has(key)) {
+            ttsCache.set(key, replayed)
+            ttsOrder.push(key)
+            while (ttsOrder.length > TTS_CACHE_MAX) {
+              const oldest = ttsOrder.shift()
+              ttsCache.delete(oldest)
+            }
+          }
+          return replayed
+        }
       }
       const task = (async () => {
         let entry
@@ -1016,6 +1139,11 @@ export function apply(ctx) {
         ttsInflight.set(key, task)
         try {
           const entry = await task
+          // sidecar = 提交记录：只有 provider 真的产出了有效音频才写（task 抛错走不到这里），
+          // 这样槽里的键与音频永远一一对应，重播不会命中被覆盖的旧音频。
+          if (entry && typeof entry.slotPath === 'string' && entry.slotPath.length > 0) {
+            await writeSlotKey(entry.slotPath, key)
+          }
           if (!ttsCache.has(key)) {
             ttsCache.set(key, entry)
             ttsOrder.push(key)
@@ -1126,7 +1254,10 @@ export function apply(ctx) {
         await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
         tlLog({ ev: 'synth_done', ms: Date.now() - t0 })
       } catch (e) {
-        console.warn('[amadeus] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e))
+        // Fix R6：失败告警补上 sid + 文本前缀（截断 24 字），便于把失败对到具体那条聊天记录。
+        const failSid = (tags && typeof tags.sid === 'string' && tags.sid.length > 0) ? tags.sid.slice(0, 8) : '-'
+        console.warn('[amadeus] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e),
+          '| sid=' + failSid + ' text=' + tlTrunc(String(jp === undefined ? '' : jp), 24))
         tlLog({ ev: 'synth_fail', ms: Date.now() - t0 })
       }
       if (kind === 'call') {
