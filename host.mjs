@@ -144,6 +144,8 @@ export function apply(ctx) {
       // 多工作区播报（Task 1）：多会话状态分片总开关 / 气泡前缀策略（'auto'|'always'，文案在 Task 2 使用）
       multiSession: true,
       multiSessionPrefix: 'auto',
+      // 子代理会话播报开关（Task 5）：默认 true = 与既有行为完全一致；false 时子代理会话完全不参与播报与状态维护
+      narrateSubagents: true,
       // 手机界面浮窗化（Task 1 / P8）：浮窗布局开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
       // 配色默认 = 现状「深蓝月白金」panel.css 硬编码值（逐色权威表见 .superpowers/sdd/2026-09-08-float-panel/task-1-report.md）
       floatPanel: true,
@@ -564,6 +566,8 @@ export function apply(ctx) {
       // 多工作区播报（Task 1）：multiSession 布尔；multiSessionPrefix 枚举 auto|always
       if (typeof p.multiSession === 'boolean') out.multiSession = p.multiSession
       if (typeof p.multiSessionPrefix === 'string' && ['auto', 'always'].indexOf(p.multiSessionPrefix) >= 0) out.multiSessionPrefix = p.multiSessionPrefix
+      // 子代理会话播报开关（Task 5）：布尔白名单
+      if (typeof p.narrateSubagents === 'boolean') out.narrateSubagents = p.narrateSubagents
       // 手机界面浮窗化（Task 1 / P8）：浮窗开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
       // 白名单：floatPanel 布尔；themePreset 四枚举；color* 严格 6 位 hex（非法仅忽略该键，不回滚整包）；
       // chatBgUrl 字符串长度 ≤500 且（空串或 http://、https:// 前缀），非法忽略。
@@ -1236,6 +1240,44 @@ export function apply(ctx) {
     const SESSIONS_MAX = 64   // 注册表上限（满员淘汰：优先非回合进行中者，见 evictSessions）
     let sessionsWarnedFull = false   // 满员告警只打一次（Task 2）
 
+    // ============================================================
+    // 子代理会话判定（Task 5：`narrateSubagents` 开关的判据）
+    //   实测依据（dsh-session / dsh-subagent 源码）：
+    //     ① `session.header.origin === 'subagent'` —— dsh-subagent 建子会话时写入的**产品分类**
+    //        （`childSessionMeta()`：`origin: 'subagent'`），语义最明确；
+    //     ② `session.header.delegationDepth >= 1` —— 持久化的**委派深度**（顶层会话缺失/为 0，
+    //        子会话 = 父深度 + 1），跨重启/续跑仍成立，作为同源的第二判据；
+    //     ③ `childSids` —— 由 `subagent/descriptor` 事件登记：子会话日志创建时会 `append('subagent/descriptor')`
+    //        （见 `dsh-subagent/descriptor-seed.js`），该事件经 session/event 以**子会话**为 session 送达，
+    //        因此「见过该事件的 sid」即可判定为子代理会话（用于 header 信息缺失的兜底）；
+    //     ④ 兜底：`ctx.sessions.get(sid)` 读 header（宿主提供该服务时；amadeus 未注入 sessions，通常为 undefined）。
+    //   ⚠ 单独出现 `session.header.parentSession` **不作为判据**——它同时用于「用户 fork 出来的会话」
+    //     （文档：session this one was forked from / seed lineage），据此判定会把用户自己的分叉会话误杀。
+    // ============================================================
+    const childSids = new Set()   // 由 subagent/descriptor 事件登记的 sid（header 信息缺失时的兜底判据）
+    function isSubagentHeader(h) {
+      if (h === null || h === undefined || typeof h !== 'object') return false
+      if (h.origin === 'subagent') return true
+      if (typeof h.delegationDepth === 'number' && isFinite(h.delegationDepth) && h.delegationDepth >= 1) return true
+      return false
+    }
+    function isSubagentSession(session) {
+      try {
+        if (isSubagentHeader(session === null || session === undefined ? undefined : session.header)) return true
+        const sid = sidOf(session)
+        if (sid.length > 0 && childSids.has(sid)) return true
+        // 兜底：session 对象不可用/无 header 时，向宿主 session store 询问（服务不存在则跳过）
+        if (sid.length > 0) {
+          const svc = ctx.get('sessions')
+          if (svc !== undefined && typeof svc.get === 'function') {
+            const s2 = svc.get(sid)
+            if (isSubagentHeader(s2 === null || s2 === undefined ? undefined : s2.header)) return true
+          }
+        }
+      } catch (e) { /* 判定异常 → 按「非子代理」处理（默认开关开启时与现状一致，最保守） */ }
+      return false
+    }
+
     // ---- 标签三级回退：① session/title 标题 → ② basename(cwd) → ③ basename(cwd)·sid4（撞车双方都加） ----
     function sidOf(session) {
       try {
@@ -1342,6 +1384,8 @@ export function apply(ctx) {
         title: session ? titleFromLog(session) : '',
         lastActiveAt: Date.now(),
         state: makeTurnState(sid),
+        // Task 5：注册时定格子代理判定（供开关关闭后仍需过滤已注册会话的路径，如里程碑巡检）
+        isSubagent: isSubagentSession(session),
       }
       sessions.set(sid, rec)
       refreshLabels()
@@ -3133,11 +3177,27 @@ export function apply(ctx) {
     //   assistant/message 含 ask_user_question → BLOCK B2；含 exit_plan_mode → BLOCK B3（计划审批）；含 goal 完成类调用 → turnGoalDone
     //   goal/change operation=complete → turnGoalDone（不直接播，等 turn/end 归一 A3）
     //   turn/end → handleTurnEnd()：goal 完成过 → 'goal'（A3）；否则 'done'（LLM/模板）；随后清该会话回合状态
+    // 子代理会话开关（Task 5 / config.narrateSubagents）：
+    //   · 默认 true → 本监听行为与既有完全一致（零回归）；
+    //   · false → 判定为子代理会话的事件**完全不参与**：不注册（不污染注册表/标签/淘汰）、
+    //     不维护回合态（resetTurn/stepCount/blocking 全跳过）、不 narrate（因此不写 history/progress/
+    //     counts/lastSpeaks/timeline push 行）；判定信号见 isSubagentSession() 注释。
+    //   · `subagent/descriptor` 事件始终只用于登记 childSids（本身没有播报语义，开关开/关都不出声）。
+    //   · 既有 `subagent/end` 的 A4-1「子代理完成」特殊句**不受本开关影响**（无 sid → 默认槽，主会话层面的提示）。
+    //   · 运行期切换立即生效：每个事件按当时的 config 值判定；已在播报队列/批次里的条目不撤回（边界见报告）。
     ctx.effect(() => ctx.on('session/event', (session, event) => {
       try {
         if (event === null || typeof event !== 'object') return
         const t = event.type
         const d = event.data
+        // 判定信号 ③：子代理子会话的日志里带一条 subagent/descriptor（dsh-subagent 建子会话时写入）
+        if (t === 'subagent/descriptor') {
+          const cid = sidOf(session)
+          if (cid.length > 0) childSids.add(cid)
+          return
+        }
+        // Task 5：开关关闭时，子代理会话的事件在此一刀切断（最省资源、最彻底）
+        if (config.narrateSubagents === false && isSubagentSession(session)) return
         // 注册表续活（首见注册；标题/cwd 变更重算标签）——session 不可用时 rec 为 null，状态落默认槽（退化为单一槽行为）
         const rec = touchSession(session)
         if (t === 'session/title') {
@@ -3267,7 +3327,15 @@ export function apply(ctx) {
       let states
       try { states = activeStates() } catch (e) { return }
       for (let i = 0; i < states.length; i++) {
-        try { maybeMilestone(states[i]) } catch (e) { /* ignore */ }
+        const st = states[i]
+        try {
+          // Task 5：开关关闭时也要挡住「开关关之前就已注册」的子代理会话（否则巡检仍可能为其补播里程碑）
+          if (config.narrateSubagents === false && typeof st.sid === 'string' && st.sid.length > 0) {
+            const rec = sessions.get(st.sid)
+            if (rec !== undefined && rec.isSubagent === true) continue
+          }
+          maybeMilestone(st)
+        } catch (e) { /* ignore */ }
       }
     }, 30000))
 
