@@ -88,6 +88,10 @@ export function apply(ctx) {
     const EMOTIONS = ['happy', 'excited', 'elated', 'sad', 'angry', 'furious', 'question', 'soft', 'blush', 'annoyed', 'thinking', 'surprised', 'disappointed', 'eyes_closed', 'indifferent', 'side', 'winking', 'neutral']
     const EMOTION_EXPR = { happy: 'f01', excited: 'f01', elated: 'f01', question: 'f04', sad: 'f02', angry: 'f03', furious: 'f03', soft: 'f02', blush: 'f02', annoyed: 'f03', thinking: 'f04', surprised: 'f04', disappointed: 'f02', eyes_closed: '', indifferent: '', side: '', winking: 'f01', neutral: '' }
 
+    // 播报总结「助手文本」预算的**上限**（= narratorAssistantChars 的校验上界，也是回合态存储侧的保留上限）。
+    //   两处必须同源：存储侧若写死更小的值，预算调大后文本在存储层已被切掉，prompt 侧就无从「不再截断」。
+    const NARR_ASSIST_MAX_CPS = 2000
+
     const DEFAULT_CONFIG = {
       voiceOn: true,
       personaOn: false,
@@ -141,6 +145,11 @@ export function apply(ctx) {
       narratorDone: true,
       narratorMilestoneMs: 240000,
       narratorMilestoneSteps: 10,
+      // 播报总结 prompt 里「アシスタントの最後の応答」这一行的**可见字符预算**（首+尾取法，见 headTailCps）：
+      //   0 = **完全不注入该行**（prompt 与「加该功能前」逐字一致 = 关掉这项功能）；
+      //   >0 = 该行内容 ≤ 预算时原样全给（不加任何标记），超出时取「首 60% + …（中略）… + 尾 40%」。
+      //   默认 400（与改动前的写死值一致，故默认行为只在**超长时**由「只取开头」变为「首+尾」）。
+      narratorAssistantChars: 400,
       // 多工作区播报（Task 1）：多会话状态分片总开关 / 气泡前缀策略（'auto'|'always'，文案在 Task 2 使用）
       multiSession: true,
       multiSessionPrefix: 'auto',
@@ -569,6 +578,9 @@ export function apply(ctx) {
       if (typeof p.narratorDone === 'boolean') out.narratorDone = p.narratorDone
       if (typeof p.narratorMilestoneMs === 'number' && p.narratorMilestoneMs >= 60000 && p.narratorMilestoneMs <= 1800000) out.narratorMilestoneMs = Math.floor(p.narratorMilestoneMs)
       if (typeof p.narratorMilestoneSteps === 'number' && p.narratorMilestoneSteps >= 3 && p.narratorMilestoneSteps <= 50) out.narratorMilestoneSteps = Math.floor(p.narratorMilestoneSteps)
+      // 播报总结的助手文本预算（0–2000 可见字符；0 = 不注入该行）。与 narratorMilestoneSteps 同风格：
+      //   非 number / 越界一律忽略该键（保留旧值或默认值），合法值 Math.floor。
+      if (typeof p.narratorAssistantChars === 'number' && p.narratorAssistantChars >= 0 && p.narratorAssistantChars <= NARR_ASSIST_MAX_CPS) out.narratorAssistantChars = Math.floor(p.narratorAssistantChars)
       // 多工作区播报（Task 1）：multiSession 布尔；multiSessionPrefix 枚举 auto|always
       if (typeof p.multiSession === 'boolean') out.multiSession = p.multiSession
       if (typeof p.multiSessionPrefix === 'string' && ['auto', 'always'].indexOf(p.multiSessionPrefix) >= 0) out.multiSessionPrefix = p.multiSessionPrefix
@@ -1455,6 +1467,24 @@ export function apply(ctx) {
       const cps = Array.from(t)
       return cps.length > keep ? cps.slice(-keep).join('') : t
     }
+    // 首+尾取法（A2，2026-09-12）：预算 keep 个可见字符
+    //   · 码点数 ≤ keep → **原样全给**（不加任何标记，返回值 === 入参）；
+    //   · 码点数 > keep → 首 headN + 中略标记 + 尾 tailN，headN = ceil(keep*0.6)、tailN = keep - headN
+    //     （keep=400 → 240 + 160；keep=800 → 480 + 320。按公式取值：ceil(0.6×400)=240，不是整 250）。
+    //     动机：助手文本码点 p50=432 / p90=1110，实测 53.6% 的回合被截断，而「结论 / 下一步」常在消息**末尾**
+    //     ——只取开头正好把最该给 LLM 的信息切掉，故尾部必须留一段。
+    //   · 切分**复用 truncCps（取首）与 tailCps（取尾）**，两者都按码点切：不切开 emoji 代理对，
+    //     也不产生孤立代理项（自己写 slice 会踩这个坑）；keep 为 0 时不调用本函数（调用侧直接不注入）。
+    const NARR_MID_MARK = '…（中略）…'
+    function headTailCps(s, keep) {
+      const t = String(s)
+      const head = truncCps(t, keep)            // 未超长时 === t（同时充当「是否需要截断」的判定）
+      if (head === t) return t                  // 不截断：原样，**不加标记**
+      const headN = Math.ceil(keep * 0.6)
+      const tailN = keep - headN
+      // tailN === 0 时不取尾：tailCps(t, 0) 的 slice(-0) 等于 slice(0)（整个数组）——必须显式挡掉
+      return truncCps(t, headN) + NARR_MID_MARK + (tailN > 0 ? tailCps(t, tailN) : '')
+    }
     function normTitle(v) {
       return (typeof v === 'string' && v.trim().length > 0) ? truncCps(v.trim(), 40) : ''
     }
@@ -2040,10 +2070,16 @@ export function apply(ctx) {
       const st = stateFor(o.sid)
       const userMsg = truncCps(o.userMsg || st.lastUserText || '', 200)
       // A：本轮**结尾最核心的输出**（助手最后一条非空文本，回合内累积，见 assistant/message 分支）。
-      //   取值方式与 userMsg 对称：显式 opts 优先，其次回合态；预算是 400 可见字符（存储侧已截 400，此处幂等）。
+      //   取值方式与 userMsg 对称：显式 opts 优先，其次回合态。
       //   动机（故障取证）：此前 prompt 只有「用户说的话 + 工具调用计数」，LLM 无从知道本轮**实际产出/结论**，
       //   而用户指令（如「你跑到20再停下」）恰好落在 最近のユーザー発言 里 → 模型只能把**要求**当成**已发生的结果**。
-      const assistantText = truncCps(o.assistantText || st.lastAssistantText || '', 400)
+      //   A2（预算可配 + 首+尾）：预算 = config.narratorAssistantChars（默认 400，范围 0–2000，0 = 不注入该行）。
+      //   ≤ 预算 → 原样全给；> 预算 → 首 60% + …（中略）… + 尾 40%（见 headTailCps，按码点切）。
+      //   注：存储侧（st.lastAssistantText）保留上限为 NARR_ASSIST_MAX_CPS（2000 = 预算可配的最大值），
+      //   故本函数的预算是**唯一**生效的切分点（预算调到 800 时 800 以内的文本原样全给）。
+      const assistantBudget = (typeof config.narratorAssistantChars === 'number') ? config.narratorAssistantChars : 400
+      const assistantRaw = o.assistantText || st.lastAssistantText || ''
+      const assistantText = assistantBudget > 0 ? headTailCps(assistantRaw, assistantBudget) : ''
       const tools = (o.tools && typeof o.tools === 'object') ? o.tools : (st.toolNames || {})
       const toolNames = Object.keys(tools)
       const toolLine = toolNames.length > 0
@@ -2084,7 +2120,8 @@ export function apply(ctx) {
           '【セッション情報】\n' +
           (wsLine ? wsLine + '\n' : '') +
           '最近のユーザー発言：' + (userMsg || '（なし）') + '\n' +
-          'アシスタントの最後の応答：' + (assistantText || '（なし）') + '\n' +
+          // 预算 0 = **整行不出现**（prompt 与「加该功能前」逐字一致）；预算 >0 时与改前同构（无文本仍写「（なし）」）
+          (assistantBudget > 0 ? 'アシスタントの最後の応答：' + (assistantText || '（なし）') + '\n' : '') +
           'このターンのツール使用：' + toolLine + '\n' +
           '前回の進捗サマリ：' + (prevSummary || '（なし）') + '\n' +
           (blockingLine ? blockingLine + '\n' : '') +
@@ -3247,6 +3284,7 @@ export function apply(ctx) {
           narratorDone: config.narratorDone,
           narratorMilestoneMs: config.narratorMilestoneMs,
           narratorMilestoneSteps: config.narratorMilestoneSteps,
+          narratorAssistantChars: config.narratorAssistantChars,
           multiSession: config.multiSession !== false,
           multiSessionPrefix: typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'auto',
         },
@@ -3511,8 +3549,11 @@ export function apply(ctx) {
             //   只取 type==='text' 的块（见 assistantMessageText）；每来一条非空就覆盖 —— 同一回合内
             //   带工具调用的中途消息会被后续收尾消息覆盖，最终留下的就是结尾那一条。
             //   空文本（仅承载 usage 的 assistant/message）不覆盖，避免把已有文本擦掉。
+            //   A2（预算可配）：存储侧保留上限 = NARR_ASSIST_MAX_CPS（2000，= 预算可配的最大值），
+            //   **不再写死 400**——否则 config.narratorAssistantChars > 400 时，文本在这里就被切掉，
+            //   narrateSummary 根本拿不到超长部分，预算调大便无从生效。真正的预算在 prompt 侧施加。
             const aText = assistantMessageText(msg).trim()
-            if (aText.length > 0) st.lastAssistantText = truncCps(aText, 400)
+            if (aText.length > 0) st.lastAssistantText = truncCps(aText, NARR_ASSIST_MAX_CPS)
             if (msgHasToolCall(msg, ['ask_user_question'])) {
               st.blocking = 'b2'
               narrate('block', { sid, variant: 'b2' })

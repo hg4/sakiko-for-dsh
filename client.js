@@ -676,6 +676,8 @@ function apply(ctx) {
     const pickHum = (v) => humOptions.find((o) => o[0] === v) ? v : 12e5;
     const narratorOptions = [[12e4, "2 \u5206\u949F"], [24e4, "4 \u5206\u949F\uFF08\u9ED8\u8BA4\uFF09"], [36e4, "6 \u5206\u949F"], [6e5, "10 \u5206\u949F"]];
     const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 24e4;
+    const narrCharsOptions = [[0, "\u4E0D\u6CE8\u5165\uFF08\u5173\u95ED\uFF09"], [200, "200 \u5B57"], [400, "400 \u5B57\uFF08\u9ED8\u8BA4\uFF09"], [600, "600 \u5B57"], [800, "800 \u5B57"], [1200, "1200 \u5B57"], [2000, "2000 \u5B57"]];
+    const pickNarrChars = (v) => narrCharsOptions.find((o) => o[0] === v) ? v : 400;
     return import_react.default.createElement(
       "div",
       null,
@@ -713,6 +715,7 @@ function apply(ctx) {
       Row({ label: "\u6BCF\u56DE\u5408\u5B8C\u6210\u64AD\u62A5", desc: "\u5173\u95ED\u540E\u53EA\u4FDD\u7559\u91CC\u7A0B\u7891\u4E0E\u963B\u585E\u7B49\u5173\u952E\u8282\u70B9", control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
       Row({ label: "\u64AD\u62A5\u5B50\u4EE3\u7406\u4F1A\u8BDD", desc: "\u5B50\u4EE3\u7406/\u540E\u53F0\u4F1A\u8BDD\u7684\u5F00\u5DE5\u4E0E\u5B8C\u6210\u4E5F\u4F1A\u64AD\u62A5\uFF1B\u5173\u95ED\u540E\u4E0D\u518D\u64AD\u62A5\uFF08\u5B50\u4EE3\u7406\u5B8C\u6210\u63D0\u793A\u4ECD\u4F1A\u4FDD\u7559\uFF09", control: Check({ checked: config.narrateSubagents !== false, onChange: (v) => patchConfig({ narrateSubagents: v }) }) }),
       Row({ label: "\u91CC\u7A0B\u7891\u95F4\u9694", desc: "\u5355\u56DE\u5408\u8DD1\u6EE1\u8BE5\u65F6\u957F\u5373\u64AD\u62A5\u4E00\u6B21\u8FDB\u5C55", control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
+      Row({ label: "\u52A9\u624B\u6587\u672C\u9884\u7B97", desc: "\u603B\u7ED3\u65F6\u5582\u7ED9 LLM \u7684\u300C\u672C\u8F6E\u52A9\u624B\u56DE\u590D\u300D\u5B57\u7B26\u4E0A\u9650\uFF1B\u8D85\u51FA\u65F6\u4FDD\u7559\u9996\u5C3E\u5404\u4E00\u6BB5\uFF08\u4E2D\u95F4\u7701\u7565\uFF09\uFF1B0 = \u4E0D\u6CE8\u5165\u8BE5\u884C", control: Select({ value: pickNarrChars(config.narratorAssistantChars), options: narrCharsOptions, onChange: (v) => patchConfig({ narratorAssistantChars: Number(v) }) }) }),
       group("\u5916\u89C2\u4E0E\u5E03\u5C40"),
       Row({ label: "\u4E3B\u9898\u9884\u8BBE", control: Select({ value: config.themePreset || "sakiko-blue", options: [["sakiko-blue", "\u6DF1\u84DD\u6708\u767D\u91D1\uFF08\u9ED8\u8BA4\uFF09"], ["midnight-gold", "\u66AE\u84DD\u938F\u91D1"], ["sakura-pink", "\u6A31\u7C89\u6708\u767D"], ["mono", "\u6708\u7070\u5355\u8272"]], onChange: (v) => patchConfig({ themePreset: v }) }) }),
       Row({ label: "\u4E3B\u5E95\u6E10\u53D81", control: ColorControl({ value: config.colorBg1, onChange: (v) => patchConfig({ colorBg1: v }) }) }),

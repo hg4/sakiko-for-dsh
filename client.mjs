@@ -651,6 +651,10 @@ export function apply(ctx) {
       const pickHum = (v) => humOptions.find((o) => o[0] === v) ? v : 1200000
       const narratorOptions = [[120000, '2 分钟'], [240000, '4 分钟（默认）'], [360000, '6 分钟'], [600000, '10 分钟']]
       const pickNarr = (v) => narratorOptions.find((o) => o[0] === v) ? v : 240000
+      // 播报总结的助手文本预算（可见字符）：0 = 不注入「アシスタントの最後の応答」整行；
+      // 与 narratorOptions 同款（Select + 兜底 pickNarrChars，非法/未知值一律显示 400，不会写坏其它设置项）
+      const narrCharsOptions = [[0, '不注入（关闭）'], [200, '200 字'], [400, '400 字（默认）'], [600, '600 字'], [800, '800 字'], [1200, '1200 字'], [2000, '2000 字']]
+      const pickNarrChars = (v) => narrCharsOptions.find((o) => o[0] === v) ? v : 400
       return React.createElement('div', null,
         group('基本开关'),
         Row({ label: '语音朗读', desc: '助手回复自动由 SAKIKO 朗读', control: Check({ checked: config.voiceOn !== false, onChange: (v) => patchConfig({ voiceOn: v }) }) }),
@@ -691,6 +695,7 @@ export function apply(ctx) {
         Row({ label: '每回合完成播报', desc: '关闭后只保留里程碑与阻塞等关键节点', control: Check({ checked: config.narratorDone !== false, onChange: (v) => patchConfig({ narratorDone: v }) }) }),
         Row({ label: '播报子代理会话', desc: '子代理/后台会话的开工与完成也会播报；关闭后不再播报（子代理完成提示仍会保留）', control: Check({ checked: config.narrateSubagents !== false, onChange: (v) => patchConfig({ narrateSubagents: v }) }) }),
         Row({ label: '里程碑间隔', desc: '单回合跑满该时长即播报一次进展', control: Select({ value: pickNarr(config.narratorMilestoneMs), options: narratorOptions, onChange: (v) => patchConfig({ narratorMilestoneMs: Number(v) }) }) }),
+        Row({ label: '助手文本预算', desc: '总结时喂给 LLM 的「本轮助手回复」字符上限；超出时保留首尾各一段（中间省略）；0 = 不注入该行', control: Select({ value: pickNarrChars(config.narratorAssistantChars), options: narrCharsOptions, onChange: (v) => patchConfig({ narratorAssistantChars: Number(v) }) }) }),
 
         group('外观与布局'),
         Row({ label: '主题预设', control: Select({ value: config.themePreset || 'sakiko-blue', options: [['sakiko-blue', '深蓝月白金（默认）'], ['midnight-gold', '暮蓝鎏金'], ['sakura-pink', '樱粉月白'], ['mono', '月灰单色']], onChange: (v) => patchConfig({ themePreset: v }) }) }),
