@@ -1317,24 +1317,61 @@ export function apply(ctx) {
       } catch (e) { /* 日志不可读：忽略 */ }
       return ''
     }
-    // 注册表级标签重算：有标题者用标题且不参与撞车判定；无标题者按 basename 分组，
-    // 同一 basename 被 ≥2 个无标题会话占用（或无 cwd 的独苗）→ 本会话与冲突方都加 ·sid4
+    // ============================================================
+    // Fix R2（label 截断）：**子代理会话**的标签统一截断为 12 字 +「…」（仅当原长 > 12）
+    //   · 截断发生在**存储层**（注册表 rec.label）→ 气泡前缀 / narratorStatus.sessions[].label /
+    //     memory.history.label / progress[sid].label / timeline 的 label 全部同源一致；
+    //   · 非子代理会话（你自己的会话、用户 fork）标签**保持原样**（不截断、语义不变）；
+    //   · 子代理判定复用 Task 5 的判据（rec.isSubagent 或 childSids）——迟到 descriptor 回写后
+    //     会重跑 refreshLabels()，标签随即被截断。
+    // ============================================================
+    const SUBAGENT_LABEL_KEEP = 12          // 子代理标签保留字符数（超出 → 保留 12 字 + 「…」）
+    const SUBAGENT_LABEL_TIE_KEEP = 7       // 截断后同名时的前缀预算（7 +「…」+「·sid4」= 13，与普通子代理标签同长）
+    function recIsSubagent(rec) {
+      return rec.isSubagent === true || childSids.has(rec.sid)
+    }
+    function shortenSubagentLabel(s, keep) {
+      const t = String(s)
+      return t.length > keep ? t.slice(0, keep) + '…' : t
+    }
+    // 注册表级标签重算（Fix R2 起为两段式）：
+    //   第一段（语义与既有完全一致）：有标题者用标题且不参与撞车判定；无标题者按 basename 分组，
+    //     同一 basename 被 ≥2 个无标题会话占用（或无 cwd 的独苗）→ 本会话与冲突方都加 ·sid4。
+    //   第二段（仅子代理）：把第一段结果截断为 12 字 +「…」；若**截断后**出现同名（例如两个长
+    //     basename 前缀相同），则先截断再加后缀——前缀预算收窄到 7，再补 ·sid4（sid 前 4 位天然唯一），
+    //     因此「两个子代理截断后同名」仍可区分，且长度与普通子代理标签一致（≤12，截断时 13）。
     function refreshLabels() {
+      // ---- 第一段：基础标签（保持既有语义） ----
       const groups = new Map()
       for (const rec of sessions.values()) {
         const t = normTitle(rec.title)
-        if (t.length > 0) { rec.label = t; continue }
-        const base = basenameOf(rec.cwd)
-        rec.label = base
-        const key = base.toLowerCase()
+        rec.rawBase = t.length > 0 ? t : basenameOf(rec.cwd)
+        if (t.length > 0) { rec.baseLabel = t; continue }
+        rec.baseLabel = rec.rawBase
+        const key = rec.rawBase.toLowerCase()
         if (!groups.has(key)) groups.set(key, [])
         groups.get(key).push(rec)
       }
-      for (const [key, list] of groups) {
-        if (list.length < 2 && key.length > 0) continue
+      for (const rec of sessions.values()) {
+        if (normTitle(rec.title).length > 0) continue
+        const list = groups.get(rec.rawBase.toLowerCase()) || []
+        const collide = list.length >= 2 || rec.rawBase.length === 0
+        rec.baseLabel = (rec.rawBase.length > 0 ? rec.rawBase : '会话') + (collide ? '·' + sidShort(rec.sid) : '')
+      }
+      // ---- 第二段：子代理截断（存储层） ----
+      const subGroups = new Map()
+      for (const rec of sessions.values()) {
+        if (!recIsSubagent(rec)) { rec.label = rec.baseLabel; continue }
+        rec.label = shortenSubagentLabel(rec.baseLabel, SUBAGENT_LABEL_KEEP)
+        const key = rec.label.toLowerCase()
+        if (!subGroups.has(key)) subGroups.set(key, [])
+        subGroups.get(key).push(rec)
+      }
+      for (const list of subGroups.values()) {
+        if (list.length < 2) continue
         for (const rec of list) {
-          const base = basenameOf(rec.cwd)
-          rec.label = (base.length > 0 ? base : '会话') + '·' + sidShort(rec.sid)
+          // 截断后同名 → 用未经后缀的 rawBase 收窄前缀 + ·sid4（丢掉上一段可能加过的后缀，避免叠两层）
+          rec.label = shortenSubagentLabel(rec.rawBase.length > 0 ? rec.rawBase : '会话', SUBAGENT_LABEL_TIE_KEEP) + '·' + sidShort(rec.sid)
         }
       }
     }
@@ -3198,7 +3235,10 @@ export function apply(ctx) {
             // Fix R1（Minor-1）：descriptor **迟到**（首个事件之后才到）时就地纠正已注册记录，
             // 否则该记录的 isSubagent 会以 false 定格 → 30s 巡检仍会为它补播里程碑。
             const recKnown = sessions.get(cid)
-            if (recKnown !== undefined && recKnown.isSubagent !== true) recKnown.isSubagent = true
+            if (recKnown !== undefined && recKnown.isSubagent !== true) {
+              recKnown.isSubagent = true
+              refreshLabels()   // Fix R2：分类变化后重算标签，使该子代理的标签立即按 12 字截断
+            }
           }
           return
         }
