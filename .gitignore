@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 
 .superpowers/
+
+# 本地临时脚本/日志/取证产物（控制器约定：不进仓库）
+scratch/
