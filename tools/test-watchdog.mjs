@@ -35,8 +35,9 @@ function argOf(name, dflt) {
 const PLUGIN = path.resolve(argOf('plugin', REPO))
 const CASE = argOf('case', 'all')
 const KEEP = argv.includes('--keep')
-const API_PORT_WANT = Number(argOf('api-port', '19880'))
-const BRIDGE_PORT_WANT = Number(argOf('bridge-port', '18000'))
+// 默认端口避开 19880/18000（验收台在用那一对），也避开真实服务端口 9880/8000
+const API_PORT_WANT = Number(argOf('api-port', '21880'))
+const BRIDGE_PORT_WANT = Number(argOf('bridge-port', '21000'))
 const OUT_ROOT = path.resolve(argOf('out', path.join(os.tmpdir(), 'sakiko-wd-watchdog-test')))
 
 const results = []
@@ -144,8 +145,10 @@ function logText(p) {
 
 // ---------------- 生成"假 DSH 进程"与 dummy 服务（都写进临时目录，仓库里不留机器相关路径） ----------------
 const DUMMY_SRC = String.raw`
-// dummy 服务：role=launcher 时拉起一个 role=worker 的子进程，worker 监听端口。
-// 形状刻意与 GPT-SoVITS 一致：listener 不是启动器本身，而是它的子进程。
+// dummy 服务：复刻验收台在**真实 DSH** 上实测到的进程形状（F1-a）：
+//   假DSH(被杀) → launcher(随父同刻死) → worker(监听端口, 活) → grandchild(常驻, 活)
+// 关键：launcher 由 driver **不 detached** 拉起（libuv 的 job 会把它随 node 一起收走）；
+// worker / grandchild 由上一代 **detached** 拉起，等价于真实环境里的 breakaway 逃逸。
 import { spawn } from 'node:child_process'
 import { openSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
@@ -153,22 +156,27 @@ import net from 'node:net'
 const role = process.argv[2]
 const port = Number(process.argv[3])
 const out = process.argv[4]
-if (role === 'worker') {
+
+if (role === 'grandchild') {
+  // 常驻孙进程：不监听端口（真实 GPT-SoVITS 树里同样有这类进程，只按端口找会漏掉它）
+  setInterval(() => { }, 1000)
+} else if (role === 'worker') {
   process.on('uncaughtException', (e) => { process.stderr.write('worker uncaught: ' + (e && e.stack ? e.stack : String(e)) + '\n') })
+  const g = spawn(process.execPath, [process.argv[1], 'grandchild', String(port), out], { stdio: 'ignore', windowsHide: true, detached: true })
+  g.unref()
+  writeFileSync(out + '.gchild.json', JSON.stringify({ workerPid: process.pid, grandchildPid: g.pid, port, at: new Date().toISOString() }, null, 2))
   const srv = net.createServer((s) => { s.on('error', () => { }); s.end('dummy') })
   srv.on('error', (e) => { process.stderr.write('worker server error: ' + e.message + '\n') })
   srv.listen(port, '127.0.0.1', () => { process.stdout.write('DUMMY-LISTEN ' + port + ' pid=' + process.pid + '\n') })
   process.on('exit', (c) => { process.stderr.write('worker exit code=' + c + ' at=' + new Date().toISOString() + '\n') })
-  setInterval(() => {}, 1000)
+  setInterval(() => { }, 1000)
 } else {
-  // worker 的 stdout 丢掉（模拟 python 服务无人读管道），stderr 落文件只为排查。
-  // detached：让 worker 真正独立于启动器（否则本机 DSH 沙箱的 job object 会把"父被杀 ⇒ 子陪葬"
-  // 变成自动行为，tree-kill 的断言就成了空过）。真实 GPT-SoVITS 的 worker 同样活得比启动器久。
+  // launcher：对外表现为"抢到端口的服务"，实际监听的是它的 worker（与 GPT-SoVITS 同形）
   const errFd = openSync(out + '.worker.err.log', 'a')
   const w = spawn(process.execPath, [process.argv[1], 'worker', String(port), out], { stdio: ['ignore', 'ignore', errFd], windowsHide: true, detached: true })
   w.unref()
   writeFileSync(out, JSON.stringify({ role: 'launcher', port, launcherPid: process.pid, workerPid: w.pid, at: new Date().toISOString() }, null, 2))
-  setInterval(() => {}, 1000)
+  setInterval(() => { }, 1000)
 }
 `
 
@@ -183,6 +191,7 @@ for (let i = 2; i + 1 < process.argv.length; i += 2) args[process.argv[i].replac
 const pluginDir = args.plugin
 const tmpDir = args.tmp
 const mode = args.mode || 'idle'
+const launcherDetached = args['launcher-detached'] === '1'
 const launcherScript = args.launcher
 const tokenFile = args['token-file']
 const apiPort = Number(args['api-port'])
@@ -193,7 +202,7 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 function note(s) { process.stdout.write('[driver] ' + s + '\n') }
 
 const routes = new Map()
-const seen = { spawned: [] }
+const seen = { spawned: [], spawnCalls: [] }
 let webServer = null
 
 const fsSvc = {
@@ -245,14 +254,24 @@ const subprocessSvc = {
     const pi = av.indexOf('-p')
     if (pi >= 0) port = Number(av[pi + 1]) || 0
     if (!port && env.BRIDGE_PORT) port = Number(env.BRIDGE_PORT) || 0
+    seen.spawnCalls.push({
+      argv: av.slice(0, 12),
+      cwd: String(opts.cwd || ''),
+      port: port,
+      BRIDGE_PORT: String(env.BRIDGE_PORT || ''),
+    })
     let child
     if (port > 0) {
-      // detached：真实场景里"DSH 被强杀后 python 服务还活着"（用户报的 bug 就是这个），
-      // 本机 DSH 沙箱的 job object 会让非 detached 子进程随父陪葬 ⇒ 必须 detached 才能复现孤儿。
-      child = spawnChild(process.execPath, [launcherScript, 'launcher', String(port), svcJson(port)], { stdio: 'ignore', windowsHide: true, cwd: tmpDir, detached: true })
-      child.unref()
-      seen.spawned.push({ port, pid: child.pid })
-      note('fake subprocess.spawn 托管服务 port=' + port + ' pid=' + child.pid)
+      // ★ 默认 **不 detached**：复刻真实形状（F1-a）—— 插件用 ctx.subprocess 拉起的启动器在 libuv
+      //   的 job 里，DSH node 被强杀时它随父同刻死亡；只有 detached(breakaway) 的孙辈活下来占端口。
+      //   --launcher-detached 1（用例 R1）则反过来：启动器也活着，走「树杀活着的启动器」这条路径。
+      const det = launcherDetached
+      child = spawnChild(process.execPath, [launcherScript, 'launcher', String(port), svcJson(port)],
+        { stdio: 'ignore', windowsHide: true, cwd: tmpDir, detached: det })
+      if (det) child.unref()
+      seen.spawned.push({ port, pid: child.pid, launcherDetached: det })
+      note('fake subprocess.spawn 托管服务 port=' + port + ' pid=' + child.pid
+        + (det ? '（detached，启动器会活下来）' : '（不 detached，随假 DSH 同刻死）'))
     } else {
       // 非服务类 spawn（例如 ensureDataDirs 的 mkdir）：按原 argv 真跑
       child = spawnChild(av[0], av.slice(1), { stdio: 'ignore', windowsHide: true, cwd: opts.cwd || tmpDir, env: Object.assign({}, process.env, env) })
@@ -315,6 +334,8 @@ const ev = {
   apiPid: ready && ready.api ? ready.api.pid : 0,
   bridgePid: ready && ready.bridge ? ready.bridge.pid : 0,
   spawned: seen.spawned,
+  spawnCalls: seen.spawnCalls,
+  dshEnvVisibleToWatchdogLaunch: false,
   at: new Date().toISOString(),
 }
 process.stdout.write('EVIDENCE ' + JSON.stringify(ev) + '\n')
@@ -368,8 +389,10 @@ function writeConfig(c, apiPort, bridgePort) {
   writeFileSync(path.join(c.data, 'config', 'sakiko.json'), JSON.stringify(cfg, null, 2), 'utf8')
 }
 
-function startDriver(c, apiPort, bridgePort, mode) {
+function startDriver(c, apiPort, bridgePort, mode, opts) {
   const out = []
+  const extra = []
+  if (opts && opts.launcherDetached) extra.push('--launcher-detached', '1')
   const child = spawn(process.execPath, [
     c.driverScript,
     '--plugin', PLUGIN,
@@ -379,7 +402,7 @@ function startDriver(c, apiPort, bridgePort, mode) {
     '--token-file', c.tokenFile,
     '--api-port', String(apiPort),
     '--bridge-port', String(bridgePort),
-  ], {
+  ].concat(extra), {
     cwd: c.dir,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -399,13 +422,14 @@ async function startExternalDummies(c, ports) {
     pids.push(ch.pid)
   }
   const ok = await waitFor(async () => {
-    for (const p of ports) if (!(await portOpen(p, 500))) return false
+    for (const p of ports) {
+      if (!(await portOpen(p, 500))) return false
+      if (!gchildRecord(c, p)) return false
+    }
     return true
-  }, 10000, 200)
+  }, 15000, 200)
   return { pids, ok: ok.ok }
 }
-
-function svcRecord(c, port) { return readJson(path.join(c.dir, 'svc-' + port + '.json')) }
 
 function findWatchdogs(tokenFile) {
   const t = psTable()
@@ -449,80 +473,155 @@ function dumpDiag(c, ports) {
   for (const p of ports) console.log('  端口 ' + p + ' 的监听者 pid=' + JSON.stringify(owners[p]))
 }
 
+function svcRecord(c, port) { return readJson(path.join(c.dir, 'svc-' + port + '.json')) }
+function gchildRecord(c, port) { return readJson(path.join(c.dir, 'svc-' + port + '.json.gchild.json')) }
+
+// 一个 dummy 服务的三代 pid：launcher（随假 DSH 同刻死）/ worker（监听端口）/ grandchild（常驻）
+function dummyPids(c, port) {
+  const r = svcRecord(c, port)
+  const g = gchildRecord(c, port)
+  return { launcher: r ? r.launcherPid : 0, worker: r ? r.workerPid : 0, grandchild: g ? g.grandchildPid : 0 }
+}
+function allDummyPids(c, ports) {
+  const out = []
+  for (const p of ports) {
+    const d = dummyPids(c, p)
+    for (const k of ['launcher', 'worker', 'grandchild']) if (d[k]) out.push(d[k])
+  }
+  return out
+}
+
 async function cleanup(c, ctxObj) {
   if (ctxObj && ctxObj.driver && ctxObj.driver.child && pidAlive(ctxObj.driver.child.pid)) {
     killTree(ctxObj.driver.child.pid)
     await sleep(600)
   }
+  if (ctxObj && ctxObj.wd && pidAlive(ctxObj.wd.pid)) killTree(ctxObj.wd.pid)
   for (const pid of (ctxObj && ctxObj.extraPids) || []) if (pidAlive(pid)) killTree(pid)
   for (const w of findWatchdogs(c.tokenFile)) killTree(w.pid)
-  for (const port of (ctxObj && ctxObj.ports) || []) {
-    const r = svcRecord(c, port)
-    if (r) { if (pidAlive(r.launcherPid)) killTree(r.launcherPid); if (pidAlive(r.workerPid)) killTree(r.workerPid) }
-  }
+  // 兜底：把本 case 目录下**所有**残留进程（含孙进程）按 pid 清掉
+  for (const p of procsWithMarker(c.dir)) if (pidAlive(p.pid)) killTree(p.pid)
 }
 
 // ---------------- 各 case ----------------
-async function casePositive(apiPort, bridgePort) {
-  const c = makeCaseDir('positive')
+// 同一个用例跑两种形状（**两种都保留**，它们验证的是不同分支）：
+//   R1' real-shape      启动器 **非 detached** ⇒ 强杀时启动器随 DSH 同刻死，占端口的是它的后代
+//                       （这是生产环境真正会走的分支，也是本功能的核心判据）
+//   R1  detached-launcher 启动器也 detached ⇒ 回收时启动器还活着，走"树杀活着的启动器"这条路径
+async function caseKillTree(apiPort, bridgePort, variant) {
+  const realShape = variant === 'real-shape'
+  const name = realShape ? 'positive' : 'detached-launcher'
+  const c = makeCaseDir(name)
   const cx = { ports: [apiPort, bridgePort], extraPids: [] }
-  console.log('\n=== case positive（正例：强杀假 DSH ⇒ 看门狗回收两代 dummy）===')
-  console.log('  plugin=' + PLUGIN + '\n  tmp=' + c.dir + '\n  ports=' + apiPort + '/' + bridgePort)
-  if (!(await portOpen(apiPort, 400)) && !(await portOpen(bridgePort, 400))) rec('positive', '前置：临时端口空闲', true, '')
-  else rec('positive', '前置：临时端口空闲', false, '端口已被占用，测试无效')
+  console.log('\n=== case ' + name + '（' + (realShape
+    ? 'R1\'：启动器随 DSH 同刻死亡 ⇒ 必须按 PPID 链回收后代'
+    : 'R1：启动器仍活着 ⇒ 树杀活着的启动器') + '）===')
+  console.log('  plugin=' + PLUGIN + '\n  tmp=' + c.dir + '\n  ports=' + apiPort + '/' + bridgePort
+    + '\n  形状=' + (realShape ? '假DSH → 启动器(非detached,随父死) → worker(detached,监听) → 孙进程(detached)' : '假DSH → 启动器(detached) → worker(detached,监听) → 孙进程(detached)'))
+  if (!(await portOpen(apiPort, 400)) && !(await portOpen(bridgePort, 400))) rec(name, '前置：临时端口空闲', true, '')
+  else rec(name, '前置：临时端口空闲', false, '端口已被占用，测试无效')
   writeConfig(c, apiPort, bridgePort)
-  const d = startDriver(c, apiPort, bridgePort, 'idle')
+  const d = startDriver(c, apiPort, bridgePort, 'idle', { launcherDetached: !realShape })
   cx.driver = d
 
   const up = await waitFor(async () => {
     const a = svcRecord(c, apiPort); const b = svcRecord(c, bridgePort)
-    return !!a && !!b && (await portOpen(apiPort, 400)) && (await portOpen(bridgePort, 400))
+    const ga = gchildRecord(c, apiPort); const gb = gchildRecord(c, bridgePort)
+    return !!a && !!b && !!ga && !!gb && (await portOpen(apiPort, 400)) && (await portOpen(bridgePort, 400))
   }, 60000, 500)
   d.flush()
-  const apiRec = svcRecord(c, apiPort)
-  const brRec = svcRecord(c, bridgePort)
-  const dummies = [apiRec && apiRec.launcherPid, apiRec && apiRec.workerPid, brRec && brRec.launcherPid, brRec && brRec.workerPid].filter(Boolean)
+  const pids = { api: dummyPids(c, apiPort), bridge: dummyPids(c, bridgePort) }
+  const dummies = allDummyPids(c, [apiPort, bridgePort])
   cx.extraPids = dummies
-  rec('positive', '前置：两个 dummy 服务（各含启动器+worker）已在临时端口监听', up.ok,
-    'api=' + JSON.stringify(apiRec) + ' bridge=' + JSON.stringify(brRec))
+  rec(name, '前置：两个 dummy 服务各三代进程都在（启动器 + 监听 worker + 常驻孙进程）',
+    up.ok && dummies.length === 6, 'api=' + JSON.stringify(pids.api) + ' bridge=' + JSON.stringify(pids.bridge))
 
   const token = readJson(c.tokenFile)
   const wds = findWatchdogs(c.tokenFile)
-  rec('positive', '前置：令牌文件已生成且 services 登记了两个 pid', !!(token && token.token && token.services && token.services.length === 2),
+  rec(name, '前置：令牌文件已生成且 services 登记了两个 pid', !!(token && token.token && token.services && token.services.length === 2),
     token ? JSON.stringify(token).slice(0, 300) : '（令牌文件不存在）')
-  rec('positive', '前置：看门狗进程确实活着（否则本 case 会"空过"）', wds.length === 1,
+  rec(name, '前置：看门狗进程确实活着（否则本 case 会"空过"）', wds.length === 1,
     wds.length > 0 ? pidDesc(wds[0].pid) : '（没有找到 watchdog.mjs 进程）')
 
-  // ---- 强杀假 DSH（不带 /T：模仿 taskkill /F 只杀 node 本身）----
+  // ★ F2：验证插件真实的 spawn 形状（api: cwd=GPT-SoVITS-main + 相对 argv api.py；bridge: <voiceRoot>/bridge_tts.py + BRIDGE_PORT）
+  //   注：driver-ready.json 是插件进入 ready 后才写的，端口通 ≠ 已 ready（可能还在 set_model），所以这里要等文件
+  const drReady = await waitFor(() => existsSync(path.join(c.dir, 'driver-ready.json')), 30000, 300)
+  const dr0 = readJson(path.join(c.dir, 'driver-ready.json'))
+  const calls = (dr0 && dr0.ev && dr0.ev.spawnCalls) || []
+  const apiCall = calls.find((x) => x.port === apiPort)
+  const brCall = calls.find((x) => x.port === bridgePort)
+  const apiOk = !!apiCall && /GPT-SoVITS-main$/.test(String(apiCall.cwd).replace(/[\\/]+$/, ''))
+    && apiCall.argv[2] === 'api.py' && apiCall.argv.includes('-p') && apiCall.argv.includes(String(apiPort))
+  const brOk = !!brCall && String(brCall.argv[2]).endsWith('bridge_tts.py') && brCall.BRIDGE_PORT === String(bridgePort)
+  rec(name, '前置：复刻了真实的 spawn 形状（F2：api cwd=GPT-SoVITS-main + 裸 argv api.py；桥=<voiceRoot>/bridge_tts.py + BRIDGE_PORT）',
+    drReady.ok && apiOk && brOk, 'api=' + JSON.stringify(apiCall) + ' bridge=' + JSON.stringify(brCall))
+
+  // ---- 强杀假 DSH（不带 /T：模仿验收台的真实强杀方式 taskkill /F /PID <node>）----
   dumpDiag(c, [apiPort, bridgePort])
+  const wdPid = wds.length > 0 ? wds[0].pid : 0
   const killAt = new Date()
   const t0 = Date.now()
-  console.log('  >>> taskkill /F /PID ' + d.child.pid + '（' + killAt.toISOString() + '）')
+  console.log('  >>> taskkill /F /PID ' + d.child.pid + '（' + killAt.toISOString() + '，**不带 /T**）')
   spawnSync('taskkill', ['/F', '/PID', String(d.child.pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 })
   const dshGone = await waitFor(() => !pidAlive(d.child.pid), 5000, 100)
-  rec('positive', '假 DSH 进程已被强杀', dshGone.ok, 'pid=' + d.child.pid + ' 消失耗时 ' + dshGone.ms + 'ms')
+  rec(name, '假 DSH 进程已被强杀', dshGone.ok, 'pid=' + d.child.pid + ' 消失耗时 ' + dshGone.ms + 'ms')
+
+  // ★ 强杀后立刻取"形状快照"（此时看门狗还在查进程表，来不及动手）
+  const shape = {
+    launcherAlive: [pids.api.launcher, pids.bridge.launcher].filter((p) => p && pidAlive(p)),
+    workerAlive: [pids.api.worker, pids.bridge.worker].filter((p) => p && pidAlive(p)),
+    gchildAlive: [pids.api.grandchild, pids.bridge.grandchild].filter((p) => p && pidAlive(p)),
+    watchdogAlive: pidAlive(wdPid),
+    at: new Date().toISOString(),
+    deltaMs: Date.now() - t0,
+  }
+  if (realShape) {
+    rec(name, '★★★ 前置（核心判据）：登记的启动器**已随 DSH 同刻死亡**，而 worker/孙进程仍活着并占着端口',
+      shape.launcherAlive.length === 0 && shape.workerAlive.length === 2 && shape.gchildAlive.length === 2,
+      '强杀后 +' + shape.deltaMs + 'ms 快照：存活启动器=' + JSON.stringify(shape.launcherAlive)
+      + '（必须为空），存活 worker=' + JSON.stringify(shape.workerAlive) + '，存活孙进程=' + JSON.stringify(shape.gchildAlive))
+  } else {
+    rec(name, '前置：启动器在回收时刻**仍然活着**（本 case 走的是"树杀活着的启动器"路径）',
+      shape.launcherAlive.length === 2 && shape.workerAlive.length === 2 && shape.gchildAlive.length === 2,
+      '强杀后 +' + shape.deltaMs + 'ms 快照：存活启动器=' + JSON.stringify(shape.launcherAlive) + '（应为 2 个）')
+  }
+  rec(name, '★★ 看门狗在假 DSH 被 taskkill /F 强杀后**仍然存活**（detached 生效，没被 job 收走）',
+    shape.watchdogAlive && wdPid > 0,
+    '看门狗 pid=' + wdPid + ' 在 ' + shape.at + ' 仍 alive=' + shape.watchdogAlive + '（其父 pid=' + d.child.pid + ' 已消失）')
 
   const clr = await waitFor(async () => !(await portOpen(apiPort, 400)) && !(await portOpen(bridgePort, 400)), 15000, 250)
   const elapsed = Date.now() - t0
-  rec('positive', '≤15s 内两个端口都空闲', clr.ok, clr.ok
+  rec(name, '≤15s 内两个端口都空闲', clr.ok, clr.ok
     ? ('端口 ' + apiPort + '/' + bridgePort + ' 释放耗时 ' + elapsed + 'ms')
     : ('15s 内端口仍未释放：' + apiPort + '=' + (await portOpen(apiPort, 400)) + ' ' + bridgePort + '=' + (await portOpen(bridgePort, 400)) + '（等待超时 ' + elapsed + 'ms）'))
   const dead = await waitFor(() => dummies.every((p) => !pidAlive(p)), 15000, 200)
-  rec('positive', '≤15s 内两代 dummy 进程（启动器+worker）全部消失', dead.ok && dummies.length === 4,
+  rec(name, '≤15s 内整棵后代树（启动器+worker+孙进程 ×2 服务）全部消失', dead.ok && dummies.length === 6,
     'pids=' + dummies.join(',') + '；仍存活=' + dummies.filter(pidAlive).join(',') + '（空=全灭）')
   const wdGone = await waitFor(() => findWatchdogs(c.tokenFile).length === 0, 15000, 300)
   const hadWatchdog = wds.length === 1
-  rec('positive', '看门狗自身退出', wdGone.ok && hadWatchdog,
+  rec(name, '看门狗完成回收后自行退出', wdGone.ok && hadWatchdog,
     hadWatchdog ? ('耗时 ' + (Date.now() - t0) + 'ms') : '（本 case 从未出现看门狗 ⇒ 该断言不成立）')
   d.flush(); d.stopFlush()
   const lg = logText(c.voiceLog)
-  rec('positive', '语音日志里出现看门狗前缀记录', lg.includes('[watchdog]'), '行数=' + lg.split('\n').length)
-  rec('positive', '日志记录了检测方式（stdin EOF）与回收结果（端口空闲）',
+  rec(name, '语音日志里出现看门狗前缀记录', lg.includes('[watchdog]'), '行数=' + lg.split('\n').length)
+  if (realShape) {
+    rec(name, '★★ 日志写明「登记启动器已死（随 DSH 被 job 收走）⇒ 无法对它 taskkill，改为按 PPID 链回收后代」'
+      + '（即：回收不依赖对登记 pid 的 taskkill 是否成功）',
+      /进程已不存在（强杀时随 DSH 一起被 job 收走的直接子进程）/.test(lg) && /的后代：/.test(lg), '')
+  } else {
+    rec(name, '日志写明「树杀成功 …（taskkill /PID … /T /F）」（活着的启动器被 /T 连后代一起带走）',
+      /树杀成功/.test(lg) && /taskkill \/PID \d+ \/T \/F/.test(lg), '')
+  }
+  rec(name, '日志记录了检测方式（stdin EOF）与回收结果（端口空闲）',
     /检测方式=stdin/.test(lg) && /现在空闲/.test(lg),
     (lg.split('\n').filter((l) => l.includes('[watchdog]')).slice(-3).join(' | ')).slice(0, 400))
   console.log('  --- 关键时刻线 ---')
-  console.log('  强杀时刻   : ' + killAt.toISOString())
+  console.log('  强杀时刻   : ' + killAt.toISOString() + '（taskkill /F /PID ' + d.child.pid + '，不带 /T）')
+  console.log('  形状快照   : ' + shape.at + '（+' + shape.deltaMs + 'ms）启动器存活=' + JSON.stringify(shape.launcherAlive)
+    + ' worker 存活=' + JSON.stringify(shape.workerAlive) + ' 孙进程存活=' + JSON.stringify(shape.gchildAlive)
+    + ' 看门狗 alive=' + shape.watchdogAlive)
   console.log('  端口释放   : ' + new Date(killAt.getTime() + elapsed).toISOString() + '（+' + elapsed + 'ms）')
+  console.log('  看门狗退出 : +' + (Date.now() - t0) + 'ms（pid=' + wdPid + '）')
   console.log('  --- 原始证据 ---')
   console.log('  driver 输出: ' + c.driverOut)
   console.log('  日志文件   : ' + c.voiceLog)
@@ -544,14 +643,14 @@ async function caseTokenMismatch(apiPort, bridgePort) {
   cx.driver = d
   const up = await waitFor(async () => {
     const a = svcRecord(c, apiPort); const b = svcRecord(c, bridgePort)
-    return !!a && !!b && (await portOpen(apiPort, 400)) && (await portOpen(bridgePort, 400))
+    const ga = gchildRecord(c, apiPort); const gb = gchildRecord(c, bridgePort)
+    return !!a && !!b && !!ga && !!gb && (await portOpen(apiPort, 400)) && (await portOpen(bridgePort, 400))
   }, 60000, 500)
   d.flush()
-  const apiRec = svcRecord(c, apiPort)
-  const brRec = svcRecord(c, bridgePort)
-  const dummies = [apiRec && apiRec.launcherPid, apiRec && apiRec.workerPid, brRec && brRec.launcherPid, brRec && brRec.workerPid].filter(Boolean)
+  const dummies = allDummyPids(c, [apiPort, bridgePort])
   cx.extraPids = dummies
-  rec('token-mismatch', '前置：两个 dummy 服务已在监听', up.ok, 'api=' + JSON.stringify(apiRec) + ' bridge=' + JSON.stringify(brRec))
+  rec('token-mismatch', '前置：两个 dummy 服务（三代进程）已在监听', up.ok && dummies.length === 6,
+    'api=' + JSON.stringify(dummyPids(c, apiPort)) + ' bridge=' + JSON.stringify(dummyPids(c, bridgePort)))
   const token = readJson(c.tokenFile)
   const wds = findWatchdogs(c.tokenFile)
   rec('token-mismatch', '前置：看门狗进程确实活着', wds.length === 1, wds.length ? pidDesc(wds[0].pid) : '（未找到）')
@@ -567,10 +666,15 @@ async function caseTokenMismatch(apiPort, bridgePort) {
   const hadWatchdog = wds.length === 1
   rec('token-mismatch', '看门狗在 ≤15s 内退出（读完令牌就收工）', wdGone.ok && hadWatchdog,
     hadWatchdog ? ('耗时 ' + (Date.now() - t0) + 'ms') : '（本 case 从未出现看门狗 ⇒ 该断言不成立）')
-  await sleep(3000)   // 再等一会儿：若它要误杀，此时 dummy 早该没了
-  const alive = dummies.filter(pidAlive)
-  rec('token-mismatch', '★ dummy 服务全部仍然活着（没有任何进程被误杀）', alive.length === dummies.length && dummies.length === 4,
-    '存活=' + alive.join(',') + ' / 应为 ' + dummies.join(','))
+  await sleep(1500)   // 先让"启动器随假 DSH 同刻死亡"这件事发生完（那是 job 干的，不是看门狗）
+  const aliveAfterKill = dummies.filter(pidAlive)
+  await sleep(3000)   // 再等一会儿：若看门狗要误杀，这段时间足够它动手
+  const aliveLater = dummies.filter(pidAlive)
+  rec('token-mismatch', '★ 看门狗没杀任何进程：强杀后还活着的后代（worker/孙进程）3s 后依然全在',
+    aliveLater.length >= 4 && aliveLater.length === aliveAfterKill.length
+    && aliveLater.every((p) => aliveAfterKill.includes(p)),
+    '强杀后存活=' + aliveAfterKill.join(',') + ' → 3s 后存活=' + aliveLater.join(',')
+    + '（登记启动器已随 DSH 死亡，本就不该在存活集里）')
   rec('token-mismatch', '端口仍然被占（证明服务真的没被杀）',
     (await portOpen(apiPort, 500)) && (await portOpen(bridgePort, 500)), apiPort + '/' + bridgePort + ' 仍在监听')
   d.flush(); d.stopFlush()
@@ -590,12 +694,10 @@ async function caseExternal(apiPort, bridgePort) {
   console.log('\n=== case external（反例 B：端口已被外来服务占用 ⇒ 不生成看门狗、不杀任何东西）===')
   console.log('  tmp=' + c.dir)
   const ext = await startExternalDummies(c, [apiPort, bridgePort])
-  const apiRec = svcRecord(c, apiPort)
-  const brRec = svcRecord(c, bridgePort)
-  const dummies = [apiRec && apiRec.launcherPid, apiRec && apiRec.workerPid, brRec && brRec.launcherPid, brRec && brRec.workerPid].filter(Boolean)
+  const dummies = allDummyPids(c, [apiPort, bridgePort])
   cx.extraPids = dummies
-  rec('external', '前置：外来（非插件拉起）的 dummy 服务已在监听', ext.ok,
-    'api=' + JSON.stringify(apiRec) + ' bridge=' + JSON.stringify(brRec))
+  rec('external', '前置：外来（非插件拉起）的 dummy 服务（三代进程）已在监听', ext.ok && dummies.length === 6,
+    'api=' + JSON.stringify(dummyPids(c, apiPort)) + ' bridge=' + JSON.stringify(dummyPids(c, bridgePort)))
   writeConfig(c, apiPort, bridgePort)
   const d = startDriver(c, apiPort, bridgePort, 'idle')
   cx.driver = d
@@ -612,12 +714,12 @@ async function caseExternal(apiPort, bridgePort) {
   const tok = readJson(c.tokenFile)
   rec('external', '令牌文件没有被写成本代有效令牌', !(tok && tok.token), tok ? JSON.stringify(tok).slice(0, 200) : '（令牌文件不存在）')
   const alive = dummies.filter(pidAlive)
-  rec('external', '★ 外来 dummy 服务一个都没被杀', alive.length === 4, '存活=' + alive.join(','))
+  rec('external', '★ 外来 dummy 服务（worker/孙进程）一个都没被杀', alive.length === 6 && dummies.length === 6, '存活=' + alive.join(','))
   // 连 driver 也一起杀掉，再确认外来服务仍然活着（真正的"非优雅退出也不误杀"）
   spawnSync('taskkill', ['/F', '/PID', String(d.child.pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 })
   await sleep(4000)
   const alive2 = dummies.filter(pidAlive)
-  rec('external', '强杀假 DSH 之后外来服务依然活着（无看门狗 ⇒ 无任何回收动作）', alive2.length === 4, '存活=' + alive2.join(','))
+  rec('external', '强杀假 DSH 之后外来服务依然活着（无看门狗 ⇒ 无任何回收动作）', alive2.length === 6, '存活=' + alive2.join(','))
   const lg = logText(c.voiceLog)
   rec('external', '日志里写明「检测到外部服务…不做任何操作」', /外部服务已在监听/.test(lg),
     (lg.split('\n').filter((l) => l.includes('外部服务')).slice(-1).join('')).slice(0, 300))
@@ -639,14 +741,14 @@ async function caseGraceful(apiPort, bridgePort) {
   cx.driver = d
   const up = await waitFor(async () => {
     const a = svcRecord(c, apiPort); const b = svcRecord(c, bridgePort)
-    return !!a && !!b && (await portOpen(apiPort, 400)) && (await portOpen(bridgePort, 400))
+    const ga = gchildRecord(c, apiPort); const gb = gchildRecord(c, bridgePort)
+    return !!a && !!b && !!ga && !!gb && (await portOpen(apiPort, 400)) && (await portOpen(bridgePort, 400))
   }, 60000, 500)
   d.flush()
-  const apiRec = svcRecord(c, apiPort)
-  const brRec = svcRecord(c, bridgePort)
-  const dummies = [apiRec && apiRec.launcherPid, apiRec && apiRec.workerPid, brRec && brRec.launcherPid, brRec && brRec.workerPid].filter(Boolean)
+  const dummies = allDummyPids(c, [apiPort, bridgePort])
   cx.extraPids = dummies
-  rec('graceful', '前置：两个 dummy 服务已在监听', up.ok, 'api=' + JSON.stringify(apiRec) + ' bridge=' + JSON.stringify(brRec))
+  rec('graceful', '前置：两个 dummy 服务（三代进程）已在监听', up.ok && dummies.length === 6,
+    'api=' + JSON.stringify(dummyPids(c, apiPort)) + ' bridge=' + JSON.stringify(dummyPids(c, bridgePort)))
   const wdsBefore = findWatchdogs(c.tokenFile)
   rec('graceful', '前置：看门狗进程确实活着', wdsBefore.length === 1, wdsBefore.length ? pidDesc(wdsBefore[0].pid) : '（未找到）')
 
@@ -658,7 +760,7 @@ async function caseGraceful(apiPort, bridgePort) {
     ? ('耗时 ' + (Date.now() - t0) + 'ms')
     : ('15s 内端口仍未释放：' + apiPort + '=' + (await portOpen(apiPort, 400)) + ' ' + bridgePort + '=' + (await portOpen(bridgePort, 400))))
   const dead = await waitFor(() => dummies.every((p) => !pidAlive(p)), 15000, 200)
-  rec('graceful', '两代 dummy 进程全部消失（无孤儿）', dead.ok && dummies.length === 4,
+  rec('graceful', '整棵后代树（启动器+worker+孙进程）全部消失（无孤儿）', dead.ok && dummies.length === 6,
     'pids=' + dummies.join(',') + '；仍存活=' + dummies.filter(pidAlive).join(',') + '（空=全灭）')
   const wdGone = await waitFor(() => findWatchdogs(c.tokenFile).length === 0, 15000, 300)
   const hadWatchdog = wdsBefore.length === 1
@@ -687,10 +789,10 @@ async function caseLogAppend(apiPort, bridgePort) {
 
   // ---- 第一代 ----
   const d1 = startDriver(c, apiPort, bridgePort, 'idle')
-  const up1 = await waitFor(async () => !!svcRecord(c, apiPort) && !!svcRecord(c, bridgePort), 60000, 500)
+  const up1 = await waitFor(async () => !!svcRecord(c, apiPort) && !!svcRecord(c, bridgePort)
+    && !!gchildRecord(c, apiPort) && !!gchildRecord(c, bridgePort), 60000, 500)
   const api1 = svcRecord(c, apiPort)
-  const br1 = svcRecord(c, bridgePort)
-  const gen1Pids = [api1 && api1.launcherPid, api1 && api1.workerPid, br1 && br1.launcherPid, br1 && br1.workerPid].filter(Boolean)
+  const gen1Pids = allDummyPids(c, [apiPort, bridgePort])
   cx.extraPids = gen1Pids
   d1.flush()
   const marker1 = '已拉起 GPT-SoVITS api pid=' + (api1 ? api1.launcherPid : '?')
@@ -722,7 +824,8 @@ async function caseLogAppend(apiPort, bridgePort) {
   // ---- 第二代（同一个 DSH_HOME）----
   const d2 = startDriver(c, apiPort, bridgePort, 'stop')
   cx.driver = d2
-  const up2 = await waitFor(async () => !!svcRecord(c, apiPort) && !!svcRecord(c, bridgePort), 60000, 500)
+  const up2 = await waitFor(async () => !!svcRecord(c, apiPort) && !!svcRecord(c, bridgePort)
+    && !!gchildRecord(c, apiPort) && !!gchildRecord(c, bridgePort), 60000, 500)
   d2.flush()
   const api2 = svcRecord(c, apiPort)
   rec('log-append', '前置：第二代（新进程）已拉起服务', up2.ok, '第二代 dshPid=' + d2.child.pid + '、api launcher=' + (api2 ? api2.launcherPid : '?'))
@@ -750,6 +853,83 @@ async function caseLogAppend(apiPort, bridgePort) {
   return c
 }
 
+// 端口兜底单独验证（控制者要求）：登记的启动器**已死** + 关掉 PPID 链后代枚举 ⇒
+// 只剩"按端口找持有者 → 用 ppid 链判定它属于本代（走到已死的启动器 pid 上）→ 树杀"这一条路。
+async function caseFallbackPort(apiPort, bridgePort) {
+  const name = 'fallback-port'
+  const c = makeCaseDir(name)
+  const cx = { ports: [apiPort, bridgePort], extraPids: [] }
+  console.log('\n=== case fallback-port（只靠端口兜底：登记启动器已死 + --no-descendants）===')
+  console.log('  tmp=' + c.dir)
+  const launchers = []
+  for (const p of [apiPort, bridgePort]) {
+    const ch = spawn(process.execPath, [c.dummyScript, 'launcher', String(p), path.join(c.dir, 'svc-' + p + '.json')], { stdio: 'ignore', windowsHide: true })
+    launchers.push(ch.pid)
+  }
+  const up = await waitFor(async () => {
+    for (const p of [apiPort, bridgePort]) {
+      if (!(await portOpen(p, 400))) return false
+      if (!gchildRecord(c, p)) return false
+    }
+    return true
+  }, 20000, 250)
+  const pApi = dummyPids(c, apiPort)
+  const pBr = dummyPids(c, bridgePort)
+  const dummies = allDummyPids(c, [apiPort, bridgePort])
+  cx.extraPids = dummies
+  rec(name, '前置：两代/三代 dummy 已就位（启动器 + 监听 worker + 孙进程）', up.ok && dummies.length === 6, JSON.stringify(dummies))
+
+  // 令牌文件完全按插件的格式写：services 里登记的是**启动器** pid（与 host.mjs 一致）
+  const token = 'fallback-port-' + Date.now()
+  mkdirSync(path.dirname(c.tokenFile), { recursive: true })
+  writeFileSync(c.tokenFile, JSON.stringify({
+    token, epoch: 1, dshPid: process.pid, watchdogPid: 0, updatedAt: new Date().toISOString(),
+    services: [{ key: 'api', pid: pApi.launcher, port: apiPort }, { key: 'bridge', pid: pBr.launcher, port: bridgePort }],
+  }, null, 2), 'utf8')
+  // 杀掉两个启动器（模拟"强杀 DSH 时启动器随父同刻死"），不带 /T ⇒ detached 的 worker/孙进程活下来
+  for (const pid of launchers) spawnSync('taskkill', ['/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 })
+  await sleep(900)
+  rec(name, '★★★ 前置：登记的启动器已死（对它 taskkill 只会"找不到进程"），占端口的是它的 worker',
+    !pidAlive(pApi.launcher) && !pidAlive(pBr.launcher) && pidAlive(pApi.worker) && pidAlive(pBr.worker)
+    && (await portOpen(apiPort, 500)) && (await portOpen(bridgePort, 500)),
+    '启动器存活=' + JSON.stringify([pApi.launcher, pBr.launcher].filter(pidAlive)) + '（应为空）'
+    + '；worker 存活=' + JSON.stringify([pApi.worker, pBr.worker].filter(pidAlive)))
+
+  const wdScript = path.join(PLUGIN, 'watchdog.mjs')
+  const wd = spawn(process.execPath, [
+    wdScript, '--token', token, '--epoch', '1', '--dsh-pid', String(process.pid),
+    '--token-file', c.tokenFile, '--log', c.voiceLog, '--no-descendants', '--poll-ms', '60000',
+  ], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, detached: true, cwd: c.dir })
+  cx.wd = wd
+  try { if (wd.stdin) wd.stdin.on('error', () => { /* EPIPE 无所谓 */ }) } catch (e) { /* ignore */ }
+  await sleep(1500)
+  rec(name, '前置：看门狗已起来（--no-descendants：只走端口兜底这条安全网）', pidAlive(wd.pid), 'watchdog pid=' + wd.pid)
+
+  const t0 = Date.now()
+  try { wd.stdin.end() } catch (e) { /* ignore */ }   // 主信号：stdin EOF ⇒ 触发回收
+  const clr = await waitFor(async () => !(await portOpen(apiPort, 400)) && !(await portOpen(bridgePort, 400)), 15000, 250)
+  const elapsed = Date.now() - t0
+  rec(name, '≤15s 内端口空闲（登记 pid 已死、又不做后代枚举，只能靠端口兜底）', clr.ok, clr.ok
+    ? ('释放耗时 ' + elapsed + 'ms')
+    : ('15s 内仍未释放：' + apiPort + '=' + (await portOpen(apiPort, 400)) + ' ' + bridgePort + '=' + (await portOpen(bridgePort, 400)) + '（' + elapsed + 'ms）'))
+  const dead = await waitFor(() => dummies.every((p) => !pidAlive(p)), 15000, 200)
+  rec(name, 'worker 与孙进程全部消失（启动器本就已经死了）', dead.ok,
+    'pids=' + dummies.join(',') + '；仍存活=' + dummies.filter(pidAlive).join(',') + '（空=全灭）')
+  const wdGone = await waitFor(() => !pidAlive(wd.pid), 15000, 300)
+  rec(name, '看门狗自行退出', wdGone.ok, '耗时 ' + (Date.now() - t0) + 'ms')
+  const lg = logText(c.voiceLog)
+  rec(name, '★★ 日志出现「端口 … 的持有者 pid=… 确认属本代服务（登记集∪后代集）→ 树杀成功」',
+    /的持有者 pid=\d+ 确认属本代服务/.test(lg),
+    (lg.split('\n').filter((l) => l.includes('持有者')).slice(-2).join(' | ')).slice(0, 300))
+  rec(name, '日志同时写明「登记启动器已不存在」与「--no-descendants 生效」',
+    /进程已不存在/.test(lg) && /--no-descendants 生效/.test(lg), '')
+  console.log('  --- 原始证据 ---')
+  for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+
 // ---------------- main ----------------
 async function main() {
   console.log('看门狗测试开始')
@@ -761,7 +941,9 @@ async function main() {
   const bridgePort = await freePort(BRIDGE_PORT_WANT)
   console.log('  临时端口 = ' + apiPort + ' / ' + bridgePort)
   const t0 = Date.now()
-  if (CASE === 'all' || CASE === 'positive') await casePositive(apiPort, bridgePort)
+  if (CASE === 'all' || CASE === 'positive') await caseKillTree(apiPort, bridgePort, 'real-shape')
+  if (CASE === 'all' || CASE === 'detached-launcher') await caseKillTree(apiPort, bridgePort, 'detached-launcher')
+  if (CASE === 'all' || CASE === 'fallback-port') await caseFallbackPort(apiPort, bridgePort)
   if (CASE === 'all' || CASE === 'token-mismatch') await caseTokenMismatch(apiPort, bridgePort)
   if (CASE === 'all' || CASE === 'external') await caseExternal(apiPort, bridgePort)
   if (CASE === 'all' || CASE === 'graceful') await caseGraceful(apiPort, bridgePort)
