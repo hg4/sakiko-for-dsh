@@ -67,30 +67,30 @@ dsh plugin --profile web add file:<新路径>\sakiko-for-dsh-<新版本>.tgz
 Test-Path "$env:USERPROFILE\.dsh\profiles\web\node_modules\sakiko-for-dsh\cordis.patch.yml"
 # 3) 起一个实例后查状态（phase=ready / owner=plugin 才算链路通了）
 curl.exe -sS http://127.0.0.1:3080/sakiko/voice
+# 4) 核对 pnpm 解析到的提交（应等于你期望的 HEAD）
+Select-String -Path "$env:USERPROFILE\.dsh\profiles\web\pnpm-lock.yaml" -Pattern 'commit:'
 ```
 
-### 方式二：`github:` 直装 —— **当前请勿使用（未验证可用）**
+### 方式二：`github:` 直装（已实测可用）
 
 ```powershell
-# 不要用这条来安装，除非下面两件事都已确认
 dsh plugin --profile web add github:hg4/sakiko-for-dsh
 ```
 
-**为什么不能用**（2026-09-13 实测，`github:hg4/sakiko-for-dsh`）：
+不需要先下载 tarball，装完**同样装完即生效**：本包在 `package.json` 里声明了
+`"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`，而且这份声明**就在仓库里**
+（`cordis.patch.yml` 与 `package.json` 都受 git 跟踪）——所以从 GitHub 源码装下来也会被登记为
+profile 的 bundle 层（`dsh.profile.bundles`）。打包脚本在打包前会校验这份声明，缺了直接 `exit 1`。
 
-- 命令会 exit 0、看起来"装成功"，但 DSH 打警告
-  `sakiko-for-dsh declares no dsh.bundle — installed as a plain dependency, not a profile layer`，
-  `dsh.profile.bundles` 里**没有**本插件 ⇒ **插件永远不会被加载**（面板不出现、`/sakiko/*` 全 404）。
-  根因是本仓库曾把 bundle 声明放在打包脚本里注入，GitHub 上的源码版因此缺声明；
-  该声明**现已搬进仓库**（`cordis.patch.yml` + `package.json`），但**在你读到这段文字时，
-  远端是否已经包含这次修复需要你自己确认**（见下一条）。
-- pnpm 对 git 依赖有 store 缓存：实测同一条命令拿到的是**旧副本**
-  （`Progress: resolved 1, reused 1, downloaded 0`，装到的 `host.mjs` 246086 字节，
-  而当时仓库 HEAD 是 241792 字节）。**即使远端已修好，缓存也可能继续给你旧版**；
-  升级后请务必用上面的「1) bundle 层登记」自查一次。
-- 另外 git-hosted 依赖的 `prepare` 构建脚本默认被 pnpm 拦，DSH 会提示你把 pnpm 打印的键名写进
-  `%DSH_HOME%\profiles\<profile>\pnpm-workspace.yaml` 的 `allowBuilds:` 列表；
-  **本包没有 `prepare`/构建脚本，正常情况下不会触发这一条**，而该键字符串本身在本机未复现过。
+两点注意：
+
+- pnpm 会把 git 依赖按**解析到的 commit** 缓存。正常情况每次都会重新解析默认分支的 HEAD；
+  若你怀疑拿到的是旧副本，用上面「装完自查」的 1)、2) 确认一下，或在 spec 上钉死提交：
+  `dsh plugin --profile web add github:hg4/sakiko-for-dsh#<commit>`。
+- 仓库公开时该命令无需任何凭据；私有仓库则需要本机已配好可访问它的 SSH key。
+- 罕见情况：若 pnpm 提示 git-hosted 依赖的构建脚本被拦（DSH 会给出提示），把 pnpm 打印的键名写进
+  `%DSH_HOME%\profiles\<profile>\pnpm-workspace.yaml` 的 `allowBuilds:` 列表即可。
+  **本包没有 `prepare`/构建脚本，正常情况下不会触发这一条。**
 
 > 若你之前用上游 `install.ps1` 装过、或手工在 profile 的 `cordis.patch.yml` 里写过
 > `id: amadeus` / `id: sakiko`，请把**手工那份删掉**，否则同一个 id 会出现两次。
