@@ -102,79 +102,181 @@ function readTokenFile() {
   }
 }
 
-// ---------------- 进程表（用于 PID 复用校验 + 后代判定） ----------------
-// 返回 Map<pid, {ppid, createdMs, cmd}>；拿不到就返回 null（调用方按 unknown 处理）。
-function procTable() {
-  try { return WIN ? procTableWin() : procTablePosix() } catch (e) { return null }
-}
+// ---------------- 进程查询：**定向过滤**，绝不拉全表 ----------------
+// 为什么不用整表 `Get-CimInstance Win32_Process`（连 CommandLine 一起拉）：几百个进程一来慢
+// （实测单次 1.5~2.5s），二来每轮都要重查，代价与收益完全不成比例。本功能每次只关心
+// 「令牌文件里登记的那几个 pid + 它们的后代」，用 `-Filter "ProcessId=…"` /
+// `-Filter "ParentProcessId=… or …"` 定向查就够，且一次 PowerShell 调用内完成 BFS。
+const PS_TIMEOUT_MS = 8000
 
-function procTableWin() {
-  // 用 -EncodedCommand 传脚本，彻底绕开 cmd/powershell 的引号地狱。
-  const script = [
-    "$ErrorActionPreference = 'SilentlyContinue'",
-    'Get-CimInstance Win32_Process | ForEach-Object {',
-    "  $ct = ''",
-    '  try { $ct = [string]$_.CreationDate.ToFileTimeUtc() } catch { }',
-    '  $cl = [string]$_.CommandLine',
-    '  $cl = $cl -replace "`r", \' \'',
-    '  $cl = $cl -replace "`n", \' \'',
-    "  '{0}|{1}|{2}|{3}' -f $_.ProcessId, $_.ParentProcessId, $ct, $cl",
-    '}',
-  ].join('\n')
+function psExec(script) {
+  // 用 -EncodedCommand 传脚本，彻底绕开 cmd/powershell 的引号地狱
   const b64 = Buffer.from(script, 'utf16le').toString('base64')
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64],
-    { encoding: 'utf8', timeout: 8000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
-  if (!r || typeof r.stdout !== 'string' || r.stdout.length === 0) return null
-  const map = new Map()
-  for (const line of r.stdout.split(/\r?\n/)) {
-    const parts = line.split('|')
-    if (parts.length < 4) continue
-    const pid = Number(parts[0])
+    { encoding: 'utf8', timeout: PS_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })
+  // ⚠️ 注意：**空结果集是合法的**（登记 pid 已死、且没有后代 ⇒ 查询本来就返回 0 行）。
+  // 只有"命令本身失败"（非 0 退出/起不来）才算查询不可用 —— 早期版本把"空输出"当成失败，
+  // 会在真实强杀场景里误报"进程查询不可用"，掩盖真正的判断。
+  if (!r || r.error || r.status !== 0) return null
+  return typeof r.stdout === 'string' ? r.stdout : ''
+}
+
+function parseProcLines(text, map) {
+  for (const line of String(text).split(/\r?\n/)) {
+    const p = line.split('|')
+    if (p.length < 4) continue
+    const pid = Number(p[1])
     if (!Number.isFinite(pid) || pid <= 0) continue
-    const ft = Number(parts[2])
-    // FILETIME(100ns since 1601) → ms since epoch
-    const createdMs = Number.isFinite(ft) && ft > 0 ? (ft / 10000 - 11644473600000) : 0
-    map.set(pid, { ppid: Number(parts[1]) || 0, createdMs, cmd: parts.slice(3).join('|') })
+    const ft = Number(p[3])
+    map.set(pid, {
+      tag: p[0],
+      ppid: Number(p[2]) || 0,
+      // FILETIME(100ns since 1601) → ms since epoch
+      createdMs: Number.isFinite(ft) && ft > 0 ? (ft / 10000 - 11644473600000) : 0,
+    })
   }
-  return map.size > 0 ? map : null
+  return map
 }
 
-function procTablePosix() {
-  // 尽力实现：Linux 有 /proc 就能做与 Windows 同样的校验；macOS 等无 /proc 时返回 null。
-  let boot = 0
+// 一次调用拿到：登记 pid 自身的信息（tag=S）+ 按 PPID 链递归找到的全部后代（tag=D）
+function psProcTree(roots, maxDepth) {
+  if (!WIN) return posixProcTree(roots, maxDepth)
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    '$roots = @(' + roots.map((x) => Number(x)).join(',') + ')',
+    'function Emit($tag, $procs) {',
+    '  foreach ($p in $procs) {',
+    "    $ct = ''",
+    '    try { $ct = [string]$p.CreationDate.ToFileTimeUtc() } catch { }',
+    "    '{0}|{1}|{2}|{3}' -f $tag, [int]$p.ProcessId, [int]$p.ParentProcessId, $ct",
+    '  }',
+    '}',
+    'if ($roots.Count -gt 0) {',
+    "  $f = ($roots | ForEach-Object { 'ProcessId=' + $_ }) -join ' or '",
+    '  Emit "S" (Get-CimInstance Win32_Process -Filter $f | Select-Object ProcessId,ParentProcessId,CreationDate)',
+    '}',
+    '$seen = @{}',
+    'foreach ($r in $roots) { $seen[[int]$r] = 1 }',
+    '$frontier = @($roots)',
+    'for ($d = 0; $d -lt ' + Number(maxDepth) + ' -and $frontier.Count -gt 0; $d++) {',
+    "  $f2 = ($frontier | ForEach-Object { 'ParentProcessId=' + $_ }) -join ' or '",
+    '  $kids = @(Get-CimInstance Win32_Process -Filter $f2 | Select-Object ProcessId,ParentProcessId,CreationDate)',
+    '  Emit "D" $kids',
+    '  $next = @()',
+    '  foreach ($k in $kids) { $p = [int]$k.ProcessId; if (-not $seen.ContainsKey($p)) { $seen[$p] = 1; $next += $p } }',
+    '  $frontier = $next',
+    '}',
+  ].join('\n')
+  const out = psExec(script)
+  if (out === null) return null
+  return parseProcLines(out, new Map())
+}
+
+// 从某个 pid 沿 ppid 往上走，返回祖先链（含自己）——只用于「关掉后代枚举」时的归属判定
+function psAncestorChain(pid, maxDepth) {
+  if (!WIN) return posixAncestorChain(pid, maxDepth)
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    '$x = ' + Number(pid),
+    'for ($i = 0; $i -lt ' + Number(maxDepth) + ' -and $x -gt 0; $i++) {',
+    "  $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $x) | Select-Object ProcessId,ParentProcessId,CreationDate",
+    '  if (-not $p) { break }',
+    "  $ct = ''",
+    '  try { $ct = [string]$p.CreationDate.ToFileTimeUtc() } catch { }',
+    "  'A|{0}|{1}|{2}' -f [int]$p.ProcessId, [int]$p.ParentProcessId, $ct",
+    '  $x = [int]$p.ParentProcessId',
+    '}',
+  ].join('\n')
+  const out = psExec(script)
+  if (out === null) return null
+  return parseProcLines(out, new Map())
+}
+
+// posix 尽力实现：/proc 是本地文件读，代价极低（无 /proc 时返回 null ⇒ 调用方按 unknown 处理）
+function posixRead(pid) {
   try {
-    const stat = readFileSync('/proc/stat', 'utf8')
-    const m = stat.match(/^btime\s+(\d+)/m)
-    if (m) boot = Number(m[1]) * 1000
-  } catch (e) { return null }
-  const hz = 100      // sysconf(_SC_CLK_TCK) 常规值；取不到就用 100（会带来 <10ms 误差，不影响判据）
-  const map = new Map()
-  let names = []
-  try { names = readdirSync('/proc') } catch (e) { return null }
-  for (const name of names) {
-    if (!/^\d+$/.test(name)) continue
+    const raw = readFileSync('/proc/' + pid + '/stat', 'utf8')
+    const close = raw.lastIndexOf(')')
+    const rest = raw.slice(close + 2).split(' ')
+    let boot = 0
     try {
-      const raw = readFileSync('/proc/' + name + '/stat', 'utf8')
-      const close = raw.lastIndexOf(')')
-      const rest = raw.slice(close + 2).split(' ')
-      // 字段（1-based，去掉 pid/comm 后从 state 开始）：state=0, ppid=1, ..., starttime=19
-      const ppid = Number(rest[1]) || 0
-      const startTicks = Number(rest[19]) || 0
-      map.set(Number(name), { ppid, createdMs: boot + Math.round((startTicks / hz) * 1000), cmd: '' })
-    } catch (e) { /* 进程刚消失，跳过 */ }
+      const m = readFileSync('/proc/stat', 'utf8').match(/^btime\s+(\d+)/m)
+      if (m) boot = Number(m[1]) * 1000
+    } catch (e) { /* 拿不到开机时间就算 0 */ }
+    const hz = 100
+    return { ppid: Number(rest[1]) || 0, createdMs: boot + Math.round(((Number(rest[19]) || 0) / hz) * 1000) }
+  } catch (e) { return null }
+}
+
+function posixProcTree(roots, maxDepth) {
+  const map = new Map()
+  for (const r of roots) {
+    const info = posixRead(r)
+    if (info !== null) map.set(Number(r), { tag: 'S', ppid: info.ppid, createdMs: info.createdMs })
+  }
+  let names = []
+  try { names = readdirSync('/proc') } catch (e) { return map.size > 0 ? map : null }
+  const all = new Map()
+  for (const n of names) {
+    if (!/^\d+$/.test(n)) continue
+    const info = posixRead(n)
+    if (info !== null) all.set(Number(n), info)
+  }
+  // 用本地读到的父子关系做 BFS（等价于 Windows 侧的定向递归）
+  const kids = new Map()
+  for (const [pid, info] of all) {
+    if (!kids.has(info.ppid)) kids.set(info.ppid, [])
+    kids.get(info.ppid).push(pid)
+  }
+  let frontier = roots.map(Number)
+  const seen = new Set(frontier)
+  for (let d = 0; d < maxDepth && frontier.length > 0; d++) {
+    const next = []
+    for (const p of frontier) {
+      for (const k of kids.get(p) || []) {
+        if (seen.has(k)) continue
+        seen.add(k)
+        next.push(k)
+        map.set(k, { tag: 'D', ppid: all.get(k).ppid, createdMs: all.get(k).createdMs })
+      }
+    }
+    frontier = next
   }
   return map.size > 0 ? map : null
 }
 
-function isDescendantOf(table, pid, roots) {
-  let cur = pid
-  for (let i = 0; i < 32 && cur > 0; i++) {
-    if (roots.includes(cur)) return true
-    const info = table.get(cur)
-    if (info === undefined) return false
-    cur = Number(info.ppid) || 0
+function posixAncestorChain(pid, maxDepth) {
+  const map = new Map()
+  let cur = Number(pid)
+  for (let i = 0; i < maxDepth && cur > 0; i++) {
+    const info = posixRead(cur)
+    if (info === null) break
+    map.set(cur, { tag: 'A', ppid: info.ppid, createdMs: info.createdMs })
+    cur = info.ppid
   }
-  return false
+  return map.size > 0 ? map : null
+}
+
+// 从 tree 结果里按 ppid 关系取出某个 root 的后代列表
+function descendantsFrom(procs, root) {
+  const kids = new Map()
+  for (const [pid, info] of procs) {
+    if (!kids.has(info.ppid)) kids.set(info.ppid, [])
+    kids.get(info.ppid).push(pid)
+  }
+  const out = []
+  const seen = new Set([root])
+  const queue = [root]
+  while (queue.length > 0) {
+    const cur = queue.shift()
+    for (const k of kids.get(cur) || []) {
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.push(k)
+      queue.push(k)
+    }
+  }
+  return out
 }
 
 // ---------------- 杀进程 ----------------
@@ -197,17 +299,11 @@ function killTree(pid) {
     try { process.kill(pid, 'SIGKILL'); how = 'kill(' + pid + ', SIGKILL)（单进程）' }
     catch (e2) { return { ok: false, how: 'kill 失败：' + (e2 && e2.message ? e2.message : String(e2)) } }
   }
-  // 进程组不一定等于进程树（服务是 DSH 的子进程，未必自成进程组）→ 补杀后代
-  const t = procTable()
-  if (t) {
-    for (let round = 0; round < 3; round++) {
-      let any = false
-      for (const [p, info] of t) {
-        if (isDescendantOf(t, p, [pid])) {
-          try { process.kill(p, 'SIGKILL'); any = true } catch (e) { /* 已经没了 */ }
-        }
-      }
-      if (!any) break
+  // 进程组不一定等于进程树（posix 下服务是 DSH 的子进程，未必自成进程组）→ 定向补杀后代
+  const t = psProcTree([pid], 6)
+  if (t !== null) {
+    for (const d of descendantsFrom(t, pid)) {
+      try { process.kill(d, 'SIGKILL') } catch (e) { /* 已经没了 */ }
     }
   }
   return { ok: true, how }
@@ -271,28 +367,7 @@ function portOwners(port) {
 let fired = false
 
 // 按 PPID 链递归枚举后代（**父进程已死也能查到**：子进程记录里的 ParentProcessId 不会消失）
-function descendantsOf(table, root) {
-  if (table === null) return []
-  const kids = new Map()
-  for (const [pid, info] of table) {
-    const pp = Number(info.ppid) || 0
-    if (!kids.has(pp)) kids.set(pp, [])
-    kids.get(pp).push(pid)
-  }
-  const out = []
-  const queue = [root]
-  const seen = new Set([root])
-  while (queue.length > 0) {
-    const cur = queue.shift()
-    for (const k of kids.get(cur) || []) {
-      if (seen.has(k)) continue
-      seen.add(k)
-      out.push(k)
-      queue.push(k)
-    }
-  }
-  return out
-}
+// 实现见上面的 descendantsFrom()（从 psProcTree 的定向查询结果里取）。
 
 async function recover(reason, firedAt) {
   // 时间预算从**检测到 DSH 消失的那一刻**算起（不是看门狗启动时刻 —— 它可能已经活了几小时）
@@ -328,28 +403,29 @@ async function recover(reason, firedAt) {
   // 反复「重算目标集合 → 树杀 → 复验端口」，直到端口空闲或超时
   for (;;) {
     round++
-    const table = procTable()
-    if (table === null && round === 1) wlog('进程表不可用（拿不到进程创建时间/PPID）→ 归属校验降级为「只看 token 匹配」')
+    // 定向查询：登记 pid 自身 + 它们的后代（一次 PowerShell 调用，内部做 BFS）
+    const procs = psProcTree(roots, opt.useDescendants ? 6 : 0)
+    if (procs === null && round === 1) wlog('进程查询不可用（拿不到 PPID/创建时间）→ 归属校验降级为「只看 token 匹配」')
 
     // ---- 目标集合 = 登记 pid ∪ 其后代（父已死也算） ----
     const targets = new Map()       // pid -> 人类可读的来源说明
     for (const s of svcs) {
-      if (table === null) {
+      if (procs === null) {
         targets.set(s.pid, s.key + '（未校验）')
         continue
       }
-      const info = table.get(s.pid)
-      if (info === undefined) {
+      const info = procs.get(s.pid)
+      if (info === undefined || info.tag !== 'S') {
         // ★ 关键分支：强杀场景下登记的启动器**必然已经死了**，占端口的是它的后代
         if (!deadRoots.includes(s.pid)) {
           deadRoots.push(s.pid)
           wlog('登记项 ' + s.key + ' pid=' + s.pid + '：进程已不存在（强杀时随 DSH 一起被 job 收走的直接子进程）→ 改为按 PPID 链回收它的后代')
         }
-        const desc = opt.useDescendants ? descendantsOf(table, s.pid) : []
         if (!opt.useDescendants && round === 1) wlog('诊断开关 --no-descendants 生效：不做 PPID 链后代枚举，只靠登记 pid + 端口兜底')
+        const desc = opt.useDescendants ? descendantsFrom(procs, s.pid) : []
         if (desc.length > 0 && round === 1) wlog('登记项 ' + s.key + ' pid=' + s.pid + ' 的后代：' + desc.join(','))
         for (const d of desc) {
-          const di = table.get(d)
+          const di = procs.get(d)
           // PID 复用防护（对后代用「DSH 死亡时刻」当上界）：本代后代必然在 DSH 死亡前就已存在；
           // 晚于死亡时刻才出现的，只可能是"父 pid 被复用后新拉起的进程" ⇒ 不碰。
           if (di && Number(di.createdMs) > 0 && Number(di.createdMs) > firedAt + 5000) {
@@ -375,7 +451,7 @@ async function recover(reason, firedAt) {
     const toKill = []
     for (const pid of targets.keys()) {
       if (killed.has(pid)) continue
-      const info = table === null ? undefined : table.get(pid)
+      const info = procs === null ? undefined : procs.get(pid)
       if (info !== undefined && targets.has(Number(info.ppid))) continue
       toKill.push(pid)
     }
@@ -420,7 +496,20 @@ async function recover(reason, firedAt) {
         continue
       }
       for (const o of owners) {
-        const ours = allowed.includes(o) || (table !== null && isDescendantOf(table, o, allowed))
+        // 归属判定：① 直接就是登记/目标集里的 pid；② 已枚举到的后代；
+        // ③ 枚举被关掉时，用**定向的祖先链查询**（一次 PowerShell，最多 6 级）往上找登记 pid。
+        let ours = allowed.includes(o)
+        if (!ours && procs !== null && opt.useDescendants) {
+          for (const r of roots) if (descendantsFrom(procs, r).includes(o)) { ours = true; break }
+        }
+        if (!ours && !opt.useDescendants) {
+          // 祖先链判定：从端口持有者往上走，**任何一级的 pid 或它的 ppid 命中"登记集∪已确认集合"**都算本代。
+          // （只比对"链上的 pid"是不够的：链在父进程处就断了，而父正是登记在册的启动器 pid。）
+          const chain = psAncestorChain(o, 6)
+          if (chain !== null) {
+            ours = [...chain.entries()].some(([p, info]) => allowed.includes(p) || allowed.includes(Number(info.ppid)))
+          }
+        }
         if (ours) {
           // 注意：只有**确认已消失**的才进 killed；上一轮树杀失败的 pid 仍会在这里被重试
           if (!killed.has(o)) {
