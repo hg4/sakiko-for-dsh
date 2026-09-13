@@ -1,6 +1,6 @@
 {
   "name": "sakiko-for-dsh",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "SAKIKO（BanG Dream! 丰川祥子 / CRYCHIC 白祥）陪伴助手：Live2D iPhone 面板 + 日语语音 + 长期记忆，DeepSeek Harness 插件（基于 yyxcnasd/amadeus-for-dsh 二次开发）",
   "type": "module",
   "main": "index.js",
@@ -23,6 +23,7 @@
   "files": [
     "index.js",
     "host.mjs",
+    "watchdog.mjs",
     "client.js",
     "client.mjs",
     "cordis.patch.yml",

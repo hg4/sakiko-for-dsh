@@ -11,6 +11,13 @@
 import { dirname } from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
+// 看门狗（非优雅退出时的自清理）需要三样 ctx 服务给不了的东西：
+//   ① node:child_process —— watchdog 必须**不受 DSH 退出钩子管辖**（ctx.subprocess 会被回收）；
+//   ② node:fs 的 rename —— 令牌文件要**原子替换**（临时文件 + rename），fs 服务没有 rename；
+//   ③ node:fs 的 appendFileSync —— 语音日志要 append 语义（fs 服务只有整份 writeText）。
+import { spawn as spawnChild, spawnSync as spawnSyncChild } from 'node:child_process'
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 export const inject = ['timer', 'fs', 'webServer', 'subprocess']
 
 // ---------------- 语音服务自管理：**进程级**状态（跨插件实例、跨模块重导入共享） ----------------
@@ -33,6 +40,11 @@ const voiceShared = globalThis[VOICE_SHARED_KEY] !== undefined
     stopEpoch: 0,                         // 排这个队时的 epoch
     logSink: null,                        // 由 apply() 注入的日志函数
     graceMs: 8000,                        // 卸载后多久才停（给热重载留取消窗口）
+    // 看门狗（v2.1.0）：非优雅退出（关窗口 / taskkill /F / 崩溃）时的自清理。
+    // 挂在**同一个**共享对象上而不是新建一个：跨 apply() 重载必须延续同一个 token 与 pid，
+    // 否则每次热重载都会多拉一个看门狗（幂等判断就失效了）。
+    watchdog: null,                       // { pid, token, exited } | null
+    watchdogToken: null,                  // 本 DSH 进程这一代的令牌（stop 时置回 null）
     state: {
       phase: 'idle',      // idle | starting | ready | external | failed | stopped | disabled
       detail: '',
@@ -964,18 +976,41 @@ export function apply(ctx) {
     //  3) 插件卸载时**延时 8s** 才停服务，apply() 里会取消这个定时器 —— 这样"改配置触发一次热重载"
     //     不会把要 30~60s 才加载完的模型杀掉重启。
     const myEpoch = ++voiceShared.epoch
-    let voiceLogFlush = null
+
+    // 语音日志：**append 语义 + 超过 1MB 轮转成 .1**（v2.1.0 修 Minor-M1）。
+    // 旧实现是「内存环形缓冲整份覆写文件」：新实例一起来就把上一代写下的记录（含"插件卸载 /
+    // 延时停止"那几行 —— 事后取证唯一能看的东西）整段冲掉。控制者实测：重启后旧世代的行全没了。
+    // 为什么用 node:fs 的 appendFileSync 而不是 fs 服务的 writeText：① fs 服务没有 append，
+    // 只能"读旧档 + 拼新行 + 整份写回"，与看门狗进程（另一个进程也在 append 同一个文件）会互相
+    // 覆盖；② O_APPEND 的写入在两端都不会互相截断，日志才可能真的跨进程/跨世代留痕。
+    const VOICE_LOG_MAX = 1024 * 1024
+    let voiceLogChain = Promise.resolve()
+
+    function voiceLogWriteLine(msg) {
+      voiceLogChain = voiceLogChain.then(() => {
+        try {
+          mkdirSync(LOG_DIR, { recursive: true })
+          let size = 0
+          try { size = statSync(VOICE_LOG_PATH).size } catch (e) { size = 0 }
+          if (size > VOICE_LOG_MAX) {
+            // 轮转：旧档整体改名成 .1（保留一份），新档从下一行重新开始
+            try { rmSync(VOICE_LOG_PATH + '.1', { force: true }) } catch (e) { /* 没有旧 .1 就算了 */ }
+            try { renameSync(VOICE_LOG_PATH, VOICE_LOG_PATH + '.1') } catch (e) { /* 改不动就继续 append */ }
+          }
+          appendFileSync(VOICE_LOG_PATH, msg + '\n', 'utf8')
+        } catch (e) {
+          // 写不动日志绝不能影响语音链路；至少让它出现在 DSH 控制台
+          console.error('[sakiko][voice] 日志写盘失败:', VOICE_LOG_PATH, e && e.message ? e.message : String(e))
+        }
+      }).catch(() => { /* 链上任何异常都不许把后续日志卡死 */ })
+    }
 
     function voiceLog(line) {
       const msg = '[' + new Date().toISOString().slice(11, 19) + '] ' + line
       voiceShared.state.log.push(msg)
       if (voiceShared.state.log.length > 200) voiceShared.state.log.splice(0, voiceShared.state.log.length - 200)
       console.log('[sakiko][voice] ' + line)
-      if (voiceLogFlush !== null) return
-      voiceLogFlush = setTimeout(() => {          // 合并写盘，避免启动时几十次 fs 调用
-        voiceLogFlush = null
-        void writeTextSafe(VOICE_LOG_PATH, voiceShared.state.log.join('\n') + '\n').catch(() => {})
-      }, 500)
+      voiceLogWriteLine(msg)          // 内存环只服务 /sakiko/* 的即时状态，落盘一律 append
     }
 
     function setVoicePhase(phase, detail) {
@@ -985,6 +1020,163 @@ export function apply(ctx) {
       voiceShared.state.managed = voiceShared.procs.api !== null || voiceShared.procs.bridge !== null
     }
     voiceShared.logSink = voiceLog        // 供模块级的延时停止定时器打日志（它不在本闭包内）
+
+    // ---------------- 看门狗（watchdog）：非优雅退出时的自清理（v2.1.0） ----------------
+    // 背景（用户实测）：ctx.subprocess 的回收只挂在 JS 退出钩子上，点控制台 X / taskkill /F /
+    // DSH 崩溃时钩子根本不跑 ⇒ 插件拉起的 GPT-SoVITS api(9880) 与桥(8000) 变孤儿，端口一直被占，
+    // 下次启动被判成"外部服务、不接管"，用户必须先跑 stop-all.bat。
+    // 契约（详见 watchdog.mjs 顶部注释）：
+    //   * 用 node:child_process.spawn 拉起（**不是 ctx.subprocess**，那一套会被 DSH 的退出钩子回收，
+    //     恰好就是非优雅退出时不跑的那部分），detached + stdio:['pipe','ignore','ignore']；
+    //   * stdin 管道 = 主信号（DSH 消失 ⇒ 写端被 OS 关闭 ⇒ 看门狗读到 EOF），pid 轮询是兜底；
+    //   * 所有权靠令牌文件：token 不匹配 / 文件不在 ⇒ 看门狗什么都不杀（宁可漏杀，绝不误杀新一代）。
+    const RUN_DIR = DATA_DIR + '/run'
+    const WATCHDOG_STATE_PATH = RUN_DIR + '/voice-watchdog.json'
+
+    function watchdogScriptPath() {
+      for (const p of [MODULE_DIR + '/watchdog.mjs', ROOT + '/watchdog.mjs']) {
+        try { if (statSync(p).isFile()) return p } catch (e) { /* 继续找下一个候选 */ }
+      }
+      return null
+    }
+
+    // 令牌文件：内容 = 本代身份 + **我们自己拉起的**服务清单（pid 来自手里的活句柄，
+    // 不是从端口猜 —— 没 spawn 过就没有所有权，外来服务永不入册）。
+    // 原子写：临时文件 + rename，看门狗绝不会读到半个 JSON。
+    function writeWatchdogState(token) {
+      const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
+      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+      const services = []
+      if (token !== null && token !== undefined) {
+        for (const key of ['api', 'bridge']) {
+          const rec = voiceShared.procs[key]
+          if (voiceProcAlive(rec)) services.push({ key, pid: rec.pid, port: key === 'api' ? apiPort : bridgePort })
+        }
+      }
+      const payload = {
+        token: token === undefined ? null : token,
+        epoch: voiceShared.epoch,
+        dshPid: process.pid,
+        watchdogPid: voiceShared.watchdog !== null && voiceShared.watchdog !== undefined ? voiceShared.watchdog.pid : 0,
+        updatedAt: new Date().toISOString(),
+        services,
+      }
+      try {
+        mkdirSync(RUN_DIR, { recursive: true })
+        const tmp = WATCHDOG_STATE_PATH + '.' + process.pid + '.tmp'
+        writeFileSync(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+        renameSync(tmp, WATCHDOG_STATE_PATH)
+        return true
+      } catch (e) {
+        voiceLog('[watchdog] 令牌文件写入失败（' + WATCHDOG_STATE_PATH + '）：'
+          + (e && e.message ? e.message : String(e)) + ' —— 非优雅退出时的自动回收不可用')
+        return false
+      }
+    }
+
+    function watchdogAlive() {
+      const wd = voiceShared.watchdog
+      if (wd === null || wd === undefined || wd.exited === true) return false
+      try { process.kill(wd.pid, 0); return true } catch (e) { return false }
+    }
+
+    // 幂等：同一个 DSH 进程里只留一个看门狗；每次调用都刷新令牌文件里的服务清单。
+    function armWatchdog(why) {
+      if (voiceShared.watchdogToken === null) voiceShared.watchdogToken = randomUUID()
+      if (!watchdogAlive()) {
+        const script = watchdogScriptPath()
+        if (script === null) {
+          voiceLog('[watchdog] 找不到 watchdog.mjs（安装包不完整？）→ 跳过：非优雅退出时的自动回收不可用')
+          return false
+        }
+        let child = null
+        try {
+          child = spawnChild(process.execPath, [
+            script,
+            '--token', voiceShared.watchdogToken,
+            '--epoch', String(voiceShared.epoch),
+            '--dsh-pid', String(process.pid),
+            '--token-file', WATCHDOG_STATE_PATH,
+            '--log', VOICE_LOG_PATH,
+          ], {
+            cwd: ROOT,
+            detached: true,
+            windowsHide: true,
+            stdio: ['pipe', 'ignore', 'ignore'],    // stdin 管道 = 死亡信号，绝不写、绝不 end
+            env: process.env,
+          })
+        } catch (e) {
+          voiceLog('[watchdog] 拉起看门狗失败：' + (e && e.message ? e.message : String(e)))
+          return false
+        }
+        const wd = { pid: child.pid, token: voiceShared.watchdogToken, exited: false, child, expected: false }
+        // expected 交给 stopWatchdog 置位：正常收摊不报警，**意外退出必须留下痕迹** ——
+        // 否则"看门狗已经死了"这件事会被一句"已拉起看门狗"永远掩盖（正是这次要修的那类自欺）。
+        child.on('exit', (code) => {
+          wd.exited = true
+          if (!wd.expected) voiceLog('[watchdog] ★ 看门狗意外退出（pid=' + wd.pid + ' exit=' + code + '）—— 非优雅退出时的自动回收不可用（下次拉起服务时会重试）')
+        })
+        child.on('error', (e) => {
+          wd.exited = true
+          if (!wd.expected) voiceLog('[watchdog] ★ 看门狗出错：' + (e && e.message ? e.message : String(e)))
+        })
+        try { if (child.stdin) child.stdin.on('error', () => { /* EPIPE 无所谓 */ }) } catch (e) { /* ignore */ }
+        // unref 子进程 + unref 它的 stdin：这两步缺一不可。stdin 管道是活的 handle，
+        // 不 unref 会把 DSH 的事件循环**钉住**（Ctrl+C / 正常退出时进程不结束）。
+        try { child.unref() } catch (e) { /* ignore */ }
+        try { if (child.stdin && typeof child.stdin.unref === 'function') child.stdin.unref() } catch (e) { /* ignore */ }
+        voiceShared.watchdog = wd
+        voiceLog('[watchdog] 已拉起看门狗 pid=' + child.pid + '（token=' + String(voiceShared.watchdogToken).slice(0, 8)
+          + '，触发=' + why + '，脚本=' + script + '）')
+      }
+      const ok = writeWatchdogState(voiceShared.watchdogToken)
+      if (ok) {
+        const n = voiceShared.procs.api !== null && voiceProcAlive(voiceShared.procs.api) ? 1 : 0
+        const m = voiceShared.procs.bridge !== null && voiceProcAlive(voiceShared.procs.bridge) ? 1 : 0
+        voiceLog('[watchdog] 已更新令牌文件（token=' + String(voiceShared.watchdogToken).slice(0, 8)
+          + '，登记服务 api=' + n + ' bridge=' + m + '）')
+      }
+      return ok
+    }
+
+    // 优雅停止/卸载：先把令牌置为失效态（{token:null}），**再**杀看门狗。
+    // 顺序的意义：若我们杀看门狗失败（或它已经跑飞），残留者醒来时读到 token=null 会判定
+    // "不匹配 ⇒ 什么都不杀" —— 绝不会把新一代刚拉起的服务干掉。
+    async function stopWatchdog(reason) {
+      const wd = voiceShared.watchdog
+      const wasAlive = watchdogAlive()
+      writeWatchdogState(null)
+      voiceShared.watchdogToken = null
+      voiceShared.watchdog = null
+      if (wd === null || wd === undefined) return
+      if (!wasAlive) {
+        voiceLog('[watchdog] 看门狗 pid=' + wd.pid + ' 已经不在了（' + reason + '；令牌已置失效）')
+        return
+      }
+      wd.expected = true      // 之后它的 exit 事件不再当作"意外退出"报警
+      let how = ''
+      try {
+        if (process.platform === 'win32') {
+          const r = spawnSyncChild('taskkill', ['/PID', String(wd.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 })
+          how = 'taskkill /T /F（exit=' + (r ? r.status : '?') + '）'
+        } else {
+          try { process.kill(-wd.pid, 'SIGKILL'); how = 'kill(-pid)' }
+          catch (e) { process.kill(wd.pid, 'SIGKILL'); how = 'kill(pid)' }
+        }
+      } catch (e) {
+        voiceLog('[watchdog] 停止看门狗 pid=' + wd.pid + ' 失败：' + (e && e.message ? e.message : String(e)))
+        return
+      }
+      // 等它真的退出（≤2s）；超时也如实记一笔
+      const deadline = Date.now() + 2000
+      let gone = false
+      while (Date.now() < deadline) {
+        try { process.kill(wd.pid, 0) } catch (e) { gone = true; break }
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      voiceLog('[watchdog] 已停止看门狗 pid=' + wd.pid + '（' + reason + '，' + how + '，'
+        + (gone ? '已确认退出' : '★ 2s 内未确认退出，但令牌已置失效 ⇒ 它醒来也不会杀任何进程') + '）')
+    }
 
     function voicePaths() {
       const root = String(config.voiceRoot || '').trim().replace(/[\\/]+$/, '')
@@ -1237,6 +1429,8 @@ export function apply(ctx) {
             voiceShared.procs.api = rec
             voiceShared.state.api.pid = rec.pid
             voiceLog('已拉起 GPT-SoVITS api pid=' + rec.pid + '（端口 ' + apiPort + '，device=' + (config.voiceDevice || 'cuda') + '）')
+            // 拉起即入册：模型加载要 30~180s，这段时间 DSH 被强杀同样必须能回收
+            armWatchdog('已拉起 api')
             // 就绪 = 端口在听 ∧ 我们拉起的进程还活着（D4）。进程退出则立刻失败（giveUp），
             // 不再空等 180s。
             const okApi = await waitUntil(
@@ -1299,6 +1493,7 @@ export function apply(ctx) {
             voiceShared.procs.bridge = rec2
             voiceShared.state.bridge.pid = rec2.pid
             voiceLog('已拉起语音桥 pid=' + rec2.pid + '（端口 ' + bridgePort + '）')
+            armWatchdog('已拉起 bridge')
             // D4：就绪 = **端口在听 ∧ 我们自己拉起的那个桥还活着**。
             // 旧代码只看端口，于是"自己拉起的桥绑定失败立刻退出、端口恰好被别的东西占着"也会报 ready，
             // 用户以为语音好了，实际上插件手里是个死句柄；卸载时还会去 terminate 一个死 pid。
@@ -1390,6 +1585,15 @@ export function apply(ctx) {
         voiceLog('★ 未能停止：' + survivors.join(' + ') + ' —— ' + reason)
       } else {
         setVoicePhase('idle', '没有本插件拉起的服务可停（' + reason + '）')
+      }
+      // 看门狗收摊的时机：**服务先停、看门狗后停**（顺序反了会留下一个"服务已经没了、
+      // 看门狗还醒着"的窗口）。还有幸存者时**不杀**看门狗 —— 否则非优雅退出又回到"端口被占"，
+      // 那正是这次要修的 bug。此时只刷新令牌文件，让看门狗继续守着剩下的服务。
+      if (survivors.length === 0) {
+        await stopWatchdog(reason)
+      } else if (voiceShared.watchdogToken !== null) {
+        writeWatchdogState(voiceShared.watchdogToken)
+        voiceLog('[watchdog] 仍有未停掉的服务（' + survivors.join(' + ') + '）→ 看门狗保持运行并刷新登记清单')
       }
       return voiceShared.state
     }
