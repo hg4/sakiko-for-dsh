@@ -54,6 +54,28 @@ VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 放 DSH 数据目录里，�
 | 桥（本 skill 附带） | `VOICE_ROOT\bridge_tts.py` + `bridge.config.json` |
 | 插件运行时配置 | `%DSH_HOME%\sakiko\config\sakiko.json` |
 
+## 更省事：让插件自己拉起服务（第 6/7 步可跳过）
+
+插件内置了「语音服务自管理」：只要在 `%DSH_HOME%\sakiko\config\sakiko.json` 里配好
+（**改配置前先停 DSH**），`dsh web` 一启动就会自动探测并拉起 api 与桥，连 `/set_model` 都替你做了：
+
+```jsonc
+"voiceAutoStart":    true,                 // 默认开
+"voiceRoot":         "D:\\sakiko-voice",   // 前面的 VOICE_ROOT
+"voiceDevice":       "cuda",
+"voiceGptWeights":   "D:\\...\\x.ckpt",    // 留空 = 零样本克隆
+"voiceSovitsWeights":"D:\\...\\x.pth",
+"voiceApiPort":      9880,
+"voiceBridgePort":   8000
+```
+
+- 端口已在监听 → 判定为「外部服务」，插件只读状态、不接管、也不会停它。
+- 插件拉起的服务**随 DSH 退出一起结束**（不留后台孤儿）；插件卸载延时 8 秒才停，热重载会取消。
+- 查状态：`curl.exe -sS http://127.0.0.1:3080/sakiko/voice`；手动启停：`?action=start` / `?action=stop`。
+
+**注意**：`voiceAutoStart` 只在插件加载时触发一次。若你刚改完配置，重启 DSH 或调一次
+`?action=start` 让它生效。
+
 ## 步骤（判据不成立就别往下走）
 
 **1. 建 Python 环境**（3.10.x；**先装 torch 再装 requirements**，否则会装成 CPU 版）

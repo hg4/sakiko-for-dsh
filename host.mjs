@@ -9,8 +9,42 @@
 // ============================================================
 // 静态版 host（由 tools/build_static.mjs 生成，勿手改）
 import { dirname } from 'node:path'
+import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 export const inject = ['timer', 'fs', 'webServer', 'subprocess']
+
+// ---------------- 语音服务自管理：**进程级**状态（跨插件实例、跨模块重导入共享） ----------------
+// 为什么不放 apply() 里：插件热重载会新建实例，而旧实例排队中的"延时停止"若只存在于闭包里
+// 就取消不掉 —— 旧定时器会把新实例刚拉起的服务杀掉（独立审查 2026-09-13 的 D9）。
+// 为什么连"模块级 let"也不够、要挂到 globalThis：
+//   宿主若用带 cache-busting 的 URL 重新 import（host.mjs?v=<hash> 之类），模块会被**重新求值**，
+//   模块级 let 全部归零 —— 新实例看不到旧实例 spawn 的句柄（procs 归零），于是端口在听却报
+//   external，而且**谁都停不掉**这些服务（旧句柄丢了、新实例又认为自己没拉起过）。
+//   2026-09-13 实测到的正是这种"状态说没有、进程还在跑"的死局。用 Symbol.for 做键挂在
+//   globalThis 上，重导入后拿到的是**同一个对象**，句柄与 epoch 得以延续（新实例仍能停止旧服务）。
+const VOICE_SHARED_KEY = Symbol.for('sakiko-for-dsh/voice-module-state')
+const voiceShared = globalThis[VOICE_SHARED_KEY] !== undefined
+  ? globalThis[VOICE_SHARED_KEY]
+  : (globalThis[VOICE_SHARED_KEY] = {
+    epoch: 0,                             // 每次 apply() 自增：只有最新一代实例有权停服务
+    procs: { api: null, bridge: null },   // { handle, pid, exited, exitCode } | null
+    starting: null,                       // 启动去重（存 Promise）
+    stopTimer: null,                      // 插件卸载排队的延时停止
+    stopEpoch: 0,                         // 排这个队时的 epoch
+    logSink: null,                        // 由 apply() 注入的日志函数
+    graceMs: 8000,                        // 卸载后多久才停（给热重载留取消窗口）
+    state: {
+      phase: 'idle',      // idle | starting | ready | external | failed | stopped | disabled
+      detail: '',
+      at: 0,
+      owner: 'none',      // plugin | external | none
+      managed: false,
+      api: { up: false, port: 0, pid: 0 },
+      bridge: { up: false, port: 0, pid: 0 },
+      log: [],
+    },
+  })
+
 export function apply(ctx) {
     const fs = ctx.get('fs')
     const webServer = ctx.get('webServer')
@@ -51,6 +85,7 @@ export function apply(ctx) {
     const TMP_DIR = DATA_DIR + '/tmp'
     const LOG_DIR = DATA_DIR + '/logs'
     const TIMELINE_PATH = LOG_DIR + '/timeline.jsonl'
+    const VOICE_LOG_PATH = LOG_DIR + '/voice-autostart.log'   // 语音服务自启动/停止的过程日志
 
     const MAX_TTS_BYTES = 2000000
     // ---------------- 静态版 RPC 桥（harness → /sakiko/rpc） ----------------
@@ -124,6 +159,17 @@ export function apply(ctx) {
       aquaPreset: 'fast',
       aquaApiKey: '',
       aquaEmotionVoices: {},
+      // ---------------- 语音服务自管理（2026-09-13） ----------------
+      // 目标：`dsh web` 单独启动也能把 GPT-SoVITS 拉起来，不需要先点 .bat；
+      //       并且服务进程由本插件 spawn 持有 —— DSH 退出或插件卸载时随之结束，不留后台孤儿。
+      // 只在「端口没在听」时才动手，所以外面自己起的服务不会被打扰（也绝不会按端口杀进程）。
+      voiceAutoStart: true,        // 关掉后插件完全不碰语音服务
+      voiceRoot: '',               // 语音根目录（env/、GPT-SoVITS-main/、bridge_tts.py 所在）；留空=不自动启动
+      voiceDevice: 'cuda',         // cuda | cpu
+      voiceGptWeights: '',         // .ckpt（留空则用 api 启动时的默认/基础模型 = 零样本克隆）
+      voiceSovitsWeights: '',      // .pth
+      voiceApiPort: 9880,
+      voiceBridgePort: 8000,
       voicevoxUrl: 'http://127.0.0.1:50021',
       voicevoxSpeaker: 8,
       voicevoxEmotionSpeakers: {},
@@ -559,6 +605,25 @@ export function apply(ctx) {
           if (obj && typeof obj === 'object' && !Array.isArray(obj)) out.aquaEmotionVoices = obj
         } catch (e) { /* ignore invalid json */ }
       }
+      if (typeof p.voiceAutoStart === 'boolean') out.voiceAutoStart = p.voiceAutoStart
+      if (typeof p.voiceRoot === 'string' && p.voiceRoot.length <= 300) out.voiceRoot = p.voiceRoot
+      if (p.voiceDevice === 'cuda' || p.voiceDevice === 'cpu') out.voiceDevice = p.voiceDevice
+      if (typeof p.voiceGptWeights === 'string' && p.voiceGptWeights.length <= 300) out.voiceGptWeights = p.voiceGptWeights
+      if (typeof p.voiceSovitsWeights === 'string' && p.voiceSovitsWeights.length <= 300) out.voiceSovitsWeights = p.voiceSovitsWeights
+      // D7（审查 2026-09-13）：原来是 >=1，等于允许 80/443 这类特权端口（插件去抢会直接失败或与系统服务打架）；
+      // 且从不校验两端口互异 —— 两个都填 9880/8000 时会互相踩（api 与桥抢同一个端口，后起的静默绑不上）。
+      if (typeof p.voiceApiPort === 'number' && p.voiceApiPort >= 1024 && p.voiceApiPort <= 65535) out.voiceApiPort = Math.floor(p.voiceApiPort)
+      if (typeof p.voiceBridgePort === 'number' && p.voiceBridgePort >= 1024 && p.voiceBridgePort <= 65535) out.voiceBridgePort = Math.floor(p.voiceBridgePort)
+      {
+        // 互异校验要拿"生效后的值"比：只改一个端口时，撞上另一个的现有值同样要拒。
+        const effApi = out.voiceApiPort !== undefined ? out.voiceApiPort : Math.floor(Number(config.voiceApiPort) || 9880)
+        const effBridge = out.voiceBridgePort !== undefined ? out.voiceBridgePort : Math.floor(Number(config.voiceBridgePort) || 8000)
+        if (effApi === effBridge && (out.voiceApiPort !== undefined || out.voiceBridgePort !== undefined)) {
+          console.warn('[sakiko] 拒绝端口改动：voiceApiPort 与 voiceBridgePort 不能相同（生效值 ' + effApi + '），该项已忽略')
+          delete out.voiceApiPort
+          delete out.voiceBridgePort
+        }
+      }
       if (typeof p.voicevoxUrl === 'string' && /^https?:\/\//.test(p.voicevoxUrl) && p.voicevoxUrl.length <= 200) out.voicevoxUrl = p.voicevoxUrl
       if (typeof p.voicevoxSpeaker === 'number' && p.voicevoxSpeaker >= 0 && p.voicevoxSpeaker <= 100) out.voicevoxSpeaker = Math.floor(p.voicevoxSpeaker)
       if (typeof p.voicevoxEmotionSpeakers === 'string' && p.voicevoxEmotionSpeakers.length <= 800) {
@@ -884,6 +949,437 @@ export function apply(ctx) {
         ttsWorker = { disabled: true }
         return null
       }
+    }
+
+    // ---------------- 语音服务自管理（GPT-SoVITS api + 桥） ----------------
+    // 为什么这么设计（都是踩过坑的结论）：
+    //  1) 用 ctx.subprocess.spawn ⇒ 进程归 DSH 托管。DSH 退出时 subprocess 服务会统一 terminate
+    //     它们（subprocess-local 的 process.on('exit') 钩子），**不留后台孤儿** —— 这解决了
+    //     「关了 DSH，语音服务还在后台跑」的老问题。
+    //  2) 只管理**自己拉起的**进程：端口已在监听就判定为"外部服务"，只读状态、不接管、更不按端口
+    //     杀进程（用户自己用脚本起的服务不能被插件弄死）。
+    //  3) 插件卸载时**延时 8s** 才停服务，apply() 里会取消这个定时器 —— 这样"改配置触发一次热重载"
+    //     不会把要 30~60s 才加载完的模型杀掉重启。
+    const myEpoch = ++voiceShared.epoch
+    let voiceLogFlush = null
+
+    function voiceLog(line) {
+      const msg = '[' + new Date().toISOString().slice(11, 19) + '] ' + line
+      voiceShared.state.log.push(msg)
+      if (voiceShared.state.log.length > 200) voiceShared.state.log.splice(0, voiceShared.state.log.length - 200)
+      console.log('[sakiko][voice] ' + line)
+      if (voiceLogFlush !== null) return
+      voiceLogFlush = setTimeout(() => {          // 合并写盘，避免启动时几十次 fs 调用
+        voiceLogFlush = null
+        void writeTextSafe(VOICE_LOG_PATH, voiceShared.state.log.join('\n') + '\n').catch(() => {})
+      }, 500)
+    }
+
+    function setVoicePhase(phase, detail) {
+      voiceShared.state.phase = phase
+      voiceShared.state.detail = detail || ''
+      voiceShared.state.at = Date.now()
+      voiceShared.state.managed = voiceShared.procs.api !== null || voiceShared.procs.bridge !== null
+    }
+    voiceShared.logSink = voiceLog        // 供模块级的延时停止定时器打日志（它不在本闭包内）
+
+    function voicePaths() {
+      const root = String(config.voiceRoot || '').trim().replace(/[\\/]+$/, '')
+      return {
+        root,
+        py: root + '/env/Scripts/python.exe',
+        repo: root + '/GPT-SoVITS-main',
+        api: root + '/GPT-SoVITS-main/api.py',
+        bridge: root + '/bridge_tts.py',
+        bridgeCfg: root + '/bridge.config.json',
+      }
+    }
+
+    async function pathExists(p) {
+      if (!p) return false
+      try {
+        const h = await fs.resolve(p)
+        return (await fs.stat(h)) !== undefined
+      } catch (e) { return false }
+    }
+
+    // 端口在听？用 **TCP connect** 判据。
+    // 为什么不复用 httpProbe：审查 D3 实测，桥在 api 挂掉时 /health 要 ~4.2s 才回，
+    // 而"没在听"的 HTTP 预算只有 2.5s → 会把**慢响应误判成没在听** → 重复拉起第二个
+    // GPT-SoVITS api（等于二次加载 3.5~9GB 模型）。TCP connect 毫秒级且不涉及应用层语义。
+    async function portOpen(port, timeoutMs) {
+      return await new Promise((resolve) => {
+        let settled = false
+        const done = (v) => {
+          if (settled) return
+          settled = true
+          try { sock.destroy() } catch (e) { /* ignore */ }
+          resolve(v)
+        }
+        const sock = net.connect({ host: '127.0.0.1', port: port })
+        sock.setTimeout(timeoutMs || 1500)
+        sock.once('connect', () => done(true))
+        sock.once('timeout', () => done(false))
+        sock.once('error', () => done(false))
+      })
+    }
+
+    // 子进程记录：就绪判据必须是「**我们拉起的进程还活着** ∧ 端口在听」。
+    // 否则会出现审查 D4 那种情况：自己拉起的桥早就死了，端口被外部进程占着，却报 ready。
+    function trackVoiceProc(handle) {
+      const rec = { handle: handle, pid: handle.pid, exited: false, exitCode: null }
+      const settle = (o) => {
+        rec.exited = true
+        rec.exitCode = o && typeof o.exitCode === 'number' ? o.exitCode : null
+      }
+      handle.done.then(settle, settle)
+      return rec
+    }
+
+    // 失败时把子进程已经收集到的输出倒出来。旧实现 spawn 时用 maxBytes 收集却从不读取，
+    // 于是"启动失败"只剩下一个笼统的 timeout，真正原因（缺依赖/路径错/CUDA 不可用）全丢了（审查 D10）。
+    async function dumpProcOutput(rec, tag) {
+      if (!rec || !rec.handle || !rec.handle.collected) return
+      try {
+        const errR = rec.handle.collected.stderr
+        const outR = rec.handle.collected.stdout
+        const e = errR ? (await errR.readFrom(0)).text : ''
+        const o = outR ? (await outR.readFrom(0)).text : ''
+        const lines = (e + '\n' + o).split('\n').map((x) => x.trim()).filter((x) => x.length > 0)
+        if (lines.length === 0) return
+        voiceLog(tag + ' 输出尾部: ' + lines.slice(-8).join(' | ').slice(0, 600))
+      } catch (e) { /* 读不到就算了，不能因为诊断失败把流程搞挂 */ }
+    }
+
+    // 能建立 HTTP 连接（哪怕 404/500）就算"能应答"；连接被拒 = 没在听。
+    // 只用于**取状态/下发指令**（/health、/set_model），不用于"端口是否被占用"的判断。
+    async function httpProbe(url, ms) {
+      const budget = ms || 2500
+      const ctl = new AbortController()
+      const timer = setTimeout(() => { try { ctl.abort() } catch (e) { /* ignore */ } }, budget)
+      try {
+        const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' })
+        let body = ''
+        try { body = await r.text() } catch (e) { body = '' }
+        return { up: true, status: r.status, body: body }
+      } catch (e) {
+        return { up: false, err: e && e.message ? String(e.message) : String(e) }
+      } finally { clearTimeout(timer) }
+    }
+
+    async function waitUntil(pred, timeoutMs, intervalMs, giveUp) {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        if (await pred()) return true
+        // D4/D10：进程已经退出属于"再等也不会好"。没有这个早退，就要空等满 60/180s，
+        // 用户只看到一个笼统的 timeout，真因（缺依赖/端口被占/路径错）全被时间吞掉。
+        if (giveUp !== undefined) {
+          try { if (await giveUp()) return false } catch (e) { /* giveUp 自己出错不影响等待 */ }
+        }
+        if (Date.now() >= deadline) return false
+        await new Promise((r) => setTimeout(r, intervalMs))
+      }
+    }
+
+    async function voicePython(P) {
+      if (await pathExists(P.py)) return P.py
+      return await subprocess.resolveExecutable('python')
+    }
+
+    // 句柄是否还活着（trackVoiceProc 会被 handle.done 置 exited）
+    function voiceProcAlive(rec) {
+      return rec !== null && rec !== undefined && rec.exited !== true
+    }
+
+    // D5（审查 2026-09-13 重要）：本插件托管的 api+bridge 都还活着 ⇒ **同步**返回 ready/plugin。
+    // 为什么必须同步：`?action=start` 走的是 `void startVoiceServices(...)`（不 await，否则冷启动
+    // 会阻塞 HTTP 请求 3 分钟）。只要这里先 await，响应里就会是"starting"；而旧实现更糟 ——
+    // 它跳过这步直接去探端口，把 owner 从 plugin 翻成 external，等于告诉面板/agent
+    // "这是外部的，插件不接管也不会停它"，可实际上卸载时会被插件杀掉。
+    function voiceOwnedFastPath() {
+      const ownApi = voiceShared.procs.api
+      const ownBr = voiceShared.procs.bridge
+      if (!voiceProcAlive(ownApi) || !voiceProcAlive(ownBr)) return null
+      const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
+      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+      voiceShared.state.api.port = apiPort
+      voiceShared.state.bridge.port = bridgePort
+      voiceShared.state.api.pid = ownApi.pid
+      voiceShared.state.bridge.pid = ownBr.pid
+      voiceShared.state.owner = 'plugin'
+      setVoicePhase('ready', '由插件拉起并托管（重复 start 被忽略）')
+      voiceLog('重复 start：插件托管的 api/bridge 仍在运行（pid ' + ownApi.pid + '/' + ownBr.pid + '），忽略且不重复 spawn')
+      // 端口复核只为修正状态：**不做任何 spawn/terminate**，所以可以后台跑
+      void (async () => {
+        const a = await portOpen(apiPort, 800)
+        const b = await portOpen(bridgePort, 800)
+        voiceShared.state.api.up = a
+        voiceShared.state.bridge.up = b
+        if (!a || !b) setVoicePhase('failed', '托管的进程还在，但端口未在听（api:' + a + ' bridge:' + b + '）')
+      })().catch(() => { /* 复核失败不改状态 */ })
+      return voiceShared.state
+    }
+
+    async function startVoiceServices(trigger) {
+      // D2（审查 2026-09-13 阻塞）：去重标志必须在**外层 await 之后**清理。
+      // 旧写法 `voiceShared.starting = (async () => {...})()` 里带 `finally { voiceShared.starting = null }`：
+      // 同步早退分支（voiceAutoStart=false / voiceRoot 为空）会在赋值**之前**就把 finally 跑掉，
+      // 于是 voiceShared.starting 被赋成一个**已结算**的 Promise 且永不清除 ⇒ 之后所有调用
+      // （含 HTTP 自愈入口 ?action=start）被 `if (voiceShared.starting !== null) return` 永久短路，
+      // 且响应里的 starting 永远为 true。实测：voiceRoot 空启动一次后，写回配置也再起不来。
+      if (voiceShared.starting !== null) return await voiceShared.starting
+      const already = voiceOwnedFastPath()
+      if (already !== null) return already
+      const run = (async () => {
+        try {
+          const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
+          const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+          voiceShared.state.api.port = apiPort
+          voiceShared.state.bridge.port = bridgePort
+          if (config.voiceAutoStart !== true) { setVoicePhase('disabled', 'voiceAutoStart=false'); return voiceShared.state }
+          const P = voicePaths()
+          if (!P.root) { setVoicePhase('disabled', 'voiceRoot 未配置（留空=不自动启动）'); return voiceShared.state }
+
+          // ① 先清掉**已经退出**的托管句柄：不清的话它会继续让 managed=true、让状态假装还有服务，
+          //    也会挡住后面的重新拉起（审查 D4 的同源问题）。
+          for (const key of ['api', 'bridge']) {
+            const rec = voiceShared.procs[key]
+            if (rec !== null && rec !== undefined && rec.exited === true) {
+              voiceLog('清理已退出的托管句柄 ' + key + '（pid=' + rec.pid + ' exit=' + (rec.exitCode === null ? '?' : rec.exitCode) + '）')
+              voiceShared.procs[key] = null
+              voiceShared.state[key].pid = 0
+              voiceShared.state[key].up = false
+            }
+          }
+
+          // ② "有没有别人在听"一律用 **TCP connect** 判据，不用 /health。
+          //    D3（审查实测）：真实桥在 api 挂掉时 /health 要 ~4.2s 才回（内部两次 5s 超时），
+          //    而旧代码的 HTTP 预算只有 2.5s ⇒ 把"慢"误判成"没在听" ⇒ 重复拉起第二个 GPT-SoVITS
+          //    api（= 二次加载 3.5~9GB 模型；用户自己脚本正在加载模型的那 30~60s 窗口同样中招）。
+          //    TCP connect 是毫秒级且不涉及应用层语义：连不上=没在听，连得上=有人在听。
+          if (await portOpen(bridgePort, 1500)) {
+            voiceShared.state.bridge.up = true
+            const apiUp = await portOpen(apiPort, 1500)
+            voiceShared.state.api.up = apiUp
+            voiceShared.state.owner = 'external'
+            if (apiUp) {
+              setVoicePhase('external', '语音服务已在运行（外部的，插件不接管也不会停它）')
+              voiceLog('检测到外部服务已在监听 ' + bridgePort + '，不做任何操作')
+            } else {
+              // D8：只有桥在听、api 没起来是"半可用"。旧代码照样回一句"已在运行"，
+              // 用户会得到错误的安心感，所以这里明确写出来并显著打日志。
+              setVoicePhase('external', '外部桥在听（:' + bridgePort + '），但 api :' + apiPort + ' 未就绪；插件不接管，也不会替你拉起 api')
+              voiceLog('警告：外部桥 ' + bridgePort + ' 在听，但 api ' + apiPort + ' 未就绪 —— 语音链路半可用，请自行检查 api 进程')
+            }
+            return voiceShared.state
+          }
+
+          setVoicePhase('starting', '触发: ' + trigger)
+          voiceLog('开始自启动（触发=' + trigger + '，root=' + P.root + '）')
+
+          // ③ api
+          if (await portOpen(apiPort, 1500)) {
+            voiceShared.state.api.up = true
+            voiceLog('api 已在监听，跳过启动')
+          } else {
+            if (!(await pathExists(P.api))) {
+              setVoicePhase('failed', '找不到 ' + P.api + '（voiceRoot 指对了吗？）')
+              voiceLog('失败：找不到 api.py')
+              return voiceShared.state
+            }
+            const py = await voicePython(P)
+            const argv = [py, '-u', 'api.py', '-a', '127.0.0.1', '-p', String(apiPort),
+              '-d', config.voiceDevice === 'cpu' ? 'cpu' : 'cuda']
+            if (config.voiceGptWeights) argv.push('-g', String(config.voiceGptWeights))
+            if (config.voiceSovitsWeights) argv.push('-s', String(config.voiceSovitsWeights))
+            const h = subprocess.spawn({
+              argv, cwd: P.repo,
+              stdio: { stdin: 'ignore', stdout: { maxBytes: 16384 }, stderr: { maxBytes: 16384 } },
+              graceMs: 5000,
+              env: { PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' },
+            })
+            const rec = trackVoiceProc(h)
+            voiceShared.procs.api = rec
+            voiceShared.state.api.pid = rec.pid
+            voiceLog('已拉起 GPT-SoVITS api pid=' + rec.pid + '（端口 ' + apiPort + '，device=' + (config.voiceDevice || 'cuda') + '）')
+            // 就绪 = 端口在听 ∧ 我们拉起的进程还活着（D4）。进程退出则立刻失败（giveUp），
+            // 不再空等 180s。
+            const okApi = await waitUntil(
+              async () => voiceProcAlive(rec) && (await portOpen(apiPort, 800)),
+              180000, 2000,
+              async () => rec.exited === true)
+            if (!okApi) {
+              const portNow = await portOpen(apiPort, 800)
+              const why = rec.exited
+                ? ('api 进程已退出（exit=' + (rec.exitCode === null ? '?' : rec.exitCode) + '）' + (portNow ? '，端口 ' + apiPort + ' 另有进程在听（插件不接管）' : ''))
+                : 'api 180s 内未就绪（首次加载模型较慢；看 ' + VOICE_LOG_PATH + '）'
+              setVoicePhase('failed', why)
+              voiceLog('失败：' + why)
+              await dumpProcOutput(rec, 'api')        // D10：把子进程 stderr/stdout 尾部落到日志
+              if (rec.exited) { voiceShared.procs.api = null; voiceShared.state.api.pid = 0 }
+              return voiceShared.state
+            }
+            voiceLog('api 就绪')
+          }
+          voiceShared.state.api.up = true
+
+          // ③ 注册权重（api 重启后注册表会清空；只有配了权重才需要这步）
+          if (config.voiceGptWeights || config.voiceSovitsWeights) {
+            const q = []
+            if (config.voiceGptWeights) q.push('gpt_model_path=' + encodeURIComponent(String(config.voiceGptWeights)))
+            if (config.voiceSovitsWeights) q.push('sovits_model_path=' + encodeURIComponent(String(config.voiceSovitsWeights)))
+            const r = await httpProbe('http://127.0.0.1:' + apiPort + '/set_model?' + q.join('&'), 120000)
+            if (r.up && /Success/i.test(r.body)) voiceLog('权重已注册（set_model Success）')
+            else voiceLog('权重注册失败：' + String(r.body || r.err || '').slice(0, 200))
+          }
+
+          // ④ 桥（自带配置驱动版优先，缺配置就用环境变量告诉它端口与 api 地址）
+          if (!(await pathExists(P.bridge))) {
+            setVoicePhase('failed', '找不到 ' + P.bridge)
+            voiceLog('失败：找不到 bridge_tts.py')
+            return voiceShared.state
+          }
+          const py2 = await voicePython(P)
+          if (await pathExists(P.bridgeCfg)) voiceLog('桥将读取 ' + P.bridgeCfg)
+          if (await portOpen(bridgePort, 1500)) {
+            // 端口在 ② 之后才被别人抢走/或被我们自己占用（半途场景）：绝不重复 spawn 一个桥
+            voiceShared.state.bridge.up = true
+            voiceLog('桥端口 ' + bridgePort + ' 已在监听，跳过启动')
+          } else {
+            const h2 = subprocess.spawn({
+              argv: [py2, '-u', P.bridge],
+              cwd: P.root,
+              stdio: { stdin: 'ignore', stdout: { maxBytes: 16384 }, stderr: { maxBytes: 16384 } },
+              graceMs: 5000,
+              env: {
+                BRIDGE_PORT: String(bridgePort),
+                GPT_API: 'http://127.0.0.1:' + apiPort,
+                PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8',
+              },
+            })
+            const rec2 = trackVoiceProc(h2)
+            voiceShared.procs.bridge = rec2
+            voiceShared.state.bridge.pid = rec2.pid
+            voiceLog('已拉起语音桥 pid=' + rec2.pid + '（端口 ' + bridgePort + '）')
+            // D4：就绪 = **端口在听 ∧ 我们自己拉起的那个桥还活着**。
+            // 旧代码只看端口，于是"自己拉起的桥绑定失败立刻退出、端口恰好被别的东西占着"也会报 ready，
+            // 用户以为语音好了，实际上插件手里是个死句柄；卸载时还会去 terminate 一个死 pid。
+            const okBr = await waitUntil(
+              async () => voiceProcAlive(rec2) && (await portOpen(bridgePort, 800)),
+              60000, 1500,
+              async () => rec2.exited === true)
+            if (!okBr) {
+              const portNow = await portOpen(bridgePort, 800)
+              const why = rec2.exited
+                ? ('桥进程已退出（exit=' + (rec2.exitCode === null ? '?' : rec2.exitCode) + '）' + (portNow ? '，端口 ' + bridgePort + ' 仍被其它进程占用，但那不是插件拉起的（插件不接管、也不会去杀）' : ''))
+                : '桥 60s 内未就绪'
+              setVoicePhase('failed', why)
+              voiceLog('失败：' + why)
+              await dumpProcOutput(rec2, 'bridge')     // D10
+              if (rec2.exited) { voiceShared.procs.bridge = null; voiceShared.state.bridge.pid = 0 }
+              return voiceShared.state
+            }
+          }
+          voiceShared.state.bridge.up = true
+          voiceShared.state.owner = 'plugin'
+          setVoicePhase('ready', '由插件拉起并托管，DSH 退出时会一并停止')
+          voiceLog('语音链路就绪：桥 ' + bridgePort + ' → api ' + apiPort)
+          return voiceShared.state
+        } catch (e) {
+          const msg = e && e.message ? e.message : String(e)
+          setVoicePhase('failed', msg.slice(0, 300))
+          voiceLog('自启动异常：' + msg)
+          return voiceShared.state
+        }
+      })()
+      // D2：赋值 + 清理都在**外层**，任何同步早退路径（disabled/root 空）都不会再毒化这个标志。
+      voiceShared.starting = run
+      try {
+        return await run
+      } finally {
+        if (voiceShared.starting === run) voiceShared.starting = null
+      }
+    }
+
+    // 只停**本插件拉起的**进程（句柄在手），绝不按端口杀。
+    // 2026-09-13 实测补强（审查报告之外的新缺陷）：旧写法是
+    //     const h = voiceShared.procs[key]; voiceShared.procs[key] = null; try { h.terminate(); stopped.push(key) } catch {}
+    // —— 若 terminate() 抛错（句柄已失效/平台 API 异常），key 不进 stopped，**句柄却已经被清空**：
+    // 结果是 `?action=stop` 回一句"没有本插件拉起的服务可停"、句柄丢失、进程与端口全活着，
+    // 之后连重试都做不到（voiceShared.procs 已空）。实测：ready 状态下 stop，api/bridge 两个 python 进程
+    // 完全没被杀，而状态显示 idle/owner=none。所以这里必须做到三点：
+    //   ① 句柄**成功退出后**才从 voiceShared.procs 摘除（失败保留，可重试）；
+    //   ② terminate 抛错时降级用 terminateForHostExit()（Windows 上是 taskkill /T /F 强杀树）；
+    //   ③ 只发信号不算"停掉了"—— 等它真的退出再报 stopped，否则如实报"未能停止"。
+    async function stopVoiceServices(reason) {
+      const stopped = []
+      const survivors = []
+      for (const key of ['bridge', 'api']) {
+        const rec = voiceShared.procs[key]
+        if (!rec) continue
+        try {
+          rec.handle.terminate()
+        } catch (e) {
+          const m = e && e.message ? e.message : String(e)
+          voiceLog('停止 ' + key + '（pid=' + rec.pid + '）时 terminate 抛错：' + m + '；降级用 terminateForHostExit 强杀')
+          try { rec.handle.terminateForHostExit() } catch (e2) { voiceLog('停止 ' + key + ' 强杀也失败：' + (e2 && e2.message ? e2.message : String(e2))) }
+        }
+        let gone = false
+        try {
+          gone = (await Promise.race([
+            rec.handle.waitForExit().then(() => true),
+            new Promise((r) => setTimeout(() => r(false), 6000)),
+          ])) === true
+        } catch (e3) { gone = false }
+        if (gone) { voiceShared.procs[key] = null; stopped.push(key) }
+        else survivors.push(key + '(pid=' + rec.pid + ')')
+      }
+      voiceShared.state.api.pid = voiceShared.procs.api !== null ? voiceShared.procs.api.pid : 0
+      voiceShared.state.bridge.pid = voiceShared.procs.bridge !== null ? voiceShared.procs.bridge.pid : 0
+      voiceShared.state.api.up = voiceShared.procs.api !== null      // 幸存者的端口大概率还在听，不假装已释放
+      voiceShared.state.bridge.up = voiceShared.procs.bridge !== null
+      voiceShared.state.owner = survivors.length > 0 ? 'plugin' : 'none'
+      if (stopped.length > 0) {
+        setVoicePhase('stopped', '已停止插件拉起的 ' + stopped.join(' + ') + '（' + reason + '）'
+          + (survivors.length > 0 ? '；★ ' + survivors.join(' + ') + ' 未能停掉' : ''))
+        voiceLog('已停止 ' + stopped.join(' + ') + ' —— ' + reason)
+      } else if (survivors.length > 0) {
+        setVoicePhase('failed', '★ 未能停止插件拉起的 ' + survivors.join(' + ') + '（' + reason + '）')
+        voiceLog('★ 未能停止：' + survivors.join(' + ') + ' —— ' + reason)
+      } else {
+        setVoicePhase('idle', '没有本插件拉起的服务可停（' + reason + '）')
+      }
+      return voiceShared.state
+    }
+
+    function scheduleVoiceStop(reason) {
+      if (voiceShared.stopTimer !== null) return
+      const owned = voiceProcAlive(voiceShared.procs.api) || voiceProcAlive(voiceShared.procs.bridge)
+      if (!owned) return
+      const gen = voiceShared.epoch          // 记下"谁排的队"
+      voiceShared.stopEpoch = gen
+      voiceLog('插件卸载：' + Math.round(voiceShared.graceMs / 1000) + 's 后停止插件拉起的语音服务（热重载会取消）')
+      voiceShared.stopTimer = setTimeout(() => {
+        voiceShared.stopTimer = null
+        // D9：到点时若已经有更新一代实例接管（热重载），就**放弃**停止 —— 否则旧实例会把
+        // 新实例刚托管的服务杀掉，而新实例因为"看到端口在听"判成 external 不再拉起，
+        // 结果是"服务被杀但状态显示 external"的死局，只能重启 DSH。
+        if (voiceShared.epoch !== gen || voiceShared.stopEpoch !== gen) {
+          if (voiceShared.logSink) voiceShared.logSink('延时停止到点：已有新实例接管（epoch ' + gen + '→' + voiceShared.epoch + '），放弃停止')
+          return
+        }
+        void stopVoiceServices(reason)
+      }, voiceShared.graceMs)
+      // 这个 8s 定时器不该把 DSH 的退出流程多拖 8s（审查 D9 附带一问）：unref 后它不再
+      // 阻止事件循环排空；真到退出时子进程由 subprocess 服务统一回收，不依赖这个定时器。
+      if (voiceShared.stopTimer !== null && typeof voiceShared.stopTimer.unref === 'function') voiceShared.stopTimer.unref()
+    }
+
+    function cancelScheduledVoiceStop() {
+      if (voiceShared.stopTimer === null) return
+      clearTimeout(voiceShared.stopTimer)
+      voiceShared.stopTimer = null
+      voiceLog('插件重载：已取消待执行的停止动作，语音服务保持运行')
     }
 
     function teardownTtsWorker() {
@@ -3160,6 +3656,89 @@ export function apply(ctx) {
       },
     }))
 
+    // 语音服务状态 / 启动 / 停止（面板与 agent 都可以直接调）
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/sakiko/voice',
+      handler: async (req, res) => {
+        noteHost(req)
+        const url = new URL(req.url || '/', 'http://127.0.0.1')
+        const action = url.searchParams.get('action') || ''
+        try {
+          if (action === 'start') {
+            void startVoiceServices('http')
+            // D2 的可见症状之一：同步早退路径（voiceRoot 空 / voiceAutoStart=false）会在**同一个
+            // tick** 内就跑完，但 `void` 不 await ⇒ 响应里 starting 永远是 true。等一个 setImmediate
+            // 让已结算的启动收尾（清 voiceShared.starting）后再拼响应；真正在跑的启动仍然是 starting:true。
+            await new Promise((r) => setImmediate(r))
+          }
+          else if (action === 'stop') await stopVoiceServices('http 请求')
+          else if (action === 'probe') {
+            // D6（审查 2026-09-13 次要）：probe 必须给出**自洽**的 phase/owner。
+            // 旧写法只刷新 api.up/bridge.up，phase/owner 原样留着 ⇒ 会出现
+            // `phase:"idle"` 与 `api.up:true, bridge.up:true` 同时出现这种自相矛盾的响应。
+            const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
+            const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+            voiceShared.state.api.port = apiPort
+            voiceShared.state.bridge.port = bridgePort
+            // 一律 TCP connect 判"在听"（与自启动同一判据，见 D3）
+            const apiUp = await portOpen(apiPort, 1500)
+            const brUp = await portOpen(bridgePort, 1500)
+            voiceShared.state.api.up = apiUp
+            voiceShared.state.bridge.up = brUp
+            const mgA = voiceProcAlive(voiceShared.procs.api)
+            const mgB = voiceProcAlive(voiceShared.procs.bridge)
+            // 启动进行中（例如 api 正在加载模型、端口还没 bind）时探到"端口没在听"并不代表失败，
+            // 不能把 starting 覆写成 failed —— 那又是一次"状态自相矛盾"（D6 的同源问题）。
+            if (voiceShared.starting !== null) {
+              if (mgA || mgB) { voiceShared.state.owner = 'plugin'; voiceShared.state.api.pid = mgA ? voiceShared.procs.api.pid : 0; voiceShared.state.bridge.pid = mgB ? voiceShared.procs.bridge.pid : 0 }
+              setVoicePhase('starting', 'probe：自启动/启动请求仍在进行中（api:' + apiUp + ' bridge:' + brUp + '）')
+            } else if (mgA || mgB) {
+              voiceShared.state.owner = 'plugin'
+              voiceShared.state.api.pid = mgA ? voiceShared.procs.api.pid : 0
+              voiceShared.state.bridge.pid = mgB ? voiceShared.procs.bridge.pid : 0
+              if (apiUp && brUp) setVoicePhase('ready', 'probe：插件托管的服务都在听')
+              else setVoicePhase('failed', 'probe：插件托管的进程还在，但端口未在听（api:' + apiUp + ' bridge:' + brUp + '）')
+            } else if (apiUp || brUp) {
+              voiceShared.state.owner = 'external'
+              voiceShared.state.api.pid = 0
+              voiceShared.state.bridge.pid = 0
+              if (apiUp && brUp) setVoicePhase('external', 'probe：外部服务在听（插件不接管也不会停它）')
+              else if (brUp) setVoicePhase('external', 'probe：外部桥在听，但 api :' + apiPort + ' 未就绪')
+              else setVoicePhase('external', 'probe：api :' + apiPort + ' 在听，但桥 :' + bridgePort + ' 未就绪')
+            } else {
+              voiceShared.state.owner = 'none'
+              voiceShared.state.api.pid = 0
+              voiceShared.state.bridge.pid = 0
+              setVoicePhase('idle', 'probe：未发现任何在听的语音服务（api :' + apiPort + ' / 桥 :' + bridgePort + '）')
+            }
+          }
+          const out = {
+            ok: true,
+            phase: voiceShared.state.phase,
+            detail: voiceShared.state.detail,
+            at: voiceShared.state.at,
+            owner: voiceShared.state.owner,
+            managed: voiceShared.procs.api !== null || voiceShared.procs.bridge !== null,
+            starting: voiceShared.starting !== null,
+            stopPending: voiceShared.stopTimer !== null,
+            epoch: voiceShared.epoch,                 // 供排查"热重载后是谁在管"（D9）
+            api: voiceShared.state.api,
+            bridge: voiceShared.state.bridge,
+            root: String(config.voiceRoot || ''),
+            autoStart: config.voiceAutoStart === true,
+            log: voiceShared.state.log.slice(-25),
+          }
+          const body = JSON.stringify(out, null, 2)
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+          res.end(body)
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }))
+        }
+      },
+    }))
+
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/sakiko/diag',
@@ -3167,6 +3746,14 @@ export function apply(ctx) {
         noteHost(req)
         const out = { ok: false }
         try {
+          out.voice = {
+            phase: voiceShared.state.phase,
+            detail: voiceShared.state.detail,
+            owner: voiceShared.state.owner,
+            managed: voiceShared.procs.api !== null || voiceShared.procs.bridge !== null,
+            api: voiceShared.state.api,
+            bridge: voiceShared.state.bridge,
+          }
           out.spAvailable = sandboxPolicy !== undefined
           if (sandboxPolicy !== undefined) {
             try { out.defaultMode = String(sandboxPolicy.defaultMode) } catch (e) { out.defaultModeErr = String(e) }
@@ -3646,6 +4233,23 @@ export function apply(ctx) {
       return () => { teardownTtsWorker() }
     })
 
+    // 语音服务：卸载时**延时**停止（热重载会在下面的「启动」段里取消这个定时器）。
+    // 注意：拉起服务**不能**放在这里 —— 本 effect 在 apply() 里同步执行，而此时
+    // ensureDataDirs().then(...) 里的 loadConfig() 还没跑完，config 仍是 DEFAULT_CONFIG，
+    // voiceRoot 会是空串而被误判成「未配置」直接跳过（2026-09-13 实测踩中）。故放在启动段。
+    ctx.effect(() => {
+      return () => {
+        // D9：只有**最新一代**实例才有权排这个队。热重载时新实例往往先 apply（voiceShared.epoch 已 +1），
+        // 旧实例的 disposer 随后才执行 —— 此时绝不能排延时停止，否则 8s 后旧定时器会把新实例
+        // 刚托管的服务杀掉（状态还会显示成 external，用户以为一切正常）。
+        if (voiceShared.epoch !== myEpoch) {
+          if (voiceShared.logSink) voiceShared.logSink('插件卸载：已有更新的实例接管（epoch ' + myEpoch + '→' + voiceShared.epoch + '），本实例不排延时停止')
+          return
+        }
+        scheduleVoiceStop('插件卸载')
+      }
+    })
+
     // ---------------- 人格注入 ----------------
     if (systemPrompt !== undefined) {
       ctx.effect(() => systemPrompt.section({
@@ -3658,7 +4262,14 @@ export function apply(ctx) {
     // ---------------- 启动 ----------------
     ensureDataDirs().then(() => {
       loadTimelineRecent().catch((e) => console.error('[sakiko] loadTimelineRecent:', e))
-      loadConfig().catch((e) => console.error('[sakiko] loadConfig:', e))
+      loadConfig()
+        .catch((e) => console.error('[sakiko] loadConfig:', e))
+        .then(() => {
+          // 必须在 loadConfig 之后：先取消上次卸载排队的停止动作（热重载场景），再按需拉起。
+          // 不 await：启动最慢要一两分钟（加载模型），不能阻塞插件加载与 DSH 启动。
+          cancelScheduledVoiceStop()
+          void startVoiceServices('DSH 启动 / 插件加载')
+        })
       loadNarrator().catch((e) => console.error('[sakiko] loadNarrator:', e))
       loadPersona().catch((e) => console.error('[sakiko] loadPersona:', e))
       loadMemory().then(() => {
