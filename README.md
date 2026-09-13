@@ -38,21 +38,65 @@ DeepSeek Harness：iPhone 风格的浮窗面板 + Live2D 立绘 + 日语语音 +
 
 ## 二、安装
 
-```bash
-dsh plugin --profile web add github:hg4/sakiko-for-dsh
+### 方式一（推荐，已实测）：Release tarball
+
+从 [Releases](https://github.com/hg4/sakiko-for-dsh/releases) 下载 `sakiko-for-dsh-<版本>.tgz`，然后：
+
+```powershell
+dsh plugin --profile web add file:<下载目录>\sakiko-for-dsh-2.0.0.tgz
 ```
 
-（也可下载 Release 里的 `sakiko-for-dsh-<版本>.tgz` 后 `dsh plugin --profile web add file:<路径>`。）
+要换版本：**先 `remove` 再 `add`**（pnpm 不会重装同一路径的 `file:` 依赖）：
+
+```powershell
+dsh plugin --profile web remove sakiko-for-dsh
+dsh plugin --profile web add file:<新路径>\sakiko-for-dsh-<新版本>.tgz
+```
 
 **装完即生效，不需要手工改任何配置文件、也不需要跑任何 .bat / .ps1。** 本包在
 `package.json` 里声明了 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`，
-安装时它会被登记为 profile 的一个 bundle 层（`dsh.profile.bundles`），
-以后每次 `dsh web` 启动都会自动加载本插件的面板与后端。
+且这个声明**就在仓库里、随包一起分发**；安装时它会被登记为 profile 的一个 bundle 层
+（`dsh.profile.bundles`），以后每次 `dsh web` 启动都会自动加载本插件的面板与后端。
+
+装完可以这样自查（应当能看到 `sakiko-for-dsh`）：
+
+```powershell
+# 1) bundle 层登记
+(Get-Content "$env:USERPROFILE\.dsh\profiles\web\package.json" -Raw | ConvertFrom-Json).dsh.profile.bundles
+# 2) 插件文件在
+Test-Path "$env:USERPROFILE\.dsh\profiles\web\node_modules\sakiko-for-dsh\cordis.patch.yml"
+# 3) 起一个实例后查状态（phase=ready / owner=plugin 才算链路通了）
+curl.exe -sS http://127.0.0.1:3080/sakiko/voice
+```
+
+### 方式二：`github:` 直装 —— **当前请勿使用（未验证可用）**
+
+```powershell
+# 不要用这条来安装，除非下面两件事都已确认
+dsh plugin --profile web add github:hg4/sakiko-for-dsh
+```
+
+**为什么不能用**（2026-09-13 实测，`github:hg4/sakiko-for-dsh`）：
+
+- 命令会 exit 0、看起来"装成功"，但 DSH 打警告
+  `sakiko-for-dsh declares no dsh.bundle — installed as a plain dependency, not a profile layer`，
+  `dsh.profile.bundles` 里**没有**本插件 ⇒ **插件永远不会被加载**（面板不出现、`/sakiko/*` 全 404）。
+  根因是本仓库曾把 bundle 声明放在打包脚本里注入，GitHub 上的源码版因此缺声明；
+  该声明**现已搬进仓库**（`cordis.patch.yml` + `package.json`），但**在你读到这段文字时，
+  远端是否已经包含这次修复需要你自己确认**（见下一条）。
+- pnpm 对 git 依赖有 store 缓存：实测同一条命令拿到的是**旧副本**
+  （`Progress: resolved 1, reused 1, downloaded 0`，装到的 `host.mjs` 246086 字节，
+  而当时仓库 HEAD 是 241792 字节）。**即使远端已修好，缓存也可能继续给你旧版**；
+  升级后请务必用上面的「1) bundle 层登记」自查一次。
+- 另外 git-hosted 依赖的 `prepare` 构建脚本默认被 pnpm 拦，DSH 会提示你把 pnpm 打印的键名写进
+  `%DSH_HOME%\profiles\<profile>\pnpm-workspace.yaml` 的 `allowBuilds:` 列表；
+  **本包没有 `prepare`/构建脚本，正常情况下不会触发这一条**，而该键字符串本身在本机未复现过。
 
 > 若你之前用上游 `install.ps1` 装过、或手工在 profile 的 `cordis.patch.yml` 里写过
 > `id: amadeus` / `id: sakiko`，请把**手工那份删掉**，否则同一个 id 会出现两次。
 
 重启 DSH 后，Web 界面右侧就会出现祥子的浮窗面板。
+
 
 ## 三、语音：先能出声，再谈像不像
 
@@ -92,6 +136,9 @@ dsh plugin --profile web add github:hg4/sakiko-for-dsh
   不会留下后台孤儿（这正是「关了 DSH，语音服务还在后台跑」的根治办法）。
 - **热重载不误杀**：插件卸载时**延时 8 秒**才停服务，配置热重载会取消这个动作 ——
   避免改一次配置就把要 30~60 秒加载的模型杀掉重启。
+  （2026-09-13 端到端实测：改 profile 的 `cordis.patch.yml` 触发重载后 `epoch` 1→2、
+  api/桥 PID 与端口**全不变**，日志出现「插件重载：已取消待执行的停止动作」，
+  且新一代实例仍认得上一代拉起的服务、`?action=stop` 能真把它们停掉。）
 
 状态查询与手动控制（面板所在端口，默认 3080）：
 

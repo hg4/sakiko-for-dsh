@@ -1091,6 +1091,36 @@ export function apply(ctx) {
       return rec !== null && rec !== undefined && rec.exited !== true
     }
 
+    // S1（复审 2026-09-13 次要）：owner / managed / pid 必须与**手里的句柄事实**对齐。
+    // 旧实现只在成功结尾写 `owner = 'plugin'`（中途失败就保留旧值），于是实测出现自相矛盾的
+    //     phase:"failed", owner:"external", managed:true, api.pid:7844
+    // —— 7844 正是插件自己拉起、仍在听 9882 的 api：面板/agent 读到"这是外部的、插件不管也不会停"，
+    // 实际上 DSH 退出时插件会去杀它。
+    // 本函数**纯同步**（不探端口，避免把"正在加载模型"误判成失败）：只依据 procs 里的句柄重算。
+    // owned（有活句柄）⇒ owner='plugin'；一个句柄都不剩且曾自称 plugin ⇒ 按端口是否在听降级为
+    // external/none，绝不留下"自称托管却没人管"或反过来的状态。
+    function syncVoiceOwnership() {
+      for (const key of ['api', 'bridge']) {
+        const rec = voiceShared.procs[key]
+        if (rec !== null && rec !== undefined && rec.exited === true) {
+          voiceShared.procs[key] = null
+          voiceShared.state[key].pid = 0
+          voiceShared.state[key].up = false
+        }
+      }
+      const ownApi = voiceShared.procs.api
+      const ownBr = voiceShared.procs.bridge
+      const owned = ownApi !== null || ownBr !== null
+      voiceShared.state.api.pid = ownApi !== null ? ownApi.pid : 0
+      voiceShared.state.bridge.pid = ownBr !== null ? ownBr.pid : 0
+      voiceShared.state.managed = owned
+      if (owned) voiceShared.state.owner = 'plugin'
+      else if (voiceShared.state.owner === 'plugin') {
+        voiceShared.state.owner = (voiceShared.state.api.up || voiceShared.state.bridge.up) ? 'external' : 'none'
+      }
+      return voiceShared.state
+    }
+
     // D5（审查 2026-09-13 重要）：本插件托管的 api+bridge 都还活着 ⇒ **同步**返回 ready/plugin。
     // 为什么必须同步：`?action=start` 走的是 `void startVoiceServices(...)`（不 await，否则冷启动
     // 会阻塞 HTTP 请求 3 分钟）。只要这里先 await，响应里就会是"starting"；而旧实现更糟 ——
@@ -1136,9 +1166,9 @@ export function apply(ctx) {
           const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
           voiceShared.state.api.port = apiPort
           voiceShared.state.bridge.port = bridgePort
-          if (config.voiceAutoStart !== true) { setVoicePhase('disabled', 'voiceAutoStart=false'); return voiceShared.state }
+          if (config.voiceAutoStart !== true) { setVoicePhase('disabled', 'voiceAutoStart=false'); return syncVoiceOwnership() }
           const P = voicePaths()
-          if (!P.root) { setVoicePhase('disabled', 'voiceRoot 未配置（留空=不自动启动）'); return voiceShared.state }
+          if (!P.root) { setVoicePhase('disabled', 'voiceRoot 未配置（留空=不自动启动）'); return syncVoiceOwnership() }
 
           // ① 先清掉**已经退出**的托管句柄：不清的话它会继续让 managed=true、让状态假装还有服务，
           //    也会挡住后面的重新拉起（审查 D4 的同源问题）。
@@ -1176,6 +1206,8 @@ export function apply(ctx) {
 
           setVoicePhase('starting', '触发: ' + trigger)
           voiceLog('开始自启动（触发=' + trigger + '，root=' + P.root + '）')
+          // S1：进入 starting 时就把 owner 与事实对齐（旧值不许留在面板上）。
+          syncVoiceOwnership()
 
           // ③ api
           if (await portOpen(apiPort, 1500)) {
@@ -1185,7 +1217,7 @@ export function apply(ctx) {
             if (!(await pathExists(P.api))) {
               setVoicePhase('failed', '找不到 ' + P.api + '（voiceRoot 指对了吗？）')
               voiceLog('失败：找不到 api.py')
-              return voiceShared.state
+              return syncVoiceOwnership()
             }
             const py = await voicePython(P)
             const argv = [py, '-u', 'api.py', '-a', '127.0.0.1', '-p', String(apiPort),
@@ -1217,7 +1249,10 @@ export function apply(ctx) {
               voiceLog('失败：' + why)
               await dumpProcOutput(rec, 'api')        // D10：把子进程 stderr/stdout 尾部落到日志
               if (rec.exited) { voiceShared.procs.api = null; voiceShared.state.api.pid = 0 }
-              return voiceShared.state
+              // S1：api 失败但**桥/api 里还有活句柄**时（例如 cfg 改了路径后 api 起不来、
+              // 上一代 api 仍在跑），owner 必须如实是 plugin —— 否则 `?action=stop` 的语义
+              // 与状态展示会互相打架。
+              return syncVoiceOwnership()
             }
             voiceLog('api 就绪')
           }
@@ -1237,7 +1272,7 @@ export function apply(ctx) {
           if (!(await pathExists(P.bridge))) {
             setVoicePhase('failed', '找不到 ' + P.bridge)
             voiceLog('失败：找不到 bridge_tts.py')
-            return voiceShared.state
+            return syncVoiceOwnership()
           }
           const py2 = await voicePython(P)
           if (await pathExists(P.bridgeCfg)) voiceLog('桥将读取 ' + P.bridgeCfg)
@@ -1277,11 +1312,15 @@ export function apply(ctx) {
               voiceLog('失败：' + why)
               await dumpProcOutput(rec2, 'bridge')     // D10
               if (rec2.exited) { voiceShared.procs.bridge = null; voiceShared.state.bridge.pid = 0 }
-              return voiceShared.state
+              // S1：桥失败时 api 若还活着（且是我们拉起的），owner 应为 plugin —— 复审实测这一格
+              // 曾留下 owner:"external" + managed:true + api.pid=<插件自己的 pid> 的自相矛盾组合。
+              return syncVoiceOwnership()
             }
           }
           voiceShared.state.bridge.up = true
-          voiceShared.state.owner = 'plugin'
+          // S1：owner 交给**句柄事实**决定，不再无条件写 'plugin'（例：api 本来就是外部的、
+          // 只由插件拉起桥时，写 'plugin' 会让"谁会随 DSH 一起收摊"对不上）。
+          syncVoiceOwnership()
           setVoicePhase('ready', '由插件拉起并托管，DSH 退出时会一并停止')
           voiceLog('语音链路就绪：桥 ' + bridgePort + ' → api ' + apiPort)
           return voiceShared.state
@@ -1289,7 +1328,7 @@ export function apply(ctx) {
           const msg = e && e.message ? e.message : String(e)
           setVoicePhase('failed', msg.slice(0, 300))
           voiceLog('自启动异常：' + msg)
-          return voiceShared.state
+          return syncVoiceOwnership()
         }
       })()
       // D2：赋值 + 清理都在**外层**，任何同步早退路径（disabled/root 空）都不会再毒化这个标志。
@@ -3664,6 +3703,7 @@ export function apply(ctx) {
         noteHost(req)
         const url = new URL(req.url || '/', 'http://127.0.0.1')
         const action = url.searchParams.get('action') || ''
+        let startPending = false    // S2：即时响应是否代表"启动仍在进行中"
         try {
           if (action === 'start') {
             void startVoiceServices('http')
@@ -3671,6 +3711,12 @@ export function apply(ctx) {
             // tick** 内就跑完，但 `void` 不 await ⇒ 响应里 starting 永远是 true。等一个 setImmediate
             // 让已结算的启动收尾（清 voiceShared.starting）后再拼响应；真正在跑的启动仍然是 starting:true。
             await new Promise((r) => setImmediate(r))
+            // S2（复审 2026-09-13 次要）：即时响应里的 phase 曾是**上一次**的陈旧值 —— 实测
+            // C 场景回 `phase:"stopped" starting:true`、D 场景回 `phase:"external" starting:true`，
+            // 面板/agent 直接采信就会读到错状态。setImmediate 之后 starting 仍非 null ⇒ 这次启动
+            // 是真的还在跑，此刻唯一自洽的 phase 就是 `starting`（详见下面 out.phase 的注释）。
+            startPending = voiceShared.starting !== null
+            if (startPending) syncVoiceOwnership()   // 顺带把 owner/pid 与活句柄对齐，别回旧 pid
           }
           else if (action === 'stop') await stopVoiceServices('http 请求')
           else if (action === 'probe') {
@@ -3715,12 +3761,16 @@ export function apply(ctx) {
           }
           const out = {
             ok: true,
-            phase: voiceShared.state.phase,
+            // S2：启动仍在进行中时**只改响应、不动共享状态** —— 共享状态归"真正在跑的那次启动"，
+            // 真正在跑的那次启动"的领地，这里若去写它，会把对方刚收尾写好的 phase 覆盖成 starting
+            // 并永远留在面板上。响应里如实写 starting，等下一次查询拿稳定态。
+            phase: startPending ? 'starting' : voiceShared.state.phase,
             detail: voiceShared.state.detail,
             at: voiceShared.state.at,
             owner: voiceShared.state.owner,
             managed: voiceShared.procs.api !== null || voiceShared.procs.bridge !== null,
             starting: voiceShared.starting !== null,
+            pending: startPending,      // 即时响应是"启动进行中"的占位（几秒后再查才是稳定态）
             stopPending: voiceShared.stopTimer !== null,
             epoch: voiceShared.epoch,                 // 供排查"热重载后是谁在管"（D9）
             api: voiceShared.state.api,
