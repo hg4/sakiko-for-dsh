@@ -1,4 +1,4 @@
-"""Amadeus 常驻 Edge-TTS 合成 worker（降低逐句合成的延迟）。
+"""Sakiko 常驻 Edge-TTS 合成 worker（降低逐句合成的延迟）。
 
 每次逐句 `python tts_emote.py ...` 都要重新启动 Python 并导入 edge-tts（约 0.5~1s）。
 本 worker 常驻一个进程，把 edge-tts 导入好、事件循环活起来，后续每句只需一次 WS 合成。
@@ -75,7 +75,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(add_help=False)
-    ap.add_argument('--root', default=os.path.expanduser('~/.dsh/amadeus/tmp'))
+    ap.add_argument('--root', default=os.path.expanduser('~/.dsh/sakiko/tmp'))
     ap.add_argument('--port', type=int, default=0)
     args = ap.parse_args()
     os.makedirs(args.root, exist_ok=True)

@@ -1,7 +1,7 @@
 {
   "models": [
     {
-      "url": "/amadeus/assets/live2d/sakiko/model.json",
+      "url": "/sakiko/assets/live2d/sakiko/model.json",
       "format": "cubism2",
       "scale": 1,
       "layout": {

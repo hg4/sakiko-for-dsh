@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({ id: "amadeus-for-dsh", factory: (require) => { var module = { exports: {} }; var exports = module.exports;
+window.__ModuleLoader__.load({ id: "sakiko-for-dsh", factory: (require) => { var module = { exports: {} }; var exports = module.exports;
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -42,7 +42,7 @@ function apply(ctx) {
   const layout = ctx.get("layout");
   const hostLocal = {
     call: async (m, args) => {
-      const res = await fetch("/amadeus/rpc?m=" + encodeURIComponent(m) + "&args=" + encodeURIComponent(JSON.stringify(args || {})), { cache: "no-store" });
+      const res = await fetch("/sakiko/rpc?m=" + encodeURIComponent(m) + "&args=" + encodeURIComponent(JSON.stringify(args || {})), { cache: "no-store" });
       return await res.json();
     }
   };
@@ -84,7 +84,7 @@ function apply(ctx) {
       try {
         themeLayer = theme.overrideTokens("sakiko-theme", SAKIKO_TOKENS);
       } catch (e) {
-        console.error("[amadeus] \u4E3B\u9898\u8986\u76D6\u5931\u8D25", e);
+        console.error("[sakiko] \u4E3B\u9898\u8986\u76D6\u5931\u8D25", e);
         themeLayer = null;
       }
     } else if (!on && themeLayer !== null) {
@@ -201,7 +201,7 @@ function apply(ctx) {
       }
       return next;
     } catch (e) {
-      console.error("[amadeus] setConfig failed", e);
+      console.error("[sakiko] setConfig failed", e);
       return null;
     }
   }
@@ -272,13 +272,13 @@ function apply(ctx) {
   }
   rpcReport("client apply start");
   let iframeEl = null;
-  let panelSrc = "/amadeus/panel.html";
+  let panelSrc = "/sakiko/panel.html";
   let panelSrcSet = false;
   let lastSentCfg = "";
   function notifyOpen() {
     if (!iframeEl || !iframeEl.contentWindow) return;
     try {
-      iframeEl.contentWindow.postMessage({ type: "amadeus/open" }, "*");
+      iframeEl.contentWindow.postMessage({ type: "sakiko/open" }, "*");
     } catch (e) {
     }
   }
@@ -289,7 +289,7 @@ function apply(ctx) {
     } catch (e) {
       q = "";
     }
-    return "/amadeus/panel.html" + (q ? "?cfg=" + q : "");
+    return "/sakiko/panel.html" + (q ? "?cfg=" + q : "");
   }
   function RootPoller() {
     import_react.default.useEffect(() => {
@@ -299,7 +299,8 @@ function apply(ctx) {
     }, []);
     return null;
   }
-  const FLOAT_KEY = "amadeus.float.v2";
+  const FLOAT_KEY = "sakiko.float.v2";
+  const FLOAT_KEY_LEGACY = "amadeus.float.v2";
   const FLOAT_DEF_W = 320;
   const FLOAT_DEF_H = 640;
   const FLOAT_MIN_W = 320;
@@ -329,6 +330,7 @@ function apply(ctx) {
     let raw = null;
     try {
       raw = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
+      if (!raw) raw = JSON.parse(localStorage.getItem(FLOAT_KEY_LEGACY) || "null");
     } catch (e) {
       raw = null;
     }
@@ -343,6 +345,7 @@ function apply(ctx) {
     }
     // P6 tail (5i): v1 legacy key amadeus.float (400x700 + old viewport pos) is ignored -
     // fresh default 320x640 anchored bottom-right 24 to current viewport; remove legacy key and persist v2 now.
+    // NOTE: the v2 key was renamed with the plugin (amadeus.float.v2 -> sakiko.float.v2); migrated above.
     try {
       localStorage.removeItem("amadeus.float");
     } catch (e) {
@@ -396,7 +399,7 @@ function apply(ctx) {
       lastSentCfg = s;
       if (iframeEl && iframeEl.contentWindow) {
         try {
-          iframeEl.contentWindow.postMessage({ type: "amadeus/config", value: config }, "*");
+          iframeEl.contentWindow.postMessage({ type: "sakiko/config", value: config }, "*");
         } catch (e) {
         }
       }
@@ -412,7 +415,7 @@ function apply(ctx) {
       }
       lastSentCfg = s;
       try {
-        own.current.contentWindow.postMessage({ type: "amadeus/config", value: cfg }, "*");
+        own.current.contentWindow.postMessage({ type: "sakiko/config", value: cfg }, "*");
       } catch (e) {
       }
     };
@@ -783,15 +786,15 @@ function apply(ctx) {
     () => import_react.default.createElement(SakikoColumn)
   ));
   slots.inject("sidebar.footer.action", () => slots.register(
-    { name: "sidebar.footer.action", id: "amadeus", order: 50, label: "SAKIKO" },
+    { name: "sidebar.footer.action", id: "sakiko", order: 50, label: "SAKIKO" },
     (props) => import_react.default.createElement(SidebarToggle, props)
   ));
   slots.inject("shell.overlay", () => slots.register(
-    { name: "shell.overlay", id: "amadeus", order: 60, label: "SAKIKO" },
+    { name: "shell.overlay", id: "sakiko", order: 60, label: "SAKIKO" },
     () => import_react.default.createElement(FloatHost)
   ));
   slots.inject("settings.section", () => slots.register(
-    { name: "settings.section", id: "amadeus", order: 90, label: "SAKIKO" },
+    { name: "settings.section", id: "sakiko", order: 90, label: "SAKIKO" },
     () => import_react.default.createElement(
       "div",
       null,

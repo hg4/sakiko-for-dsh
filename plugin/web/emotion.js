@@ -8,7 +8,7 @@
  *    因此表情体系直接走运行时 expression API（主路径）。
  *  - EXPR: 情绪 → Sakiko expression 名（供 setExpression/model.expression 用）
  *  - EXPR_TO_EMO: expression 名 → 情绪（供 gestureEmotion 回退解析）
- *  - FACE:   保留 Cubism4 amadeusV1 旧骨架的参数直驱表（本 C2 模型用不到，仅兼容）
+ *  - FACE:   保留上游 Amadeus（Cubism4）旧骨架的参数直驱表（本 C2 模型用不到，仅兼容）
  *  - C2_FACE: Cubism2 无 expression 文件/名未命中时的参数直驱兜底；
  *            参数 id 一律取 assets/live2d/sakiko/data/expressions/*.exp.json 中真实存在的
  *            （PARAM_EYE_R_SMILE/PARAM_BROW_R_FORM/PARAM_MOUTH_FORM_01 等，
@@ -16,7 +16,7 @@
  *             PARAM_EYE_SMILE 已删除，Sakiko 只有左右分键）。
  *  - GESTURE: 白祥系幅度整体上浮约 5~10%（微笑/害羞类调高），注释见下。
  * ============================================================ */
-window.AmadeusEmotion = (function () {
+window.SakikoEmotion = (function () {
   // 情绪 → Sakiko expression 名（model.json expressions 的 name 字段，勿改拼写）
   var EXPR = {
     happy: 'smile03',
@@ -62,7 +62,7 @@ window.AmadeusEmotion = (function () {
     '': 'neutral'
   }
 
-  // Cubism4 amadeusV1 旧骨架参数直驱（本 Sakiko C2 模型用不到，保留结构作兼容）。
+  // 上游 Amadeus（Cubism4）旧骨架参数直驱（本 Sakiko C2 模型用不到，保留结构作兼容）。
   var FACE = {
     happy:        { ParamEyeRSmile: 0.75, Param9: 0.45, ParamMouthForm: 0.45 },
     excited:      { ParamEyeRSmile: 0.85, Param9: 0.55, ParamMouthForm: 0.6 },

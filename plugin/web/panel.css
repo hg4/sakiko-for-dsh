@@ -303,7 +303,7 @@ body.float-fill #phone {
   object-fit: contain;
   z-index: 1;
 }
-#screen #amadeus-img {
+#screen #sakiko-img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -313,9 +313,9 @@ body.float-fill #phone {
   animation: amad-float 4.5s ease-in-out infinite;
 }
 /* 尊重 hidden 属性：img/placeholder 由 panel.js 用 hidden=false 显式点亮 */
-#screen #amadeus-img[hidden],
-#amadeus-placeholder[hidden] { display: none; }
-#amadeus-placeholder {
+#screen #sakiko-img[hidden],
+#sakiko-placeholder[hidden] { display: none; }
+#sakiko-placeholder {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -323,7 +323,7 @@ body.float-fill #phone {
   align-items: center;
   justify-content: center;
 }
-#amadeus-placeholder svg {
+#sakiko-placeholder svg {
   height: 96%;
   max-width: 100%;
   display: block;
@@ -618,7 +618,7 @@ body.float-fill #phone {
   gap: 6px;
 }
 .msg.user { align-self: flex-end; }
-.msg.amadeus { align-self: flex-start; }
+.msg.sakiko { align-self: flex-start; }
 .msg-avatar {
   width: 34px;
   height: 34px;
@@ -654,7 +654,7 @@ body.float-fill #phone {
   border-bottom-right-radius: 4px;
   box-shadow: 0 2px 10px var(--p-shadow-g);
 }
-.msg.amadeus .bubble {
+.msg.sakiko .bubble {
   background: var(--p-bubble-her-glass);
   color: var(--p-title);
   border: 1px solid var(--p-bubble-her-border);
@@ -681,7 +681,7 @@ body.float-fill #phone {
 }
 
 /* ---------- Task4：气泡重播按钮（祥子话语右下角小喇叭） ---------- */
-/* 落点：仅祥子气泡（.msg.amadeus .bubble / .msg.call）容器内右下；用户消息【不加】。
+/* 落点：仅祥子气泡（.msg.sakiko .bubble / .msg.call）容器内右下；用户消息【不加】。
    交互：hover 显示（桌面）；触摸(hover:none)常显半透明；无 jp 文本 → 灰显禁用。 */
 .msg .bubble,
 .msg.call { position: relative; }

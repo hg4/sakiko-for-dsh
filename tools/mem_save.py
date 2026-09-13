@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amadeus 记忆落盘兜底：从本机 /amadeus/memory 拉取 JSON 并写入磁盘。
+Sakiko 记忆落盘兜底：从本机 /sakiko/memory 拉取 JSON 并写入磁盘。
 用法: python tools/mem_save.py <port> <outfile>
 （fs 服务的沙箱可能拦截写入；python 子进程写盘已验证可用。）
 """
@@ -12,8 +12,8 @@ import urllib.request
 
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else '3080'
-    out = sys.argv[2] if len(sys.argv) > 2 else 'memory/amadeus-memory.json'
-    url = 'http://127.0.0.1:' + port + '/amadeus/memory'
+    out = sys.argv[2] if len(sys.argv) > 2 else 'memory/sakiko-memory.json'
+    url = 'http://127.0.0.1:' + port + '/sakiko/memory'
     with urllib.request.urlopen(url, timeout=10) as r:
         data = json.loads(r.read().decode('utf-8'))
     payload = {

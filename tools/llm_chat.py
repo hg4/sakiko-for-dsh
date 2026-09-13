@@ -1,4 +1,4 @@
-"""Amadeus 独立 AI API 调用器（OpenAI 兼容 /chat/completions，纯标准库）。
+"""Sakiko 独立 AI API 调用器（OpenAI 兼容 /chat/completions，纯标准库）。
 
 用法: python llm_chat.py <request.json> <result.json>
 request.json: {baseUrl, apiKey, model, system, messages:[{role,content}], maxTokens, temperature}
@@ -69,7 +69,7 @@ def main():
     headers = {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + (req.get('apiKey') or ''),
-        'User-Agent': 'Amadeus-DSH/1.0',
+        'User-Agent': 'Sakiko-DSH/1.0',
     }
     candidates = build_candidates(req.get('baseUrl'))
     last_err = None

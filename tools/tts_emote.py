@@ -1,4 +1,4 @@
-"""Amadeus 情感 TTS 合成器（edge-tts + SSML 风格注入 + 词级时间戳）。
+"""Sakiko 情感 TTS 合成器（edge-tts + SSML 风格注入 + 词级时间戳）。
 
 用法: python tts_emote.py <text> <voice> <emotion> <out.mp3> [base_rate] [base_pitch] [intensity]
 emotion: happy | excited | elated | sad | angry | furious | question | soft | neutral

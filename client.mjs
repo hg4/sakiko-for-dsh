@@ -14,7 +14,7 @@ export function apply(ctx) {
     const layout = ctx.get('layout')    // ---------------- 静态版桥接（host → fetch；styles → DOM） ----------------
     const hostLocal = {
       call: async (m, args) => {
-        const res = await fetch('/amadeus/rpc?m=' + encodeURIComponent(m) + '&args=' + encodeURIComponent(JSON.stringify(args || {})), { cache: 'no-store' })
+        const res = await fetch('/sakiko/rpc?m=' + encodeURIComponent(m) + '&args=' + encodeURIComponent(JSON.stringify(args || {})), { cache: 'no-store' })
         return await res.json()
       },
     }
@@ -89,7 +89,7 @@ export function apply(ctx) {
         try {
           themeLayer = theme.overrideTokens('sakiko-theme', SAKIKO_TOKENS)
         } catch (e) {
-          console.error('[amadeus] 主题覆盖失败', e)
+          console.error('[sakiko] 主题覆盖失败', e)
           themeLayer = null
         }
       } else if (!on && themeLayer !== null) {
@@ -205,7 +205,7 @@ export function apply(ctx) {
         }
         return next
       } catch (e) {
-        console.error('[amadeus] setConfig failed', e)
+        console.error('[sakiko] setConfig failed', e)
         return null
       }
     }
@@ -262,19 +262,19 @@ export function apply(ctx) {
 
     // iframe 引用与初始 src（模块级单例）
     let iframeEl = null
-    let panelSrc = '/amadeus/panel.html'
+    let panelSrc = '/sakiko/panel.html'
     let panelSrcSet = false
     let lastSentCfg = ''
 
     function notifyOpen() {
       if (!iframeEl || !iframeEl.contentWindow) return
-      try { iframeEl.contentWindow.postMessage({ type: 'amadeus/open' }, '*') } catch (e) { /* iframe 未就绪 */ }
+      try { iframeEl.contentWindow.postMessage({ type: 'sakiko/open' }, '*') } catch (e) { /* iframe 未就绪 */ }
     }
 
     function iframeSrc(config) {
       let q = ''
       try { q = encURI(JSON.stringify(config || {})) } catch (e) { q = '' }
-      return '/amadeus/panel.html' + (q ? '?cfg=' + q : '')
+      return '/sakiko/panel.html' + (q ? '?cfg=' + q : '')
     }
 
     // ---------------- 轮询根组件（始终渲染 null） ----------------
@@ -288,7 +288,9 @@ export function apply(ctx) {
     }
 
     // ---------------- 浮窗壳（FloatShell）几何 / localStorage 记忆 ----------------
-    const FLOAT_KEY = 'amadeus.float.v2'
+    const FLOAT_KEY = 'sakiko.float.v2'
+    // 插件改名（amadeus→sakiko）前的老键：读一次迁移到新键，面板位置/大小不丢
+    const FLOAT_KEY_LEGACY = 'amadeus.float.v2'
     const FLOAT_DEF_W = 320
     const FLOAT_DEF_H = 640
     const FLOAT_MIN_W = 320
@@ -322,6 +324,8 @@ export function apply(ctx) {
       let raw = null
       try {
         raw = JSON.parse(localStorage.getItem(FLOAT_KEY) || 'null')
+        // 新键没有就回落到改名前的旧键（迁移；随后 saveFloatState 会写进新键）
+        if (!raw) raw = JSON.parse(localStorage.getItem(FLOAT_KEY_LEGACY) || 'null')
       } catch (e) {
         raw = null
       }
@@ -336,6 +340,7 @@ export function apply(ctx) {
       }
       // P6 收尾（§5i）：v1 旧键 amadeus.float（400×700 + 旧视口坐标）一律忽略——按全新默认
       // 320×640 + 右下 24 锚定当前视口处理；顺带删除旧键并立即落 v2，此后拖动/缩放记忆在 v2。
+      // 注：v2 键已随插件改名由 amadeus.float.v2 → sakiko.float.v2（上方已做一次性迁移）。
       try {
         localStorage.removeItem('amadeus.float')
       } catch (e) { /* 忽略 */ }
@@ -386,7 +391,7 @@ export function apply(ctx) {
         panelSrcSet = true
         panelSrc = iframeSrc(config)
       }
-      // config 变化 → postMessage amadeus/config（既有通道）
+      // config 变化 → postMessage sakiko/config（既有通道）
       React.useEffect(() => {
         if (!config) return
         let s = ''
@@ -394,7 +399,7 @@ export function apply(ctx) {
         if (s === lastSentCfg) return
         lastSentCfg = s
         if (iframeEl && iframeEl.contentWindow) {
-          try { iframeEl.contentWindow.postMessage({ type: 'amadeus/config', value: config }, '*') } catch (e) { /* iframe 未就绪 */ }
+          try { iframeEl.contentWindow.postMessage({ type: 'sakiko/config', value: config }, '*') } catch (e) { /* iframe 未就绪 */ }
         }
       }, [config])
       const onLoad = () => {
@@ -404,7 +409,7 @@ export function apply(ctx) {
         let s = ''
         try { s = JSON.stringify(cfg) } catch (e) { return }
         lastSentCfg = s
-        try { own.current.contentWindow.postMessage({ type: 'amadeus/config', value: cfg }, '*') } catch (e) { /* iframe 未就绪 */ }
+        try { own.current.contentWindow.postMessage({ type: 'sakiko/config', value: cfg }, '*') } catch (e) { /* iframe 未就绪 */ }
       }
       // Important-1：config 未到且 src 未 latch 前不渲染 iframe，避免默认 src 整帧重载造成 Live2D 双初始化/欢迎语双播
       if (!config && !panelSrcSet) return null
@@ -753,17 +758,17 @@ export function apply(ctx) {
     ))
 
     slots.inject('sidebar.footer.action', () => slots.register(
-      { name: 'sidebar.footer.action', id: 'amadeus', order: 50, label: 'SAKIKO' },
+      { name: 'sidebar.footer.action', id: 'sakiko', order: 50, label: 'SAKIKO' },
       (props) => React.createElement(SidebarToggle, props),
     ))
 
     slots.inject('shell.overlay', () => slots.register(
-      { name: 'shell.overlay', id: 'amadeus', order: 60, label: 'SAKIKO' },
+      { name: 'shell.overlay', id: 'sakiko', order: 60, label: 'SAKIKO' },
       () => React.createElement(FloatHost),
     ))
 
     slots.inject('settings.section', () => slots.register(
-      { name: 'settings.section', id: 'amadeus', order: 90, label: 'SAKIKO' },
+      { name: 'settings.section', id: 'sakiko', order: 90, label: 'SAKIKO' },
       () => React.createElement('div', null,
         React.createElement('h2', null, 'SAKIKO'),
         React.createElement(SakikoSettings),

@@ -5,7 +5,7 @@
 //   - SAKIKO AI 聊天（日语音频 + 中文文字；独立 API key 可选）
 //   - 主动来电（每天 1-2 次，铃音 + 白祥开场白）
 //   - assistant 消息情感朗读 + 事件播报
-//   - /amadeus/* 路由与 RPC（协议前缀保留）、可选人格注入
+//   - /sakiko/* 路由与 RPC、可选人格注入
 // ============================================================
 // 静态版 host（由 tools/build_static.mjs 生成，勿手改）
 import { dirname } from 'node:path'
@@ -18,27 +18,30 @@ export function apply(ctx) {
     const systemPrompt = ctx.get('systemPrompt')
     const sandboxPolicy = ctx.get('sandboxPolicy')
     if (fs === undefined || webServer === undefined || subprocess === undefined) {
-      console.error('[amadeus] 缺少必需服务: fs/webServer/subprocess')
+      console.error('[sakiko] 缺少必需服务: fs/webServer/subprocess')
       return
     }
 
     // ---------------- 常量 ----------------
     // 路径说明：静态安装后 ROOT = 插件安装目录（tools/build_static.mjs 会整体重写本段，
-    // 用 import.meta.url 推导）。开发/动态模式可用环境变量 AMADEUS_ROOT 覆盖。
-    // 运行数据（配置/记忆/临时文件）放在 DSH 数据目录 %DSH_HOME%/amadeus，重装插件不丢失。
+    // 用 import.meta.url 推导）。开发/动态模式可用环境变量 SAKIKO_ROOT 覆盖。
+    // 运行数据（配置/记忆/临时文件）放在 DSH 数据目录 %DSH_HOME%/sakiko，重装插件不丢失。
+    // 注：本插件由上游 amadeus-for-dsh 改名而来（2026-09-13，amadeus→sakiko）。
+    //     旧数据在 %DSH_HOME%/amadeus，需一次性迁移：
+    //       config/amadeus.json → config/sakiko.json、memory/amadeus-memory.json → memory/sakiko-memory.json。
         // 静态版路径（由 tools/build_static.mjs 生成，勿手改）
     const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
-    const ROOT = (typeof process !== 'undefined' && process.env && process.env.AMADEUS_ROOT && process.env.AMADEUS_ROOT.length > 0) ? process.env.AMADEUS_ROOT : MODULE_DIR
+    const ROOT = (typeof process !== 'undefined' && process.env && process.env.SAKIKO_ROOT && process.env.SAKIKO_ROOT.length > 0) ? process.env.SAKIKO_ROOT : MODULE_DIR
     const DATA_DIR = (() => {
       const env = (typeof process !== 'undefined' && process.env) ? process.env : {}
       const dshHome = env.DSH_HOME || (env.USERPROFILE ? env.USERPROFILE + '\\.dsh' : '')
-      return (dshHome || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '.')) + '/amadeus'
+      return (dshHome || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '.')) + '/sakiko'
     })()
-    const CONFIG_PATH = DATA_DIR + '/config/amadeus.json'
+    const CONFIG_PATH = DATA_DIR + '/config/sakiko.json'
     const MANIFEST_PATH = ROOT + '/config/manifest.json'
     const PERSONA_PATH = ROOT + '/persona/prompt.txt'
     const CHAT_PERSONA_PATH = ROOT + '/persona/chat-persona.txt'
-    const MEMORY_PATH = DATA_DIR + '/memory/amadeus-memory.json'
+    const MEMORY_PATH = DATA_DIR + '/memory/sakiko-memory.json'
     const NARRATOR_PATH = DATA_DIR + '/memory/narrator.json'
     const TTS_EMOTE_PY = ROOT + '/tools/tts_emote.py'
     const STT_PY = ROOT + '/tools/stt.py'
@@ -50,7 +53,7 @@ export function apply(ctx) {
     const TIMELINE_PATH = LOG_DIR + '/timeline.jsonl'
 
     const MAX_TTS_BYTES = 2000000
-    // ---------------- 静态版 RPC 桥（harness → /amadeus/rpc） ----------------
+    // ---------------- 静态版 RPC 桥（harness → /sakiko/rpc） ----------------
     const rpcHandlers = new Map()
     const harnessLocal = {
       handle: (name, fn) => {
@@ -60,7 +63,7 @@ export function apply(ctx) {
     }
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/rpc',
+      path: '/sakiko/rpc',
       handler: async (req, res) => {
         noteHost(req)
         const q = parseQuery(req.url)
@@ -409,7 +412,7 @@ export function apply(ctx) {
           })
           await raceDone(proc, 'mkdir ' + d)
         } catch (e) {
-          console.error('[amadeus] 创建数据目录失败:', d, e && e.message ? e.message : String(e))
+          console.error('[sakiko] 创建数据目录失败:', d, e && e.message ? e.message : String(e))
         }
       }
     }
@@ -419,7 +422,7 @@ export function apply(ctx) {
     // 供排查/调参与音画同步量化（不靠人工听辨）。写盘复用 writeTextSafe（fs 服务
     // 无 append/rename）：追加 = 读旧档拼新行整体写回；超限轮转：旧档整体覆写 .1。
     let tlChain = Promise.resolve()   // 追加写串行链，防并发读改写交错
-    let tlRecent = []                 // 内存环：最近 200 条已解析行（/amadeus/logs 直读）
+    let tlRecent = []                 // 内存环：最近 200 条已解析行（/sakiko/logs 直读）
     const TL_MAX_LEN = 2000000        // 轮转阈值 ≈2MB（UTF-16 长度近似，见 tlLog）
 
     // R3-2：timeline 的 label/text/cn 也走按码点截断（同一缺陷类：s.slice(0,n) 会把 emoji 代理对切成
@@ -459,7 +462,7 @@ export function apply(ctx) {
           // 轮转：当前档整体覆写到 .1（保留 1 份旧档），主档从本行重新开始
           if (prev.length > 0) {
             try { await writeTextSafe(TIMELINE_PATH + '.1', prev) } catch (e) {
-              console.error('[amadeus] 时间线轮转失败:', e && e.message ? e.message : String(e))
+              console.error('[sakiko] 时间线轮转失败:', e && e.message ? e.message : String(e))
             }
           }
           body = line
@@ -471,11 +474,11 @@ export function apply(ctx) {
           if (tlRecent.length > 200) tlRecent.shift()
         } catch (e) { /* 理论不可达（JSON.stringify 产物） */ }
       }).catch((e) => {
-        console.error('[amadeus] 时间线写盘失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 时间线写盘失败:', e && e.message ? e.message : String(e))
       })
     }
 
-    // 启动时从文件回读最近 200 条进内存环（重启后 /amadeus/logs 仍能即时看到旧档尾）
+    // 启动时从文件回读最近 200 条进内存环（重启后 /sakiko/logs 仍能即时看到旧档尾）
     async function loadTimelineRecent() {
       try {
         const p = await fs.resolve(TIMELINE_PATH)
@@ -505,7 +508,7 @@ export function apply(ctx) {
           config = Object.assign({}, DEFAULT_CONFIG, parsed)
         }
       } catch (e) {
-        console.error('[amadeus] 读取配置失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 读取配置失败:', e && e.message ? e.message : String(e))
       }
     }
 
@@ -513,7 +516,7 @@ export function apply(ctx) {
       try {
         await writeTextSafe(CONFIG_PATH, JSON.stringify(config, null, 2))
       } catch (e) {
-        console.error('[amadeus] 保存配置失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 保存配置失败:', e && e.message ? e.message : String(e))
       }
     }
 
@@ -647,12 +650,12 @@ export function apply(ctx) {
           memory.progress = sanitizeProgressMap(memory.progress)
         }
       } catch (e) {
-        console.error('[amadeus] 读取记忆失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 读取记忆失败:', e && e.message ? e.message : String(e))
       }
     }
 
     function scheduleSaveMemory() {
-      saveMemoryNow().catch((e) => console.error('[amadeus] 保存记忆失败:', e && e.message ? e.message : e))
+      saveMemoryNow().catch((e) => console.error('[sakiko] 保存记忆失败:', e && e.message ? e.message : e))
     }
 
     async function saveMemoryNow() {
@@ -665,7 +668,7 @@ export function apply(ctx) {
       try {
         await runPython([MEM_SAVE_PY, lastHostPort, MEMORY_PATH], 'mem_save')
       } catch (e2) {
-        console.error('[amadeus] 记忆落盘失败(fs+py):', e2 && e2.message ? e2.message : String(e2))
+        console.error('[sakiko] 记忆落盘失败(fs+py):', e2 && e2.message ? e2.message : String(e2))
       }
     }
 
@@ -873,10 +876,10 @@ export function apply(ctx) {
           // 进程退出后清引用，下次自动重启（忽略已替换的旧进程）
           if (ttsWorker && ttsWorker.proc === proc) ttsWorker = null
         }).catch(() => { if (ttsWorker && ttsWorker.proc === proc) ttsWorker = null })
-        console.log('[amadeus] TTS worker 就绪: 127.0.0.1:' + port)
+        console.log('[sakiko] TTS worker 就绪: 127.0.0.1:' + port)
         return port
       } catch (e) {
-        console.warn('[amadeus] TTS worker 启动失败，回退逐句 python:', e && e.message ? e.message : String(e))
+        console.warn('[sakiko] TTS worker 启动失败，回退逐句 python:', e && e.message ? e.message : String(e))
         try { if (proc) proc.terminate() } catch (e2) { /* ignore */ }
         ttsWorker = { disabled: true }
         return null
@@ -918,7 +921,7 @@ export function apply(ctx) {
           return { bytes, words, mime: 'audio/mpeg' }
         }
       } catch (e) {
-        console.warn('[amadeus] worker 合成失败，回退逐句 python:', e && e.message ? e.message : String(e))
+        console.warn('[sakiko] worker 合成失败，回退逐句 python:', e && e.message ? e.message : String(e))
       }
       // 2) 回退：逐句 python 子进程
       const outPath = TMP_DIR + '/tts-' + ttsFileSeq + '-' + slot + '.mp3'
@@ -1040,7 +1043,7 @@ export function apply(ctx) {
       // Fix R6（复核 Minor-3 更正）：bridge 失败时 `curl -o` 会把 HTTP 500 的 JSON 错误体原样写进
       // 播放槽（现场是 41 字节的 {"error": "IncompleteRead(0 bytes read)"}）。但要分清两件事：
       //   * **41 字节那种（<200）旧判据本来也会拒绝**，它只是残留在槽文件里，从未被播出
-      //     （没有任何路由服务 TMP_DIR；面板只用 /amadeus/tts?text=… 重取音频）。
+      //     （没有任何路由服务 TMP_DIR；面板只用 /sakiko/tts?text=… 重取音频）。
       //   * 真正的漏洞是 **>200 字节**的错误体：bridge 用 `{"error": str(e)[:300]}`，str(e) 截到
       //     300 字符 → 错误体可达 400+ 字节，会被纯长度判据当成音频放出去。这才是 looksLikeWav
       //     （长度 + 非 JSON + RIFF/WAVE 签名）存在的理由。
@@ -1188,7 +1191,7 @@ export function apply(ctx) {
             try {
               await synthesize(u.text, config.voiceName, config.rate, config.pitch, u.emotion || 'neutral')
             } catch (e) {
-              // 预热失败不影响正式请求；/amadeus/tts 仍会按需重试。
+              // 预热失败不影响正式请求；/sakiko/tts 仍会按需重试。
             }
           }
         })())
@@ -1199,7 +1202,7 @@ export function apply(ctx) {
       const items = queue.slice(0, 8).filter((u) => u && u.kind === 'say' && u.text)
       if (items.length === 0) return
       warmChain = warmChain.then(() => warmItems(items)).catch((e) => {
-        console.error('[amadeus] TTS 预热失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] TTS 预热失败:', e && e.message ? e.message : String(e))
       })
     }
 
@@ -1268,7 +1271,7 @@ export function apply(ctx) {
       } catch (e) {
         // Fix R6：失败告警补上 sid + 文本前缀（截断 24 字），便于把失败对到具体那条聊天记录。
         const failSid = (tags && typeof tags.sid === 'string' && tags.sid.length > 0) ? tags.sid.slice(0, 8) : '-'
-        console.warn('[amadeus] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e),
+        console.warn('[sakiko] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e),
           '| sid=' + failSid + ' text=' + tlTrunc(String(jp === undefined ? '' : jp), 24))
         tlLog({ ev: 'synth_fail', ms: Date.now() - t0 })
       }
@@ -1400,7 +1403,7 @@ export function apply(ctx) {
     //     ③ `childSids` —— 由 `subagent/descriptor` 事件登记：子会话日志创建时会 `append('subagent/descriptor')`
     //        （见 `dsh-subagent/descriptor-seed.js`），该事件经 session/event 以**子会话**为 session 送达，
     //        因此「见过该事件的 sid」即可判定为子代理会话（用于 header 信息缺失的兜底）；
-    //     ④ 兜底：`ctx.sessions.get(sid)` 读 header（宿主提供该服务时；amadeus 未注入 sessions，通常为 undefined）。
+    //     ④ 兜底：`ctx.sessions.get(sid)` 读 header（宿主提供该服务时；sakiko 未注入 sessions，通常为 undefined）。
     //   ⚠ 单独出现 `session.header.parentSession` **不作为判据**——它同时用于「用户 fork 出来的会话」
     //     （文档：session this one was forked from / seed lineage），据此判定会把用户自己的分叉会话误杀。
     // ============================================================
@@ -1590,7 +1593,7 @@ export function apply(ctx) {
       if (sessions.size <= SESSIONS_MAX) return
       if (!sessionsWarnedFull) {
         sessionsWarnedFull = true
-        console.warn('[amadeus] 会话注册表已满：上限 ' + SESSIONS_MAX + ' 条，开始淘汰最久未活跃的会话（被淘汰会话的标签/回合状态将失效）')
+        console.warn('[sakiko] 会话注册表已满：上限 ' + SESSIONS_MAX + ' 条，开始淘汰最久未活跃的会话（被淘汰会话的标签/回合状态将失效）')
       }
       const now = Date.now()
       while (sessions.size > SESSIONS_MAX) {
@@ -1770,7 +1773,7 @@ export function apply(ctx) {
     // ============================================================
     // Task 4：进度记忆分层（memory.progress[sid] + narrator.json 分片摘要）
     //   口径（用户已确认）：**进度分会话 + 人格全局**——
-    //     · 进度类（最近在干什么 / 用了哪些工具 / 里程碑次数 / 最近总结）按 sid 分片，落 amadeus-memory.json 的 progress 键；
+    //     · 进度类（最近在干什么 / 用了哪些工具 / 里程碑次数 / 最近总结）按 sid 分片，落 sakiko-memory.json 的 progress 键；
     //     · narrator.json 另存一份精简分片摘要（label/milestoneCount/lastSummary/updatedAt），供叙事侧独立恢复；
     //     · memory.facts（人格/偏好）与直聊 chat 历史**保持全局**，本任务不动；
     //     · memory.history 的归属用**结构化字段** {sid,label} 承载（cn 文本一律不带「〔label〕」，Task 2 口径）。
@@ -1925,14 +1928,14 @@ export function apply(ctx) {
         // Fix T4：per-session 分片摘要（旧档无此键 → 保持空对象，不报错）
         narrGlobal.sessions = sanitizeNarratorSessions(parsed.sessions)
       } catch (e) {
-        console.error('[amadeus] 读取 narrator 状态失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 读取 narrator 状态失败:', e && e.message ? e.message : String(e))
       }
     }
     async function saveNarratorNow() {
       try {
         await writeTextSafe(NARRATOR_PATH, JSON.stringify(narrPersistSnapshot(), null, 2))
       } catch (e) {
-        console.error('[amadeus] 保存 narrator 状态失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 保存 narrator 状态失败:', e && e.message ? e.message : String(e))
       }
     }
     function scheduleSaveNarrator() {
@@ -2139,7 +2142,7 @@ export function apply(ctx) {
         scheduleSaveNarrator()
         return { jp: parsed.jp, cn: parsed.cn || parsed.jp, emotion: parsed.emotion }
       } catch (e) {
-        console.warn('[amadeus] 进度总结 LLM 失败，走模板:', e && e.message ? e.message : String(e))
+        console.warn('[sakiko] 进度总结 LLM 失败，走模板:', e && e.message ? e.message : String(e))
         return null
       }
     }
@@ -2231,14 +2234,14 @@ export function apply(ctx) {
           const it = winners[i].intent
           dist[it] = (dist[it] || 0) + 1
         }
-        console.warn('[amadeus] 同刻播报批次的 sid 数 ' + winners.length + ' 超过阈值 ' + NARR_TICK_DELIVER_WARN +
+        console.warn('[sakiko] 同刻播报批次的 sid 数 ' + winners.length + ' 超过阈值 ' + NARR_TICK_DELIVER_WARN +
           '：仍全量交付（不丢弃），由全局队列串行播放；意图分布=' + JSON.stringify(dist))
       }
       // 逐组 fire-and-forget：各组交付入口同步完成门检查与占位登记（Fix R1 的并发不变量不变）
       for (let i = 0; i < winners.length; i++) {
         const w = winners[i]
         deliverNarration(w.intent, w.opts).catch((e) => {
-          console.error('[amadeus] 进度播报失败:', e && e.message ? e.message : String(e))
+          console.error('[sakiko] 进度播报失败:', e && e.message ? e.message : String(e))
         })
       }
     }
@@ -2283,7 +2286,7 @@ export function apply(ctx) {
         try {
           llm = await narrateSummary(intent, opts) // lastLLMAt 于 narrateSummary 入口登记（先于其 await）
         } catch (e) {
-          console.warn('[amadeus] 进度总结异常，回退模板:', e && e.message ? e.message : String(e))
+          console.warn('[sakiko] 进度总结异常，回退模板:', e && e.message ? e.message : String(e))
           llm = null
         }
         if (llm !== null) { line = llm; source = 'llm' }
@@ -2409,7 +2412,7 @@ export function apply(ctx) {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ' + config.chatApiKey,
-          'User-Agent': 'Amadeus-DSH/1.0',
+          'User-Agent': 'Sakiko-DSH/1.0',
         },
         body: JSON.stringify(payload),
       })
@@ -2459,7 +2462,7 @@ export function apply(ctx) {
             ])
           } catch (e) {
             // 直连失败时保留 Python 子进程兜底，保证有 key 就能用
-            console.error('[amadeus] llm http fallback:', e && e.message ? e.message : String(e))
+            console.error('[sakiko] llm http fallback:', e && e.message ? e.message : String(e))
           }
         }
         const slot = nextSlot()
@@ -2509,7 +2512,7 @@ export function apply(ctx) {
         id: 'amad-' + Math.random().toString(36).slice(2, 10),
         role: m.role,
         content: [{ type: 'text', text: m.content }],
-        source: { kind: 'plugin', plugin: 'amadeus' },
+        source: { kind: 'plugin', plugin: 'sakiko' },
       }))
       const options = {
         provider,
@@ -2555,8 +2558,8 @@ export function apply(ctx) {
       return { emotion, jp, cn }
     }
 
-    // ---------------- Amadeus 聊天 ----------------
-    async function amadeusChat(text, onDelta) {
+    // ---------------- Sakiko 聊天 ----------------
+    async function sakikoChat(text, onDelta) {
       const persona = await readChatPersona()
       const facts = factsText()
       const summary = memory.summary ? '過去の会話の要約：\n' + memory.summary : ''
@@ -2650,7 +2653,7 @@ export function apply(ctx) {
         if (memory.facts.length > 30) memory.facts.splice(0, memory.facts.length - 30)
         scheduleSaveMemory()
       } catch (e) {
-        console.error('[amadeus] 记忆维护失败:', e && e.message ? e.message : e)
+        console.error('[sakiko] 记忆维护失败:', e && e.message ? e.message : e)
       }
     }
 
@@ -2674,7 +2677,7 @@ export function apply(ctx) {
           if (memory.summary.length > 2000) memory.summary = tailCps(memory.summary, 2000)
         }
       } catch (e) {
-        console.error('[amadeus] 历史压缩失败:', e && e.message ? e.message : e)
+        console.error('[sakiko] 历史压缩失败:', e && e.message ? e.message : e)
       }
       scheduleSaveMemory()
     }
@@ -2698,9 +2701,9 @@ export function apply(ctx) {
         if (memory.history.length > 60) maybeCompactHistory()
         scheduleSaveMemory()
         await speakSynced(line.jp, line.cn, line.emotion, 'call')
-        console.log('[amadeus] 主动来电:', line.jp)
+        console.log('[sakiko] 主动来电:', line.jp)
       } catch (e) {
-        console.error('[amadeus] 主动来电失败:', e && e.message ? e.message : e)
+        console.error('[sakiko] 主动来电失败:', e && e.message ? e.message : e)
       }
     }
 
@@ -2730,9 +2733,9 @@ export function apply(ctx) {
         if (memory.history.length > 60) maybeCompactHistory()
         scheduleSaveMemory()
         await speakSynced(line.jp, line.cn, line.emotion, 'idle', { idle: true })
-        console.log('[amadeus] 空闲闲聊:', line.jp)
+        console.log('[sakiko] 空闲闲聊:', line.jp)
       } catch (e) {
-        console.error('[amadeus] 空闲闲聊失败:', e && e.message ? e.message : e)
+        console.error('[sakiko] 空闲闲聊失败:', e && e.message ? e.message : e)
       }
     }
 
@@ -2742,7 +2745,7 @@ export function apply(ctx) {
       const ms = typeof config.idleChatMs === 'number' && config.idleChatMs > 0 ? config.idleChatMs : 1200000
       if (Date.now() - lastInteractionAt >= ms) {
         lastInteractionAt = Date.now()
-        idleChatter().catch((e) => console.error('[amadeus] 空闲闲聊失败:', e && e.message ? e.message : e))
+        idleChatter().catch((e) => console.error('[sakiko] 空闲闲聊失败:', e && e.message ? e.message : e))
       }
     }
 
@@ -2770,12 +2773,12 @@ export function apply(ctx) {
     async function playHum() {
       const files = await scanHumFiles()
       if (files.length === 0) {
-        console.log('[amadeus] 哼唱彩蛋：无音频（assets/audio/hum-*.wav 未提供），静默跳过')
+        console.log('[sakiko] 哼唱彩蛋：无音频（assets/audio/hum-*.wav 未提供），静默跳过')
         tlLog({ ev: 'hum_skip', reason: 'no-audio' })
         return { ok: true, file: null, reason: 'no-audio' }
       }
       const pick = files[Math.floor(Math.random() * files.length)]
-      const url = '/amadeus/assets/audio/' + pick.name
+      const url = '/sakiko/assets/audio/' + pick.name
       pushHum(url)
       memory.humCount = (memory.humCount || 0) + 1
       memory.history.push({ role: 'assistant', jp: '', cn: '♪ ♪ ♪', emotion: 'happy', hum: true, t: Date.now() })
@@ -2810,7 +2813,7 @@ export function apply(ctx) {
         memory.lastHumAt = now
         scheduleSaveMemory()
         if (Math.random() < 0.5) {
-          playHum().catch((e) => console.error('[amadeus] 哼唱彩蛋失败:', e && e.message ? e.message : e))
+          playHum().catch((e) => console.error('[sakiko] 哼唱彩蛋失败:', e && e.message ? e.message : e))
         }
       }
     }
@@ -2916,7 +2919,7 @@ export function apply(ctx) {
           scale: typeof x.scale === 'number' ? x.scale : 1,
           layout: (x.layout && typeof x.layout === 'object') ? x.layout : undefined,
         })).filter((x) => x.url.length > 0)
-        const image = typeof m.image === 'string' && m.image.length > 0 ? '/amadeus/assets/' + m.image : ''
+        const image = typeof m.image === 'string' && m.image.length > 0 ? '/sakiko/assets/' + m.image : ''
         const value = { models, image, placeholder: m.placeholder !== false }
         manifestCache = { at: now, value }
         sendJson(res, 200, value)
@@ -2928,7 +2931,7 @@ export function apply(ctx) {
     // ---------------- 路由 ----------------
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/tts',
+      path: '/sakiko/tts',
       handler: async (req, res) => {
         try {
           const q = parseQuery(req.url)
@@ -2941,7 +2944,7 @@ export function apply(ctx) {
           const emotion = typeof q.emotion === 'string' && EMOTIONS.indexOf(q.emotion) >= 0 ? q.emotion : 'neutral'
           const entry = await synthesize(text, voice, rate, pitch, emotion)
           const wordsHeader = (entry.words && entry.words.length > 0) ? Buffer.from(JSON.stringify(entry.words)).toString('base64') : ''
-          sendBytes(res, 200, entry.bytes, { 'Content-Type': entry.mime || 'audio/mpeg', 'Cache-Control': 'public, max-age=3600', 'X-Amadeus-Words': wordsHeader })
+          sendBytes(res, 200, entry.bytes, { 'Content-Type': entry.mime || 'audio/mpeg', 'Cache-Control': 'public, max-age=3600', 'X-Sakiko-Words': wordsHeader })
         } catch (e) {
           sendJson(res, 502, { error: e && e.message ? e.message : String(e) })
         }
@@ -2950,7 +2953,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/ttsmeta',
+      path: '/sakiko/ttsmeta',
       handler: async (req, res) => {
         try {
           const q = parseQuery(req.url)
@@ -2972,7 +2975,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/stt',
+      path: '/sakiko/stt',
       handler: async (req, res) => {
         noteHost(req)
         try {
@@ -2993,7 +2996,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/poll',
+      path: '/sakiko/poll',
       handler: async (req, res) => {
         noteHost(req)
         const q = parseQuery(req.url)
@@ -3016,7 +3019,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/chat',
+      path: '/sakiko/chat',
       handler: async (req, res) => {
         noteHost(req)
         try {
@@ -3038,7 +3041,7 @@ export function apply(ctx) {
           ;(async () => {
             try {
               const result = await Promise.race([
-                amadeusChat(text, (delta) => {
+                sakikoChat(text, (delta) => {
                   const s = chatStreams.get(chatId)
                   if (s && typeof delta === 'string') s.raw += delta
                 }),
@@ -3072,7 +3075,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/chatstream',
+      path: '/sakiko/chatstream',
       handler: async (req, res) => {
         noteHost(req)
         const q = parseQuery(req.url)
@@ -3093,7 +3096,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/chatfull',
+      path: '/sakiko/chatfull',
       handler: async (req, res) => {
         noteHost(req)
         try {
@@ -3107,7 +3110,7 @@ export function apply(ctx) {
           chatBusy = true
           try {
             const result = await Promise.race([
-              amadeusChat(text),
+              sakikoChat(text),
               ctx.timeout(CHAT_TIMEOUT_MS).then(() => { throw new Error('llm timeout') }),
             ])
             sendJson(res, 200, { ok: true, jp: result.jp, cn: result.cn, emotion: result.emotion })
@@ -3122,7 +3125,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/action',
+      path: '/sakiko/action',
       handler: async (req, res) => {
         noteHost(req)
         const q = parseQuery(req.url)
@@ -3144,7 +3147,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/memory',
+      path: '/sakiko/memory',
       handler: async (req, res) => {
         noteHost(req)
         sendJson(res, 200, {
@@ -3159,7 +3162,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/diag',
+      path: '/sakiko/diag',
       handler: async (req, res) => {
         noteHost(req)
         const out = { ok: false }
@@ -3205,22 +3208,22 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/manifest',
+      path: '/sakiko/manifest',
       handler: async (req, res) => { await serveManifest(res) },
     }))
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/panel.html',
+      path: '/sakiko/panel.html',
       handler: async (req, res) => { await serveFile(res, ROOT + '/plugin/web/panel.html', 262144, 'no-cache') },
     }))
 
     ctx.effect(() => webServer.register({
       kind: 'prefix',
-      path: '/amadeus/web',
+      path: '/sakiko/web',
       handler: async (req, res) => {
         const pathname = req.url.split('?')[0]
-        const rel = safeRel(pathname.slice('/amadeus/web'.length))
+        const rel = safeRel(pathname.slice('/sakiko/web'.length))
         if (rel === null) { res.writeHead(404); res.end(); return }
         await serveFile(res, ROOT + '/plugin/web' + rel, MAX_ASSET_BYTES, 'no-cache')
       },
@@ -3228,11 +3231,11 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'prefix',
-      path: '/amadeus/assets',
+      path: '/sakiko/assets',
       handler: async (req, res) => {
         let pathname
         try { pathname = req.url.split('?')[0] } catch (e) { res.writeHead(400); res.end(); return }
-        const rel = safeRel(pathname.slice('/amadeus/assets'.length))
+        const rel = safeRel(pathname.slice('/sakiko/assets'.length))
         if (rel === null) { res.writeHead(404); res.end(); return }
         await serveFile(res, ROOT + '/assets' + rel, MAX_ASSET_BYTES, 'public, max-age=3600')
       },
@@ -3413,7 +3416,7 @@ export function apply(ctx) {
     const clientReports = []
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/report',
+      path: '/sakiko/report',
       handler: async (req, res) => {
         try {
           const q = parseQuery(req.url)
@@ -3438,7 +3441,7 @@ export function apply(ctx) {
 
     ctx.effect(() => webServer.register({
       kind: 'exact',
-      path: '/amadeus/logs',
+      path: '/sakiko/logs',
       handler: async (req, res) => { sendJson(res, 200, { reports: clientReports, timeline: tlRecent }) },
     }))
 
@@ -3567,7 +3570,7 @@ export function apply(ctx) {
         }
         // assistant/chunk、step/*、todo/write 等其它事件：不开口
       } catch (e) {
-        console.error('[amadeus] session/event 处理失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] session/event 处理失败:', e && e.message ? e.message : String(e))
       }
     }))
 
@@ -3646,7 +3649,7 @@ export function apply(ctx) {
     // ---------------- 人格注入 ----------------
     if (systemPrompt !== undefined) {
       ctx.effect(() => systemPrompt.section({
-        name: 'amadeus-persona',
+        name: 'sakiko-persona',
         order: 500,
         text: () => (config.personaOn === true ? personaText : ''),
       }))
@@ -3654,16 +3657,16 @@ export function apply(ctx) {
 
     // ---------------- 启动 ----------------
     ensureDataDirs().then(() => {
-      loadTimelineRecent().catch((e) => console.error('[amadeus] loadTimelineRecent:', e))
-      loadConfig().catch((e) => console.error('[amadeus] loadConfig:', e))
-      loadNarrator().catch((e) => console.error('[amadeus] loadNarrator:', e))
-      loadPersona().catch((e) => console.error('[amadeus] loadPersona:', e))
+      loadTimelineRecent().catch((e) => console.error('[sakiko] loadTimelineRecent:', e))
+      loadConfig().catch((e) => console.error('[sakiko] loadConfig:', e))
+      loadNarrator().catch((e) => console.error('[sakiko] loadNarrator:', e))
+      loadPersona().catch((e) => console.error('[sakiko] loadPersona:', e))
       loadMemory().then(() => {
-        console.log('[amadeus] 记忆已加载:', memory.history.length, '条历史,', memory.facts.length, '条长期事实')
-      }).catch((e) => console.error('[amadeus] loadMemory:', e))
+        console.log('[sakiko] 记忆已加载:', memory.history.length, '条历史,', memory.facts.length, '条长期事实')
+      }).catch((e) => console.error('[sakiko] loadMemory:', e))
     })
     // 预热常驻 TTS worker（后台拉起，首句即可复用；不支持时静默回退）
-    ensureTtsWorker().catch((e) => console.warn('[amadeus] TTS worker 预热失败:', e && e.message ? e.message : String(e)))
+    ensureTtsWorker().catch((e) => console.warn('[sakiko] TTS worker 预热失败:', e && e.message ? e.message : String(e)))
     // 入口自检欢迎语：启动 15s 后播报一次（仅语音开启时；announce 会留痕到对话区）
     let startupGreetingSent = false
     ctx.timeout(() => {
@@ -3672,10 +3675,10 @@ export function apply(ctx) {
         startupGreetingSent = true
         if (config.voiceOn !== true) return
         announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion)
-        console.log('[amadeus] 启动欢迎语已播报:', STARTUP_GREETING.jp)
+        console.log('[sakiko] 启动欢迎语已播报:', STARTUP_GREETING.jp)
       } catch (e) {
-        console.error('[amadeus] 启动欢迎语失败:', e && e.message ? e.message : String(e))
+        console.error('[sakiko] 启动欢迎语失败:', e && e.message ? e.message : String(e))
       }
     }, 15000)
-    console.log('[amadeus] SAKIKO host 已就绪。配置:', JSON.stringify({ voiceOn: config.voiceOn, chatOn: config.chatOn, callOn: config.callOn, idleChatOn: config.idleChatOn }))
+    console.log('[sakiko] SAKIKO host 已就绪。配置:', JSON.stringify({ voiceOn: config.voiceOn, chatOn: config.chatOn, callOn: config.callOn, idleChatOn: config.idleChatOn }))
 }

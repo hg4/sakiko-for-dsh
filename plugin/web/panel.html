@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SAKIKO</title>
-<link rel="stylesheet" href="/amadeus/web/panel.css">
+<link rel="stylesheet" href="/sakiko/web/panel.css">
 </head>
 <body>
   <div id="phone">
@@ -15,9 +15,9 @@
         <div id="sb-right" class="sb-right" aria-hidden="true"><i></i><i></i><i></i></div>
       </div>
 
-      <canvas id="amadeus-canvas"></canvas>
-      <img id="amadeus-img" alt="Sakiko" title="Sakiko" hidden>
-      <div id="amadeus-placeholder" hidden>
+      <canvas id="sakiko-canvas"></canvas>
+      <img id="sakiko-img" alt="Sakiko" title="Sakiko" hidden>
+      <div id="sakiko-placeholder" hidden>
         <svg viewBox="0 0 200 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sakiko 剪影占位">
           <!-- 蓝发整体轮廓 -->
           <path d="M100 30 C 58 30 40 68 37 130 C 35 182 46 232 100 232 C 154 232 165 182 163 130 C 160 68 142 30 100 30 Z" fill="#2b3a67"/>
@@ -119,10 +119,10 @@
 
   <audio id="ring-audio" loop preload="none">
     <!-- 铃声：Ave Mujica《Imprisoned XII》前奏 0:00-0:20（已换；assets 路由缓存 1h，换文件时递增 v= 数字防缓存） -->
-    <source src="/amadeus/assets/audio/ring.mp3?v=2" type="audio/mpeg">
+    <source src="/sakiko/assets/audio/ring.mp3?v=2" type="audio/mpeg">
   </audio>
 
-  <script src="/amadeus/web/emotion.js"></script>
-  <script src="/amadeus/web/panel.js"></script>
+  <script src="/sakiko/web/emotion.js"></script>
+  <script src="/sakiko/web/panel.js"></script>
 </body>
 </html>

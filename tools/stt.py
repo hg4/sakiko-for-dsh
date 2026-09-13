@@ -1,4 +1,4 @@
-"""Amadeus 语音识别（STT）调用器（OpenAI Whisper 兼容，纯标准库）。
+"""Sakiko 语音识别（STT）调用器（OpenAI Whisper 兼容，纯标准库）。
 
 用法: python stt.py <audio.b64> <result.json> <baseUrl> <apiKey> <model> [lang]
 - audio.b64: 存放音频二进制 base64 的文本文件
@@ -52,14 +52,14 @@ def multipart_body(fields, boundary):
 
 
 def call_once(url, api_key, model, audio_bytes, lang):
-    boundary = "----AmadeusSTT" + uuid.uuid4().hex
+    boundary = "----SakikoSTT" + uuid.uuid4().hex
     fields = [
         ("model", model, None, None),
         ("response_format", "json", None, None),
         (
             "file",
             audio_bytes,
-            "amadeus-mic.webm",
+            "sakiko-mic.webm",
             "audio/webm",
         ),
     ]
@@ -69,7 +69,7 @@ def call_once(url, api_key, model, audio_bytes, lang):
     headers = {
         "Authorization": "Bearer " + api_key,
         "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "User-Agent": "Amadeus-DSH/1.0",
+        "User-Agent": "Sakiko-DSH/1.0",
     }
     req = urllib.request.Request(url, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as resp:

@@ -1,6 +1,6 @@
 # 豊川祥子（Sakiko Togawa）人设卡 — SAKIKO（白祥・CRYCHIC 期）
 
-> 本卡用于 SAKIKO 插件（amadeus-for-dsh 改造）的人格写作与文案对照。
+> 本卡用于 SAKIKO 插件（基于上游 amadeus-for-dsh 二次开发）的人格写作与文案对照。
 > 版权注：角色 © Bushiroad／动画 © BanG Dream! Project。Live2D 素材来自 claudepet 自定义改造（粉丝制作），仅供个人学习，禁止商用。
 > 体例：[明示]＝动画官网/角色页/画面直接给出；[整理]＝据角色档案整理（萌百、官网梗概转述等二级口径）；[推断]＝考据推定。本卡为「人设卡」用途，凡非 [明示] 的内容不得当作动画事实写入人格正文（prompt.txt / chat-persona.txt）。
 

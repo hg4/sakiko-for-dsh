@@ -4,7 +4,7 @@
  * 主要改进：
  *  - Live2D 常驻动画循环：呼吸/眨眼/眼球/头部/身体平滑自然动作
  *  - 口型严格从音频播放开始，词级时间戳 + 音频能量双驱动
- *  - 语音输入：SpeechRecognition 优先，MediaRecorder + /amadeus/stt 兜底
+ *  - 语音输入：SpeechRecognition 优先，MediaRecorder + /sakiko/stt 兜底
  *  - TTS 音频响应头直接携带词时间戳，不再重复合成取词
  *  - 模型摆位修正：anchor 居中 + 可配置 layout，避免错位
  * ============================================================ */
@@ -14,9 +14,9 @@
   var $ = function (id) { return document.getElementById(id) }
   var screenEl = $('screen')
   var phoneEl = $('phone') // Task5-R1: 浮层门控的 state-* class 挂在机身 #phone 上
-  var canvas = $('amadeus-canvas')
-  var imgEl = $('amadeus-img')
-  var placeholderEl = $('amadeus-placeholder')
+  var canvas = $('sakiko-canvas')
+  var imgEl = $('sakiko-img')
+  var placeholderEl = $('sakiko-placeholder')
   var boot = $('boot')
   var bootL1 = $('boot-line1')
   var bootL2 = $('boot-line2')
@@ -41,7 +41,7 @@
 
   function report(msg) {
     try {
-      fetch('/amadeus/report?msg=' + encodeURIComponent(String(msg).slice(0, 380)), { cache: 'no-store' }).catch(function () { /* ignore */ })
+      fetch('/sakiko/report?msg=' + encodeURIComponent(String(msg).slice(0, 380)), { cache: 'no-store' }).catch(function () { /* ignore */ })
     } catch (e) { /* ignore */ }
   }
   function showErr(text) {
@@ -87,15 +87,15 @@
   window.addEventListener('message', function (ev) {
     var d = ev && ev.data
     if (!d || typeof d !== 'object') return
-    if (d.type === 'amadeus/config' && d.value && typeof d.value === 'object') {
+    if (d.type === 'sakiko/config' && d.value && typeof d.value === 'object') {
       cfg = Object.assign(cfg, d.value)
       applyChatVisibility()
       if (themeSig(cfg) !== lastThemeSig) applyTheme()
     }
-    if (d.type === 'amadeus/say' && typeof d.text === 'string') {
+    if (d.type === 'sakiko/say' && typeof d.text === 'string') {
       enqueue(d.text, true, 'neutral')
     }
-    if (d.type === 'amadeus/open') {
+    if (d.type === 'sakiko/open') {
       replayBootOnOpen()
     }
   })
@@ -108,7 +108,7 @@
   applyChatVisibility()
 
   // P6：浮窗模式识别——cfg.floatPanel !== false（默认浮窗）→ body.float-fill：机身铺满 iframe、零留白；
-  // 否则（legacy 右列）移除。初始查询 cfg、postMessage amadeus/config、poll data.config 三处合并后统一调用。
+  // 否则（legacy 右列）移除。初始查询 cfg、postMessage sakiko/config、poll data.config 三处合并后统一调用。
   function applyFloatFill() {
     if (cfg.floatPanel === false) document.body.classList.remove('float-fill')
     else document.body.classList.add('float-fill')
@@ -416,7 +416,7 @@
     typeBootLines()
   }
 
-  // 每次从 Amadeus 按钮重新打开右侧栏时，重播开机动画（如果当前不在开机画面）
+  // 每次从 Sakiko 按钮重新打开右侧栏时，重播开机动画（如果当前不在开机画面）
   function replayBootOnOpen() {
     if (!boot) return
     if (!boot.classList.contains('off')) return
@@ -437,9 +437,9 @@
   startBootAnimation()
 
   // ---------------- 语音队列 ----------------
-  // Task5：内联回退与 window.AmadeusEmotion 同步为 Sakiko expression 名（model.json expressions.name）
-  var EXPR = (window.AmadeusEmotion && window.AmadeusEmotion.EXPR) || { happy: 'smile03', excited: 'smile05', elated: 'smile06', question: 'thinking01', sad: 'sad01', angry: 'angry01', furious: 'angry07', soft: 'smile01', blush: 'shame01', annoyed: 'sigh01', thinking: 'thinking02', surprised: 'surprised01', disappointed: 'sad02', eyes_closed: 'idle01', indifferent: 'serious01', side: 'kime01', winking: 'smile04', neutral: 'default' }
-  var EXPR_TO_EMO = (window.AmadeusEmotion && window.AmadeusEmotion.EXPR_TO_EMO) || { smile03: 'happy', smile05: 'excited', smile06: 'elated', sad01: 'sad', angry01: 'angry', angry07: 'furious', thinking01: 'question', smile01: 'soft', shame01: 'blush', sigh01: 'annoyed', thinking02: 'thinking', surprised01: 'surprised', sad02: 'disappointed', idle01: 'eyes_closed', serious01: 'indifferent', kime01: 'side', smile04: 'winking', default: 'neutral', '': 'neutral' }
+  // Task5：内联回退与 window.SakikoEmotion 同步为 Sakiko expression 名（model.json expressions.name）
+  var EXPR = (window.SakikoEmotion && window.SakikoEmotion.EXPR) || { happy: 'smile03', excited: 'smile05', elated: 'smile06', question: 'thinking01', sad: 'sad01', angry: 'angry01', furious: 'angry07', soft: 'smile01', blush: 'shame01', annoyed: 'sigh01', thinking: 'thinking02', surprised: 'surprised01', disappointed: 'sad02', eyes_closed: 'idle01', indifferent: 'serious01', side: 'kime01', winking: 'smile04', neutral: 'default' }
+  var EXPR_TO_EMO = (window.SakikoEmotion && window.SakikoEmotion.EXPR_TO_EMO) || { smile03: 'happy', smile05: 'excited', smile06: 'elated', sad01: 'sad', angry01: 'angry', angry07: 'furious', thinking01: 'question', smile01: 'soft', shame01: 'blush', sigh01: 'annoyed', thinking02: 'thinking', surprised01: 'surprised', sad02: 'disappointed', idle01: 'eyes_closed', serious01: 'indifferent', kime01: 'side', smile04: 'winking', default: 'neutral', '': 'neutral' }
   var queue = []
   var playing = false
   var lastQueued = ''
@@ -451,7 +451,8 @@
   var prefetchCache = {}
   var inflightAudio = {}
 
-  try { unlocked = window.localStorage.getItem('amadeus.unlocked') === '1' } catch (e) { unlocked = false }
+  // 改名（amadeus→sakiko）后回落到旧键，避免已启用语音的用户重新看到解锁浮层
+  try { unlocked = (window.localStorage.getItem('sakiko.unlocked') || window.localStorage.getItem('amadeus.unlocked')) === '1' } catch (e) { unlocked = false }
 
   function enqueue(text, force, emotion, expr, cn, id, bubble, url) {
     var t = String(text || '').replace(/\s+/g, ' ').trim()
@@ -517,7 +518,7 @@
   }
 
   function ttsUrl(text, emotion) {
-    return '/amadeus/tts?text=' + encodeURIComponent(text) +
+    return '/sakiko/tts?text=' + encodeURIComponent(text) +
       '&voice=' + encodeURIComponent(cfg.voiceName || 'ja-JP-NanamiNeural') +
       '&rate=' + encodeURIComponent(cfg.rate || '+0%') +
       '&pitch=' + encodeURIComponent(cfg.pitch || '+0Hz') +
@@ -555,7 +556,7 @@
     inflightAudio[url] = fetch(url, { cache: 'no-store' }).then(function (resp) {
       if (!resp.ok) throw new Error('tts http ' + resp.status)
       var words = []
-      var h = resp.headers.get('X-Amadeus-Words')
+      var h = resp.headers.get('X-Sakiko-Words')
       if (h) {
         try {
           var decoded = base64UrlDecode(h)
@@ -587,7 +588,7 @@
     for (var i = 0; i < n; i++) {
       var item = queue[i]
       if (!item) continue
-      // hum 等直连音频条目无 TTS 合成，跳过预取（避免对空文本发起 /amadeus/tts）
+      // hum 等直连音频条目无 TTS 合成，跳过预取（避免对空文本发起 /sakiko/tts）
       if (item.url) continue
       var url = ttsUrl(item.text, item.emotion)
       if (prefetchCache[url] || inflightAudio[url]) continue
@@ -702,7 +703,7 @@
   function hideUnlock() { unlockEl.classList.add('hidden'); phoneEl.classList.remove('state-unlock') }
   function markUnlocked() {
     unlocked = true
-    try { window.localStorage.setItem('amadeus.unlocked', '1') } catch (e) { /* ignore */ }
+    try { window.localStorage.setItem('sakiko.unlocked', '1') } catch (e) { /* ignore */ }
   }
 
   // Task7 解锁问候台词（docs/sakiko-quotes.md A6-1，A6 主推，标注【原创·依考据风格】可直用）：
@@ -748,7 +749,7 @@
     ringing = true
     // Task5 来电改模型直出：不再按情绪切换 kurisu 立绘 src（#call-portrait / kurisu/*.png
     // 旧素材已下线）。来电时保持 canvas 模型可见、overlay 半透明显示模型——
-    // 半透明等视觉由 HTML/CSS 任务负责，JS 只保证不切图、不隐藏 #amadeus-canvas。
+    // 半透明等视觉由 HTML/CSS 任务负责，JS 只保证不切图、不隐藏 #sakiko-canvas。
     try {
       var p = ringAudio.play()
       if (p && p.catch) p.catch(function () { report('ring blocked') })
@@ -768,7 +769,7 @@
   }
 
   function ackCallRemote() {
-    fetch('/amadeus/action?cmd=ackcall', { cache: 'no-store' }).catch(function () { /* ignore */ })
+    fetch('/sakiko/action?cmd=ackcall', { cache: 'no-store' }).catch(function () { /* ignore */ })
   }
 
   callAccept.addEventListener('click', function () {
@@ -837,12 +838,12 @@
   ]
 
   var LIBS = {
-    pixi: '/amadeus/web/vendor/pixi.min.js',
-    pixiV6: '/amadeus/web/vendor/pixi-v6.min.js',
-    l2d21: '/amadeus/web/vendor/live2d21.min.js',
-    pldC2: '/amadeus/web/vendor/pld-cubism2.min.js',
-    core: '/amadeus/web/vendor/live2dcubismcore.min.js',
-    pldC4: '/amadeus/web/vendor/pld-cubism4.min.js'
+    pixi: '/sakiko/web/vendor/pixi.min.js',
+    pixiV6: '/sakiko/web/vendor/pixi-v6.min.js',
+    l2d21: '/sakiko/web/vendor/live2d21.min.js',
+    pldC2: '/sakiko/web/vendor/pld-cubism2.min.js',
+    core: '/sakiko/web/vendor/live2dcubismcore.min.js',
+    pldC4: '/sakiko/web/vendor/pld-cubism4.min.js'
   }
   var LIBS_FALLBACK = {
     pixi: 'https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js',
@@ -939,7 +940,8 @@
 
   function loadSavedLayout() {
     try {
-      var raw = window.localStorage.getItem('amadeus.l2d.layout')
+      // 改名（amadeus→sakiko）后回落到旧键，避免已标定好的模型位置/缩放丢失
+      var raw = window.localStorage.getItem('sakiko.l2d.layout') || window.localStorage.getItem('amadeus.l2d.layout')
       if (!raw) return
       var saved = JSON.parse(raw)
       if (saved && typeof saved === 'object') {
@@ -950,7 +952,7 @@
 
   function saveCalibLayout() {
     try {
-      window.localStorage.setItem('amadeus.l2d.layout', JSON.stringify(modelLayout))
+      window.localStorage.setItem('sakiko.l2d.layout', JSON.stringify(modelLayout))
     } catch (e) { /* ignore */ }
   }
 
@@ -1215,7 +1217,7 @@
       var c4 = typeof core.setParameterValueById === 'function'
       var set = c4 ? function (id, v) { try { core.setParameterValueById(id, v, 1) } catch (e2) { /* ignore */ } } : function (id, v) { try { core.setParamFloat(id, v) } catch (e2) { /* ignore */ } }
       var isC2 = modelFormat === 'cubism2' || !c4
-      var emoMap = (window.AmadeusEmotion && (isC2 ? window.AmadeusEmotion.C2_FACE : window.AmadeusEmotion.FACE)) || {}
+      var emoMap = (window.SakikoEmotion && (isC2 ? window.SakikoEmotion.C2_FACE : window.SakikoEmotion.FACE)) || {}
       // 兜底直驱前先清空本表情表会用到的所有参数（避免上一表情残留），再写入目标值。
       var keys = {}
       var rk
@@ -1380,7 +1382,7 @@
     if (gesture.arms.length === 0 && gesture.shoulders.length === 0 && gesture.body.length === 0 && gesture.head.length === 0) return
     var t = now / 1000
     var emo = gestureEmotion || 'neutral'
-    var g = (window.AmadeusEmotion && window.AmadeusEmotion.GESTURE && window.AmadeusEmotion.GESTURE[emo]) || { amp: 1, speed: 1 }
+    var g = (window.SakikoEmotion && window.SakikoEmotion.GESTURE && window.SakikoEmotion.GESTURE[emo]) || { amp: 1, speed: 1 }
     var pat = currentSpeakPattern(now)
     var amp = g.amp
     var speed = g.speed * pat.speed
@@ -1748,7 +1750,7 @@
   async function initAvatar() {
     var manifest = { models: [], image: '', placeholder: true }
     try {
-      var resp = await fetch('/amadeus/manifest', { cache: 'no-store' })
+      var resp = await fetch('/sakiko/manifest', { cache: 'no-store' })
       if (resp.ok) manifest = await resp.json()
       else report('manifest http ' + resp.status)
     } catch (e) {
@@ -1768,7 +1770,7 @@
         }
       } catch (e) {
         var em = String(e && e.message ? e.message : e)
-        console.warn('[amadeus] model load failed:', entry.url, em)
+        console.warn('[sakiko] model load failed:', entry.url, em)
         report('model fail: ' + em)
         updateChip('⚠ model: ' + em.slice(0, 24), true)
         showErr('Live2D 加载失败：' + em)
@@ -1817,9 +1819,9 @@
     s.textContent = fmtTime(t || Date.now())
     bubble.appendChild(s)
   }
-  function makeAmadeusMsg() {
+  function makeSakikoMsg() {
     var wrap = document.createElement('div')
-    wrap.className = 'msg amadeus'
+    wrap.className = 'msg sakiko'
     wrap.appendChild(makeAvatar())
     var b = makeBubble()
     wrap.appendChild(b)
@@ -1856,7 +1858,7 @@
       addTimeTo(u.bubble, entry.t)
       historyEl.appendChild(u.wrap)
     } else {
-      var a = makeAmadeusMsg()
+      var a = makeSakikoMsg()
       a.bubble.textContent = entry.cn || entry.jp || ''
       addTimeTo(a.bubble, entry.t)
       attachReplay(a.bubble, entry.jp || entry.cn, entry.emotion)
@@ -1872,9 +1874,9 @@
   //   - 播报 announce / 空闲 idle / 来电 call 气泡：jp(=u.text，日文) 与 cn(=u.cn，中文副标题)；
   //     renderItemBubble 透传 jp+cn 给 addHistory。
   //   - 聊天回复 chat 气泡：sendChat 流式读取 finalSt.jp（日文）/ finalSt.cn（中文），与主链 jp=finalSt.jp||cn 一致。
-  //   - 历史记忆装载（/amadeus/memory → addHistory）：assistant 条目自带 jp/cn/emotion。
+  //   - 历史记忆装载（/sakiko/memory → addHistory）：assistant 条目自带 jp/cn/emotion。
   //   - 纯中文条目（kind:'cn' 的 pushCn / revealHistory 打字机）：只有 cn，仍启用重播（controller 实测
-  //     /amadeus/tts 对中文返回 200+audio，中文合成可用，不再按「日文声线不可靠」灰显）。
+  //     /sakiko/tts 对中文返回 200+audio，中文合成可用，不再按「日文声线不可靠」灰显）。
   // 判定：气泡携带非空 (jp || cn) → 启用重播；两者皆空才灰显禁用。详见 task-4-report.md「Fix Round 1」。
   var replayAudioEl = null
   var replayBusy = false
@@ -1960,7 +1962,7 @@
   }
 
   function loadMemory() {
-    fetch('/amadeus/memory', { cache: 'no-store' }).then(function (resp) {
+    fetch('/sakiko/memory', { cache: 'no-store' }).then(function (resp) {
       if (!resp.ok) throw new Error('memory ' + resp.status)
       return resp.json()
     }).then(function (data) {
@@ -1993,11 +1995,11 @@
     var s = String(text || '')
     if (s.length === 0) return
     if (!historyEl) return
-    var m = makeAmadeusMsg()
+    var m = makeSakikoMsg()
     var body = document.createElement('span')
     m.bubble.appendChild(body)
     addTimeTo(m.bubble, Date.now())
-    // Task4：纯中文条目（仅有 cn）→ 以中文重播（controller 实测 /amadeus/tts 对中文返回 200+audio）
+    // Task4：纯中文条目（仅有 cn）→ 以中文重播（controller 实测 /sakiko/tts 对中文返回 200+audio）
     attachReplay(m.bubble, s, null)
     var empty = historyEl.querySelector('.msg-empty')
     if (empty) empty.remove()
@@ -2028,14 +2030,14 @@
     chatInput.value = ''
     addHistory({ role: 'user', content: text })
     try {
-      var resp = await fetch('/amadeus/chat?text=' + encodeURIComponent(text.slice(0, 400)), { cache: 'no-store' })
+      var resp = await fetch('/sakiko/chat?text=' + encodeURIComponent(text.slice(0, 400)), { cache: 'no-store' })
       var data = await resp.json().catch(function () { return null })
       if (!resp.ok || !(data && data.chatId)) {
         var em = data && data.error ? data.error : ('http ' + resp.status)
         report('chat fail: ' + em)
         updateChip('⚠ ' + em.slice(0, 24), true)
         if (historyEl) {
-          var err = makeAmadeusMsg()
+          var err = makeSakikoMsg()
           err.bubble.textContent = '⚠ ' + em
           err.bubble.style.color = '#ffb4ab'
           err.bubble.style.border = '1px solid rgba(255,111,97,0.5)'
@@ -2046,7 +2048,7 @@
         setChatBusy(false)
         return
       }
-      var m2 = makeAmadeusMsg()
+      var m2 = makeSakikoMsg()
       var body = document.createElement('span')
       m2.bubble.appendChild(body)
       addTimeTo(m2.bubble, Date.now())
@@ -2054,7 +2056,7 @@
       var lastShown = ''
       var finalSt = await new Promise(function (resolve) {
         var timer = window.setInterval(function () {
-          fetch('/amadeus/chatstream?chatId=' + data.chatId, { cache: 'no-store' })
+          fetch('/sakiko/chatstream?chatId=' + data.chatId, { cache: 'no-store' })
             .then(function (r2) { return r2.json() })
             .then(function (st) {
               if (!st) return
@@ -2166,7 +2168,7 @@
 
   function sendStt(blob) {
     var lang = recLangs[recLangIdx]
-    fetch('/amadeus/stt?lang=' + encodeURIComponent(lang), {
+    fetch('/sakiko/stt?lang=' + encodeURIComponent(lang), {
       method: 'POST',
       body: blob,
       headers: { 'Content-Type': blob.type || 'audio/webm' }
@@ -2282,13 +2284,13 @@
   }
   if (chatMic) chatMic.addEventListener('click', toggleMic)
 
-  // ---------------- 关闭 Amadeus 系统 ----------------
+  // ---------------- 关闭 Sakiko 系统 ----------------
   var closeBtn = $('close-btn')
   if (closeBtn) {
     closeBtn.addEventListener('click', function () {
       report('close requested')
       updateChip('● closing…', false)
-      fetch('/amadeus/action?cmd=close', { cache: 'no-store' }).catch(function () { /* ignore */ })
+      fetch('/sakiko/action?cmd=close', { cache: 'no-store' }).catch(function () { /* ignore */ })
     })
   }
 
@@ -2304,7 +2306,7 @@
   var pollReported = false
 
   function pollTick() {
-    fetch('/amadeus/poll?after=' + cursor, { cache: 'no-store' }).then(function (resp) {
+    fetch('/sakiko/poll?after=' + cursor, { cache: 'no-store' }).then(function (resp) {
       if (!resp.ok) throw new Error('poll ' + resp.status)
       return resp.json()
     }).then(function (data) {
