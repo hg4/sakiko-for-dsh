@@ -200,8 +200,10 @@ export function apply(ctx) {
       //   默认 400（与改动前的写死值一致，故默认行为只在**超长时**由「只取开头」变为「首+尾」）。
       narratorAssistantChars: 400,
       // 多工作区播报（Task 1）：多会话状态分片总开关 / 气泡前缀策略（'auto'|'always'，文案在 Task 2 使用）
+      // X5（任务 B）：默认由 'auto' 改为 **'always'** —— 单会话下也带「〔label〕」归属，
+      //   用户可听出「是谁在说话」；显式配 'auto' 仍是「活跃会话 ≥2 才带」的旧行为（白名单不变）。
       multiSession: true,
-      multiSessionPrefix: 'auto',
+      multiSessionPrefix: 'always',
       // 子代理会话播报开关（Task 5）：默认 true = 与既有行为完全一致；false 时子代理会话完全不参与播报与状态维护
       narrateSubagents: true,
       // 手机界面浮窗化（Task 1 / P8）：浮窗布局开关 / 主题预设 / 10 项自定义配色（含机身外框）/ 聊天区背景图
@@ -650,6 +652,7 @@ export function apply(ctx) {
       //   非 number / 越界一律忽略该键（保留旧值或默认值），合法值 Math.floor。
       if (typeof p.narratorAssistantChars === 'number' && p.narratorAssistantChars >= 0 && p.narratorAssistantChars <= NARR_ASSIST_MAX_CPS) out.narratorAssistantChars = Math.floor(p.narratorAssistantChars)
       // 多工作区播报（Task 1）：multiSession 布尔；multiSessionPrefix 枚举 auto|always
+      // 白名单保持不变；缺键时由 DEFAULT_CONFIG 补 'always'（X5 任务 B 起默认值）
       if (typeof p.multiSession === 'boolean') out.multiSession = p.multiSession
       if (typeof p.multiSessionPrefix === 'string' && ['auto', 'always'].indexOf(p.multiSessionPrefix) >= 0) out.multiSessionPrefix = p.multiSessionPrefix
       // 子代理会话播报开关（Task 5）：布尔白名单
@@ -2249,8 +2252,10 @@ export function apply(ctx) {
     // Task 2：播报归属与工作区标签（气泡前缀 + LLM 注入）
     //   标签来源 = Task 1 注册表的 label（会话标题 → basename(cwd) → basename(cwd)·sid4）
     //   口径（用户已确认）：气泡 CN 带「〔<label>〕」；jp 语音文本一律不改（不把中文名塞进日文 TTS）；
-    //   无归属播报（无 sid：启动欢迎语 / 空闲闲聊 / 来电 / 子代理·工作流·后台任务 special / testNarrator）
+    //   无归属播报（无 sid：启动欢迎语 / 空闲闲聊 / 来电 / 工作流·后台任务 special / testNarrator）
     //   一律不加前缀。
+    //   X5 例外：`subagent/end` 用 `info.id` 显式算出的标签（subagentEndPrefix）带前缀——
+    //   它**仍落默认槽**（不传 sid），只是气泡 CN 多了「〔label〕」。
     // ============================================================
     function labelForSid(sid) {
       if (typeof sid !== 'string' || sid.length === 0) return ''
@@ -2292,17 +2297,52 @@ export function apply(ctx) {
     //   ① 同回合下一个工具调用重复播报 START（startSpoken 被清）；
     //   ② 该回合剩余里程碑全部失效（maybeMilestone 要求 turnActive===true）；
     //   ③ turnGoalDone 被清 → 收尾由 A3「goal」降级为 done。
-    // 气泡前缀：'always' → 有归属即带；'auto' → 活跃会话 ≥2 才有；标签不可得（无 sid/未注册/空 label）→ 恒为 ''
+    // 气泡前缀：'always'（**默认**）→ 有归属即带；'auto' → 活跃会话 ≥2 才有；
+    //   标签不可得（无 sid/未注册/空 label）→ 恒为 ''
     // multiSession:false（总开关关闭）→ 恒为 ''：spec §4「关=退回现状单例行为」/§5.5「完全退回现状」，
     // 且保证 multiSession 仍是「一键回退到基线」的开关（前缀与 LLM 注入同属该特性）。
+    // X5 重构：策略本体抽成 attributionFor(sid,label)，供 subagentEndPrefix 在「显式给标签」时复用
+    //   同一套开关/模式判据（不复制策略、不绕过 multiSession 与 'auto' 的活跃数判据）。
+    // Minor-2（复审 X5）：**前缀与归属标签在同一处判定、一并回传**，返回 { prefix, label }。
+    //   隐式不变量：`label` 非空 ⟺ 显示前缀（prefix 以「〔label〕」开头）——保存下来供气泡与
+    //   lastSpeaks[].label 同源使用，杜绝「bubble 带〔x5-demo〕而 label 为空」的自相矛盾。
+    //   不显示前缀时（multiSession:false / mode='auto' 且活跃会话 <2 / 标签为空）两者同为空串。
+    function attributionFor(sid, label) {
+      const none = { prefix: '', label: '' }
+      if (config.multiSession === false) return none
+      if (typeof label !== 'string' || label.length === 0) return none
+      const mode = typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'always'
+      let show = false
+      if (mode === 'always') show = true
+      else if (mode === 'auto') show = activeSessionCount(sid) >= 2
+      return show ? { prefix: '〔' + label + '〕', label } : none
+    }
     function bubblePrefixFor(sid) {
-      if (config.multiSession === false) return ''
-      const label = labelForSid(sid)
-      if (label.length === 0) return ''
-      const mode = typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'auto'
-      if (mode === 'always') return '〔' + label + '〕'
-      if (mode === 'auto') return activeSessionCount(sid) >= 2 ? '〔' + label + '〕' : ''
-      return ''
+      return attributionFor(sid, labelForSid(sid)).prefix
+    }
+    // ============================================================
+    // X5（任务 A）：`subagent/end` 的归属前缀 + 归属标签。
+    //   事件本体**不带 sid 语义**，必须继续落默认槽（L2712：传 sid 会把这些事件挪进该会话的
+    //   节流槽，改变既有节奏）——所以**不传 sid**，改为在事件处理同步段把结果算好，
+    //   显式传 `bubblePrefix` / `label`（两条都只是「事件时刻快照」，不参与任何槽/节流判定）。
+    //   标签来源：**只有一条** —— 注册表 `labelForSid(info.id)`（经 attributionFor 复用
+    //   multiSession 开关 + mode 判据）。取不到（id 非字符串/空、或该 sid 未注册）→ 两者皆空
+    //   = 调用方不传前缀（保持改动前行为）。
+    //   ⚠ Minor-1（复审 X5，已删）：曾经还有一段「② 兜底」——`sessions` 里按
+    //     `recIsSubagent(rec) && rec.sid === info.id` 找记录、label 为空时退到 `rec.baseLabel`。
+    //     该分支**当前不可达**（复审结论，我复核认可）：`sessions` 唯一写入点 `registerSession`
+    //     必调 `refreshLabels()`，而它保证每条 rec 的 `label` 都非空（无 cwd/标题时回退 '会话'）；
+    //     且当 ① 因**总开关/mode 判据**返回空时，② 用同一个 attributionFor 必然同因返回空 ——
+    //     即 ② 无法改变任何输入的结果。此外 `rec.baseLabel` **不受子代理 12 字截断（Fix R2）**
+    //     约束，若将来因改动而变得可达，会产出越界前缀。故整段删除（不是「保留但改成 label」）：
+    //     保留一个恒不可达的分支只会继续误导后人。
+    //   ⚠ 剩余路径对「label 为空串」的覆盖：attributionFor 仍显式判空（防御式），但**该情况在
+    //     实践中同样到不了**——已注册 rec 的 label 恒非空（见上），未注册 sid 则 labelForSid 直接
+    //     返回 ''（此时按「取不到」处理，与判空同一条出口）。即：判空是防御，不是可达分支。
+    // ============================================================
+    function subagentEndPrefix(id) {
+      if (typeof id !== 'string' || id.length === 0) return { prefix: '', label: '' }
+      return attributionFor(id, labelForSid(id))
     }
 
     // ============================================================
@@ -2849,7 +2889,9 @@ export function apply(ctx) {
       // 气泡 CN = 「〔label〕」+ 原 cn（前缀策略见 bubblePrefixFor）；line.jp 原样送给 TTS（语音不念工作区名）。
       // memory.history 仍存不带前缀的原文（避免污染聊天上下文；{sid,label} 字段留 Task 4 记忆分层）。
       const sidKey = (typeof opts.sid === 'string' && opts.sid.length > 0) ? opts.sid : ''
-      const narrLabel = labelForSid(sidKey)
+      // Minor-2（复审 X5）：与 `bubblePrefix` 同一套口径——优先用 narrate() 入口写下的**事件时刻
+      // 归属标签快照**（`subagent/end` 这类无 sid 事件靠它拿到注册表标签），否则回落到按 sid 现查。
+      const narrLabel = (typeof opts.label === 'string') ? opts.label : labelForSid(sidKey)
       // Fix R1（Important-1）：优先用 narrate() 入口写下的**事件时刻快照**；仅当调用方没走 narrate
       // （或快照缺失）时回落到此刻现算。这样「最后一个收尾者」也不会因为 turnActive 已被清掉而掉前缀。
       const prefix = (typeof opts.bubblePrefix === 'string') ? opts.bubblePrefix : bubblePrefixFor(sidKey)
@@ -3926,7 +3968,7 @@ export function apply(ctx) {
           narratorMilestoneSteps: config.narratorMilestoneSteps,
           narratorAssistantChars: config.narratorAssistantChars,
           multiSession: config.multiSession !== false,
-          multiSessionPrefix: typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'auto',
+          multiSessionPrefix: typeof config.multiSessionPrefix === 'string' ? config.multiSessionPrefix : 'always',
         },
         state: {
           sid: String(st.sid || '').slice(0, 8),
@@ -4102,7 +4144,9 @@ export function apply(ctx) {
     //     不维护回合态（resetTurn/stepCount/blocking 全跳过）、不 narrate（因此不写 history/progress/
     //     counts/lastSpeaks/timeline push 行）；判定信号见 isSubagentSession() 注释。
     //   · `subagent/descriptor` 事件始终只用于登记 childSids（本身没有播报语义，开关开/关都不出声）。
-    //   · 既有 `subagent/end` 的 A4-1「子代理完成」特殊句**不受本开关影响**（无 sid → 默认槽，主会话层面的提示）。
+    //   · 既有 `subagent/end` 的 A4-1「子代理完成」特殊句**不受本开关影响**（无 sid → 默认槽，主会话层面的提示）；
+    //     不过它的气泡前缀来自 `info.id` 查注册表（X5 任务 A）——开关关闭时子代理会话不入注册表，
+    //     此时 `labelForSid` 未命中 → 无前缀（与本开关的语义一致，不是缺陷）。
     //   · 运行期切换立即生效：每个事件按当时的 config 值判定；已在播报队列/批次里的条目不撤回（边界见报告）。
     ctx.effect(() => ctx.on('session/event', (session, event) => {
       try {
@@ -4217,9 +4261,18 @@ export function apply(ctx) {
     // 子代理结束 → special A4-1；工作流完成/出错 → special A4-2/A4-3；后台任务结束 → special A4-4；agent/error → FAIL F1/F2
     // 多工作区（Task 1）：这些事件不带 sid → 落默认槽（defaultSlot），与任何会话的回合态/节流互不干扰；
     // 会话事件从不产生 special/fail 语义，故单会话下节奏与现状一致。
+    // X5（任务 A）：`subagent/end` **仍不传 sid**（否则会挪进该会话的节流槽），但用 `info.id`（子代理会话 id）
+    //   取归属 → 显式传 `bubblePrefix` + `label`（Minor-2：两者同源，气泡「〔label〕」与
+    //   lastSpeaks[].label 不再自相矛盾），使气泡 CN 以「〔<label>〕」开头（谁结束了可听/可看）。
+    //   仍受 multiSession 开关与 multiSessionPrefix 模式约束（复用 attributionFor）。
     ctx.effect(() => ctx.on('subagent/end', (info) => {
       try {
-        if (info && info.stopReason) narrate('special', { variant: 'subagent' })
+        if (info && info.stopReason) {
+          const o = { variant: 'subagent' }
+          const attr = subagentEndPrefix(info && typeof info.id === 'string' ? info.id : '')
+          if (attr.prefix.length > 0) { o.bubblePrefix = attr.prefix; o.label = attr.label }
+          narrate('special', o)
+        }
       } catch (e) { /* ignore */ }
     }))
 
