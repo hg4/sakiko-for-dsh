@@ -31,7 +31,12 @@
 //   argv: --token <uuid> --epoch <n> --dsh-pid <pid> --token-file <path> --log <path>
 //         [--poll-ms n] [--budget-ms n] [--no-stdin]
 //   令牌文件: {"token":<uuid|null>,"epoch":n,"dshPid":n,"watchdogPid":n,
-//             "updatedAt":<iso>,"services":[{"key":"api"|"bridge","pid":n,"port":n}]}
+//             "updatedAt":<iso>,
+//             "services":[{"key":"api"|"bridge","pid":n,"port":n,"createdMs":n,"createdSrc":"spawn"}]}
+//   注：createdMs = host 记录的该服务进程**创建时间锚点**（ms since epoch；host 用"亲眼看到 spawn
+//   返回的时刻"，不为此在 DSH 进程里起 powershell —— 实测那会卡住事件循环 300~700ms）。
+//   看门狗拿它跟**自己** psProcTree 查到的 createdMs（Win32_Process.CreationDate 口径）比：
+//   相差 >2s 即判"pid 已被复用"。字段缺失（旧世代令牌）时退化为"令牌 mtime + 1500ms"的弱闸门。
 //   日志: 追加到 --log 指定文件，每行前缀 "[HH:MM:SS] [watchdog] "
 //   注：看门狗**不读任何环境变量**，路径全部由 argv 显式传入（ctx.subprocess 的子进程拿不到
 //   DSH_* 变量，本进程虽然能拿到，但不允许依赖 —— 见验收台 F3）。
@@ -46,6 +51,7 @@ const opt = (() => {
   const out = {
     token: '', epoch: 0, dshPid: 0, tokenFile: '', log: '',
     pollMs: 2500, budgetMs: 14000, useStdin: true, useDescendants: true,
+    psExe: 'powershell.exe', noProcTable: false,
   }
   const argv = process.argv.slice(2)
   for (let i = 0; i < argv.length; i++) {
@@ -61,6 +67,11 @@ const opt = (() => {
     // 诊断/取证开关：关掉 PPID 链后代枚举，单独检验"端口兜底"这条安全网（生产路径不用）
     else if (a === '--no-descendants') out.useDescendants = false
     else if (a === '--no-stdin') out.useStdin = false
+    // **仅测试用**注入开关（生产路径不传，默认值一字不改）：把 powershell 换成别的可执行文件，
+    // 用来强制走"进程查询不可用 ⇒ 降级"那条分支（R-B 回归用例）；
+    // --no-proc-table 是同一件事的确定性版本（直接判定查询不可用，不依赖 spawn 失败语义）。
+    else if (a === '--ps-exe') out.psExe = String(next() || '')
+    else if (a === '--no-proc-table') out.noProcTable = true
   }
   return out
 })()
@@ -69,6 +80,7 @@ const WIN = process.platform === 'win32'
 
 // ---------------- 日志（追加语义，绝不覆盖） ----------------
 function short(t) { return (t === null || t === undefined || t === '') ? String(t) : String(t).slice(0, 8) }
+function iso(ms) { try { return new Date(Number(ms)).toISOString() } catch (e) { return '?' } }
 function stamp() { return '[' + new Date().toISOString().slice(11, 19) + '] [watchdog] ' }
 function wlog(line) {
   const msg = stamp() + line
@@ -110,9 +122,11 @@ function readTokenFile() {
 const PS_TIMEOUT_MS = 8000
 
 function psExec(script) {
+  // 测试注入：强制"进程表查不到"（生产路径不传这个开关）
+  if (opt.noProcTable) return null
   // 用 -EncodedCommand 传脚本，彻底绕开 cmd/powershell 的引号地狱
   const b64 = Buffer.from(script, 'utf16le').toString('base64')
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64],
+  const r = spawnSync(opt.psExe, ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64],
     { encoding: 'utf8', timeout: PS_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })
   // ⚠️ 注意：**空结果集是合法的**（登记 pid 已死、且没有后代 ⇒ 查询本来就返回 0 行）。
   // 只有"命令本身失败"（非 0 退出/起不来）才算查询不可用 —— 早期版本把"空输出"当成失败，
@@ -384,7 +398,7 @@ async function recover(reason, firedAt) {
   }
   const svcs = (Array.isArray(data.services) ? data.services : [])
     .filter((s) => s && Number(s.pid) > 0)
-    .map((s) => ({ key: String(s.key || '?'), pid: Number(s.pid), port: Number(s.port) || 0 }))
+    .map((s) => ({ key: String(s.key || '?'), pid: Number(s.pid), port: Number(s.port) || 0, createdMs: Number(s.createdMs) || 0 }))
   if (svcs.length === 0) {
     wlog('令牌匹配，但 services 为空（本代没有登记任何托管服务）→ 无事可做，退出')
     return { action: 'nothing-to-do' }
@@ -405,13 +419,38 @@ async function recover(reason, firedAt) {
     round++
     // 定向查询：登记 pid 自身 + 它们的后代（一次 PowerShell 调用，内部做 BFS）
     const procs = psProcTree(roots, opt.useDescendants ? 6 : 0)
-    if (procs === null && round === 1) wlog('进程查询不可用（拿不到 PPID/创建时间）→ 归属校验降级为「只看 token 匹配」')
+    // 端口持有者查询缓存：netstat 是整表查询，同一个端口本轮只查一次
+    const ownerCache = new Map()
+    const ownersOf = (port) => {
+      if (!(port > 0)) return null                     // 没登记端口 ⇒ 无从交叉证实
+      if (!ownerCache.has(port)) ownerCache.set(port, portOwners(port))
+      return ownerCache.get(port)
+    }
+    if (procs === null && round === 1) {
+      wlog('进程查询不可用（拿不到 PPID/创建时间）→ **已降级**：只杀"能被端口持有者交叉证实"的登记 pid，其余一律 fail-safe 跳过（绝不盲杀）')
+    }
 
-    // ---- 目标集合 = 登记 pid ∪ 其后代（父已死也算） ----
+    // ---- 目标集合 = **通过归属校验的** pid（登记 pid 或其后代） ----
     const targets = new Map()       // pid -> 人类可读的来源说明
     for (const s of svcs) {
       if (procs === null) {
-        targets.set(s.pid, s.key + '（未校验）')
+        // 降级分支（②）：没有进程表 ⇒ **不许盲杀**。此刻唯一还站得住的证据是
+        // "这个 pid 正在监听它登记的那个端口"（netstat 的权威结果，与进程表无关）。
+        const owners = ownersOf(s.port)
+        if (owners === null) {
+          if (!skipped.includes(s.pid)) {
+            skipped.push(s.pid)
+            wlog('降级模式：' + s.key + ' pid=' + s.pid + ' 没登记端口，无法用端口交叉证实 ⇒ fail-safe 跳过（不杀）')
+          }
+        } else if (owners.includes(s.pid)) {
+          targets.set(s.pid, s.key + '（降级：已被端口 ' + s.port + ' 的持有者交叉证实）')
+        } else {
+          if (!skipped.includes(s.pid)) {
+            skipped.push(s.pid)
+            wlog('降级模式：' + s.key + ' pid=' + s.pid + ' 不是端口 ' + s.port + ' 的持有者（持有者='
+              + (owners.length === 0 ? '无人在听该端口' : owners.join(',')) + '）⇒ fail-safe 跳过（不杀）')
+          }
+        }
         continue
       }
       const info = procs.get(s.pid)
@@ -428,19 +467,34 @@ async function recover(reason, firedAt) {
           const di = procs.get(d)
           // PID 复用防护（对后代用「DSH 死亡时刻」当上界）：本代后代必然在 DSH 死亡前就已存在；
           // 晚于死亡时刻才出现的，只可能是"父 pid 被复用后新拉起的进程" ⇒ 不碰。
-          if (di && Number(di.createdMs) > 0 && Number(di.createdMs) > firedAt + 5000) {
-            if (!skipped.includes(d)) { skipped.push(d); wlog('跳过 pid=' + d + '（' + s.key + ' 的名义后代）：它的创建时间晚于 DSH 死亡时刻 ⇒ 判为 pid 复用，不碰') }
+          // 容忍窗口 2026-09-13 收紧到 2000ms（原来 5000ms 太宽：真实后代不可能在 DSH 死后才出现）。
+          if (di && Number(di.createdMs) > 0 && Number(di.createdMs) > firedAt + 2000) {
+            if (!skipped.includes(d)) { skipped.push(d); wlog('跳过 pid=' + d + '（' + s.key + ' 的名义后代）：它的创建时间晚于 DSH 死亡时刻 2s 以上 ⇒ 判为 pid 复用，不碰') }
             continue
           }
           if (!targets.has(d)) targets.set(d, s.key + ' 的后代')
         }
         continue
       }
-      // 登记 pid 还活着：PID 复用防护（本代服务一定早于最后一次写令牌文件）
-      if (Number(info.createdMs) > 0 && tf.mtimeMs > 0 && Number(info.createdMs) > tf.mtimeMs + 5000) {
+      // 登记 pid 还活着：**身份校验**（PID 复用闸门）
+      const curMs = Number(info.createdMs) > 0 ? Number(info.createdMs) : 0
+      const recMs = s.createdMs > 0 ? s.createdMs : 0
+      if (curMs > 0 && recMs > 0) {
+        // 令牌里记了本代服务的进程创建时间（host.mjs 用与 psProcTree 同一口径写入）⇒
+        // 直接比身份，不再依赖"令牌文件比进程新"这种时间启发式（③）。
+        if (Math.abs(curMs - recMs) > 2000) {
+          if (!skipped.includes(s.pid)) {
+            skipped.push(s.pid)
+            wlog('拒绝回收 ' + s.key + ' pid=' + s.pid + '：该 pid 已被复用（现进程创建于 ' + iso(curMs)
+              + '，令牌记录的是 ' + iso(recMs) + '，相差 ' + Math.abs(curMs - recMs) + 'ms > 2s）→ fail-safe 跳过')
+          }
+          continue
+        }
+      } else if (curMs > 0 && tf.mtimeMs > 0 && curMs > tf.mtimeMs + 1500) {
+        // 兼容旧世代令牌（没有 createdMs 字段）：只能退化为时间启发式，容忍窗口从 5000ms 收紧到 1500ms
         if (!skipped.includes(s.pid)) {
           skipped.push(s.pid)
-          wlog('拒绝回收 ' + s.key + ' pid=' + s.pid + '：该 pid 已被复用（现进程创建时间晚于本代令牌文件）→ fail-safe 跳过')
+          wlog('拒绝回收 ' + s.key + ' pid=' + s.pid + '：该 pid 已被复用（令牌里没有 createdMs，退化判据：现进程创建时间晚于本代令牌文件 mtime 1500ms 以上）→ fail-safe 跳过')
         }
         continue
       }
@@ -488,7 +542,13 @@ async function recover(reason, firedAt) {
       wlog('端口复验前发现令牌已变化 → 停止后续动作（fail-safe）')
       break
     }
-    const allowed = [...new Set([...roots, ...targets.keys(), ...killed])]
+    // ⚠️ 归属判定集合**只含通过校验的目标**（targets ∪ killed），并且把「被判为 pid 复用」的
+    //    skipped 当**永久排除集**。旧版本这里写的是 `[...roots, ...targets.keys(), ...killed]` ——
+    //    roots 是**未经校验的原始登记 pid**，于是刚刚在 440 行被拒绝的登记 pid 又被端口兜底认领、
+    //    整树杀掉（审查 S6b 实测：同一秒内两行日志自相矛盾，
+    //    "拒绝回收 api pid=3608：该 pid 已被复用 → fail-safe 跳过" 之后紧跟
+    //    "端口 24206 的持有者 pid=3608 确认属本代服务（登记集∪后代集）→ 树杀成功"）。
+    const allowed = [...new Set([...targets.keys(), ...killed])].filter((p) => !skipped.includes(p))
     for (const p of openNow) {
       const owners = portOwners(p)
       if (owners.length === 0) {
@@ -496,15 +556,26 @@ async function recover(reason, firedAt) {
         continue
       }
       for (const o of owners) {
-        // 归属判定：① 直接就是登记/目标集里的 pid；② 已枚举到的后代；
-        // ③ 枚举被关掉时，用**定向的祖先链查询**（一次 PowerShell，最多 6 级）往上找登记 pid。
+        // 永久排除集：已判定"pid 已被复用"的 pid，绝不允许被端口兜底重新认领
+        if (skipped.includes(o)) {
+          if (!refused.has(o)) {
+            refused.add(o)
+            wlog('端口 ' + p + ' 的持有者 pid=' + o + ' 落在本代的「PID 复用跳过集」里（本代不认这个 pid）→ 不做任何操作（fail-safe）')
+          }
+          continue
+        }
+        // 归属判定：① 直接就是**已校验**的目标集/已确认杀掉里的 pid；② 已枚举到的后代；
+        // ③ 枚举被关掉时，用**定向的祖先链查询**（一次 PowerShell，最多 6 级）往上找已校验的目标 pid。
         let ours = allowed.includes(o)
         if (!ours && procs !== null && opt.useDescendants) {
           for (const r of roots) if (descendantsFrom(procs, r).includes(o)) { ours = true; break }
         }
         if (!ours && !opt.useDescendants) {
-          // 祖先链判定：从端口持有者往上走，**任何一级的 pid 或它的 ppid 命中"登记集∪已确认集合"**都算本代。
+          // 祖先链判定：从端口持有者往上走，**任何一级的 pid 或它的 ppid 命中同一套过滤后的集合**才算本代。
           // （只比对"链上的 pid"是不够的：链在父进程处就断了，而父正是登记在册的启动器 pid。）
+          // 注意：过滤后的集合不含"未经校验的登记 pid"，所以"登记启动器已死 + 关掉后代枚举"这条
+          // 诊断路径下，端口持有者**认不出来** ⇒ 只记日志、不杀。（生产路径永远带后代枚举，
+          // 后代会被并进 targets，不影响真实回收；方向按 fail-safe 选"宁可漏杀"。）
           const chain = psAncestorChain(o, 6)
           if (chain !== null) {
             ours = [...chain.entries()].some(([p, info]) => allowed.includes(p) || allowed.includes(Number(info.ppid)))
@@ -516,7 +587,7 @@ async function recover(reason, firedAt) {
             const r2 = killTree(o)
             if (r2.ok || !pidAlive(o)) {
               killed.add(o)
-              wlog('端口 ' + p + ' 的持有者 pid=' + o + ' 确认属本代服务（登记集∪后代集）→ 树杀成功（' + r2.how + '）')
+              wlog('端口 ' + p + ' 的持有者 pid=' + o + ' 确认属本代服务（已校验的目标集∪已处置集）→ 树杀成功（' + r2.how + '）')
             } else {
               if (!failed.includes(o)) failed.push(o)
               wlog('★ 端口 ' + p + ' 的持有者 pid=' + o + ' 属本代服务，但树杀失败：' + r2.how + ' → 继续复验/重试')
@@ -524,7 +595,7 @@ async function recover(reason, firedAt) {
           }
         } else if (!refused.has(o)) {
           refused.add(o)
-          wlog('端口 ' + p + ' 仍被 pid=' + o + ' 监听，但它不在本代登记集∪后代集内 → 不做任何操作（fail-safe：绝不误杀外来服务）')
+          wlog('端口 ' + p + ' 仍被 pid=' + o + ' 监听，但它不在本代**已校验**的目标集内 → 不做任何操作（fail-safe：绝不误杀外来服务）')
         }
       }
     }
@@ -544,10 +615,11 @@ async function recover(reason, firedAt) {
   } else {
     wlog('回收结束：端口 ' + openNow.join('/') + ' 仍在监听（已确认消失的 pid=[' + (killedList || '无') + ']'
       + (deadRoots.length > 0 ? '；登记启动器已死 pid=' + deadRoots.join('/') : '')
-      + (skipped.length > 0 ? '；按 PID 复用跳过 ' + skipped.join('/') : '')
+      + (skipped.length > 0 ? '；按 PID 复用/无法证实跳过 ' + skipped.join('/') : '')
+      + (refused.size > 0 ? '；端口兜底拒绝的无关 pid=' + [...refused].join('/') : '')
       + failNote + '，耗时 ' + used + 'ms，轮次=' + round + '）')
   }
-  return { action: 'recovered', killed: [...killed], failed, skipped, deadRoots, portsStillOpen: openNow, elapsedMs: used, rounds: round }
+  return { action: 'recovered', killed: [...killed], failed, skipped, refused: [...refused], deadRoots, portsStillOpen: openNow, elapsedMs: used, rounds: round }
 }
 
 function fire(reason) {

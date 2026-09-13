@@ -3,8 +3,12 @@
 // SAKIKO for DSH — 看门狗（watchdog）快回路测试
 // ============================================================
 // 用法（默认测**本仓库**的插件；跑 main 分支对照时用 --plugin 指到那份干净副本）：
-//   node tools/test-watchdog.mjs [--plugin <插件目录>] [--case all|positive|token-mismatch|external|graceful]
-//                                [--api-port 19880] [--bridge-port 18000] [--keep] [--out <结果目录>]
+//   node tools/test-watchdog.mjs [--plugin <插件目录>] [--case all|<用例名>]
+//                                [--api-port 21880] [--bridge-port 21000] [--keep] [--out <结果目录>]
+//   用例名：positive | detached-launcher | fallback-port | token-mismatch | external | graceful
+//          | log-append | gate-reuse-legacy-nodesc | gate-reuse-legacy-desc | gate-reuse-control
+//          | degraded-not-listening | degraded-listening | createdms-mismatch | createdms-match
+//          | createdms-token | stop-port-recheck | watchdog-cwd
 //
 // 设计要点（**这不是"跑完没报错就算过"**）：
 //   * 被测的不是本脚本自己模仿的逻辑，而是**插件真实的 host.mjs**：本脚本生成一个
@@ -15,8 +19,14 @@
 //   * 每个 case 都先断言"前置事实"（例：看门狗确实活着），避免**空过**（vacuous pass）——
 //     在未修版本上这些前置断言会先失败，随后我们照样把"孤儿残留"的原始证据打出来。
 //   * 只用临时端口与自己刚起的 dummy 进程；杀之前一律按 pid + 启动时间核对是自己起的。
+//
+// R-A~R-D（2026-09-13 独立审查的 3 项误杀阻塞项 + 1 项条件项）逐条对应：
+//   gate-reuse-*      ①  端口兜底不得绕过 PID 复用闸门（审查 S6b：allowlist 里混进了未校验的登记 pid）
+//   degraded-*        ②  进程查询不可用（降级）时不许"盲杀"，只杀端口可证实的
+//   createdms-*       ③  PID 复用闸门从"时间启发式"换成"创建时间身份校验"
+//   stop-port-recheck ④  优雅停止后有界复核端口；端口仍被占就不许把看门狗收摊
 import { spawn, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -82,7 +92,35 @@ const FIXTURE = new Set()
 function track() {
   for (const x of arguments) if (Number(x) > 0) FIXTURE.add(Number(x))
 }
-function liveFixturePids() { return [...FIXTURE].filter((p) => pidAlive(p)).sort((a, b) => a - b) }
+
+// 本测试起过的进程"身份判据"：命令行里必须出现本测试的目录（所有 case 都在 OUT_ROOT 下）
+// 或插件里的 watchdog.mjs。为什么必须判身份：**Windows 会复用 pid**，只按 pidAlive 判"残留"，
+// 会把一个恰好复用到同号的外来进程误报成本测试的残留（2026-09-13 实测：pid 10636 在 detached-launcher
+// 用例里已确认"全灭"，90s 后被系统复用 ⇒ 收尾又把它列成残留）。
+function isOursByCmd(cmd) {
+  const s = String(cmd || '')
+  const low = s.toLowerCase()
+  return s.includes(OUT_ROOT) || low.includes('watchdog.mjs') || low.includes('fake-dsh.mjs')
+}
+
+function liveFixturePids() {
+  const alive = [...FIXTURE].filter((p) => pidAlive(p))
+  if (alive.length === 0) return []
+  const info = psInfo(alive)            // 一次定向查询（不拉全表）
+  const ours = []
+  const foreign = []
+  for (const p of alive) {
+    const i = info.get(p)
+    if (!i || !i.cmd) { foreign.push(p + '(查不到命令行，可能刚退出)'); continue }
+    if (isOursByCmd(i.cmd)) ours.push(p)
+    else foreign.push(p + '(cmd=' + String(i.cmd).replace(/\s+/g, ' ').slice(0, 70) + ')')
+  }
+  if (foreign.length > 0) {
+    console.log('  [identity] 登记过的 pid 里有 ' + foreign.length + ' 个已被系统复用/不是本测试的进程，'
+      + '不计入残留：' + foreign.join(' | '))
+  }
+  return ours.sort((a, b) => a - b)
+}
 
 // taskkill（带 /T）：**必须看退出码与输出**；失败且目标仍存活 ⇒ 记下、不靠反复重试掩盖（资源纪律 #5）
 function killTreeStrict(pid, why) {
@@ -201,8 +239,63 @@ function readJson(p) {
   try { return JSON.parse(readFileSync(p, 'utf8')) } catch (e) { return null }
 }
 
+// 安全的时间格式化：令牌里可能根本没有 createdMs（未修版本/旧世代）⇒ 不能直接 new Date(undefined)
+function msStr(ms) {
+  const n = Number(ms)
+  return (Number.isFinite(n) && n > 0) ? new Date(n).toISOString() : 'n/a'
+}
+
 function logText(p) {
   try { return readFileSync(p, 'utf8') } catch (e) { return '' }
+}
+
+// 轮转出来的历史档（新命名 `.1-<ts>`；旧实现的 `.1` 也一并收进来，好让"未修版本"的对照能打印证据）
+function rotatedLogs(c) {
+  try {
+    return readdirSync(path.dirname(c.voiceLog))
+      .filter((n) => n.startsWith(path.basename(c.voiceLog) + '.1'))
+      .sort()
+      .map((n) => ({ name: n, text: logText(path.join(path.dirname(c.voiceLog), n)) }))
+  } catch (e) { return [] }
+}
+
+// 直接按**插件写令牌文件的格式**喂看门狗（R-A/R-B/R-C 用：这些用例要精确控制 token/mtime/createdMs，
+// 走插件就会把这三个量都盖掉）。mtimeMs 用 utimesSync 显式设定 —— "登记 pid 的现进程比令牌还新 N 秒"
+// 这个前提只能这么造。
+function writeRawToken(c, obj, opts) {
+  mkdirSync(path.dirname(c.tokenFile), { recursive: true })
+  writeFileSync(c.tokenFile, JSON.stringify(obj, null, 2) + '\n', 'utf8')
+  if (opts && Number.isFinite(opts.mtimeMs)) {
+    const sec = opts.mtimeMs / 1000
+    utimesSync(c.tokenFile, sec, sec)
+  }
+  return readJson(c.tokenFile)
+}
+
+// 直接起看门狗（不经过插件）：--dsh-pid 用**本测试进程**（一直活着，所以不会走 pid 轮询那条路），
+// 触发一律靠 stdin EOF。extraArgs 用来注入 --no-descendants / --ps-exe 这些开关。
+function startWatchdogDirect(c, token, extraArgs) {
+  const wd = spawn(process.execPath, [
+    path.join(PLUGIN, 'watchdog.mjs'),
+    '--token', token, '--epoch', '1', '--dsh-pid', String(process.pid),
+    '--token-file', c.tokenFile, '--log', c.voiceLog, '--poll-ms', '60000',
+  ].concat(extraArgs || []), { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, detached: true, cwd: c.dir })
+  try { if (wd.stdin) wd.stdin.on('error', () => { /* EPIPE 无所谓 */ }) } catch (e) { /* ignore */ }
+  track(wd.pid)
+  return wd
+}
+
+// 起一个"单个进程"的 dummy（squat=监听端口 / sleeper=不监听），返回 { pid, createdMs }
+async function startSingleDummy(c, role, port, tag) {
+  const rec = path.join(c.dir, 'single-' + tag + '-' + port + '.json')
+  const ch = spawn(process.execPath, [c.dummyScript, role, String(port), rec], { stdio: 'ignore', windowsHide: true, detached: true })
+  const wantListen = role === 'squat'
+  const ok = await waitFor(async () => existsSync(rec) && (!wantListen || (await portOpen(port, 400))), 15000, 300)
+  const j = readJson(rec)
+  const pid = j && Number(j.pid) > 0 ? Number(j.pid) : ch.pid
+  track(pid)
+  const info = psInfo([pid]).get(pid)
+  return { pid, rec, ok: ok.ok, createdMs: info ? Number(info.createdMs) || 0 : 0, role }
 }
 
 // ---------------- 生成"假 DSH 进程"与 dummy 服务（都写进临时目录，仓库里不留机器相关路径） ----------------
@@ -221,6 +314,17 @@ const out = process.argv[4]
 
 if (role === 'grandchild') {
   // 常驻孙进程：不监听端口（真实 GPT-SoVITS 树里同样有这类进程，只按端口找会漏掉它）
+  setInterval(() => { }, 1000)
+} else if (role === 'squat') {
+  // R-A/R-B/R-C 用：**登记 pid 自己就是监听者**（模拟"pid 被复用后，占用者正好在监听登记端口"）
+  const srv = net.createServer((s) => { s.on('error', () => { }); s.end('dummy') })
+  srv.on('error', (e) => { process.stderr.write('squat server error: ' + e.message + '\n') })
+  srv.listen(port, '127.0.0.1', () => { process.stdout.write('SQUAT-LISTEN ' + port + ' pid=' + process.pid + '\n') })
+  writeFileSync(out, JSON.stringify({ role: 'squat', pid: process.pid, port, at: new Date().toISOString() }, null, 2))
+  setInterval(() => { }, 1000)
+} else if (role === 'sleeper') {
+  // 对照组用：**不监听任何端口**的常驻进程（同构造、只差"没占端口"这一项）
+  writeFileSync(out, JSON.stringify({ role: 'sleeper', pid: process.pid, port: 0, at: new Date().toISOString() }, null, 2))
   setInterval(() => { }, 1000)
 } else if (role === 'worker') {
   process.on('uncaughtException', (e) => { process.stderr.write('worker uncaught: ' + (e && e.stack ? e.stack : String(e)) + '\n') })
@@ -254,6 +358,7 @@ const pluginDir = args.plugin
 const tmpDir = args.tmp
 const mode = args.mode || 'idle'
 const launcherDetached = args['launcher-detached'] === '1'
+const terminateLauncherOnly = args['terminate-launcher-only'] === '1'
 const launcherScript = args.launcher
 const tokenFile = args['token-file']
 const apiPort = Number(args['api-port'])
@@ -285,9 +390,13 @@ function killTree(pid) {
   if (!pid) return
   if (process.platform === 'win32') {
     // 假 DSH 里的 terminate()/terminateForHostExit()：**看退出码**并把结果写进 driver 日志（资源纪律 #5）
-    const r = spawnChild('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8', windowsHide: true })
+    // --terminate-launcher-only 1（R-D 用）：只杀启动器、**不带 /T**，复刻"terminate 只终结了启动器，
+    // 而已经 breakaway 的 worker 还占着端口"这种退化情形（真实 ctx.subprocess 未必这样，这里测的是
+    // **插件对这种情况的反应**：不许把看门狗收摊、不许报"停干净了"）。
+    const argv = terminateLauncherOnly ? ['/PID', String(pid), '/F'] : ['/PID', String(pid), '/T', '/F']
+    const r = spawnChild('taskkill', argv, { encoding: 'utf8', windowsHide: true })
     const out = String((r && (r.stdout || r.stderr)) || '').trim().replace(/\s+/g, ' ').slice(0, 100)
-    note('taskkill /PID ' + pid + ' /T /F → exit=' + (r ? r.status : '?') + ' ' + JSON.stringify(out))
+    note('taskkill ' + argv.join(' ') + ' → exit=' + (r ? r.status : '?') + ' ' + JSON.stringify(out))
   } else {
     try { process.kill(-pid, 'SIGKILL') } catch (e) { try { process.kill(pid, 'SIGKILL') } catch (e2) { } }
   }
@@ -410,12 +519,14 @@ process.stdout.write('EVIDENCE ' + JSON.stringify(ev) + '\n')
 writeFileSync(tmpDir + '/driver-ready.json', JSON.stringify({ ev: ev, token: tokenSnapshot() }, null, 2))
 note('证据已写入 ' + tmpDir + '/driver-ready.json')
 
-if (mode === 'stop') {
+if (mode === 'stop' || mode === 'stop-hold') {
   const r = await callVoice('?action=stop')
   writeFileSync(tmpDir + '/driver-stop.json', r.body)
   process.stdout.write('STOP-RESPONSE ' + r.body.replace(/\s+/g, ' ').slice(0, 600) + '\n')
-  await sleep(5000)
-  process.exit(0)
+  note('stop 响应已写入 driver-stop.json（mode=' + mode + '）')
+  // stop-hold：**保持假 DSH 活着**（脚本自己收尾）—— R-D 要在"停止之后、DSH 还在"的窗口里
+  // 观察看门狗有没有被收摊；若让假 DSH 退出，看门狗会因为 stdin EOF 触发回收，观察窗口就没了。
+  if (mode === 'stop') { await sleep(5000); process.exit(0) }
 }
 setInterval(() => { }, 1000)
 `
@@ -464,6 +575,8 @@ function startDriver(c, apiPort, bridgePort, mode, opts) {
   const out = []
   const extra = []
   if (opts && opts.launcherDetached) extra.push('--launcher-detached', '1')
+  if (opts && opts.terminateLauncherOnly) extra.push('--terminate-launcher-only', '1')
+  const env = Object.assign({}, process.env, { DSH_HOME: c.dshHome, SAKIKO_ROOT: (opts && opts.sakikoRoot) || PLUGIN })
   const child = spawn(process.execPath, [
     c.driverScript,
     '--plugin', PLUGIN,
@@ -477,7 +590,7 @@ function startDriver(c, apiPort, bridgePort, mode, opts) {
     cwd: c.dir,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: Object.assign({}, process.env, { DSH_HOME: c.dshHome, SAKIKO_ROOT: PLUGIN }),
+    env: env,
   })
   child.stdout.on('data', (b) => out.push(String(b)))
   child.stderr.on('data', (b) => out.push('[stderr] ' + String(b)))
@@ -510,6 +623,24 @@ function findWatchdogs(tokenFile) {
   if (!i) return []
   if (!String(i.cmd).toLowerCase().includes('watchdog.mjs')) return []
   return [{ pid, cmd: i.cmd }]
+}
+
+// 诊断串：把 findWatchdogs 判空的每一步都摊开（前置断言失败时必须能看出卡在哪一步）
+function wdDiag(c) {
+  const tok = readJson(c.tokenFile)
+  const pid = tok && Number(tok.watchdogPid) > 0 ? Number(tok.watchdogPid) : 0
+  const info = pid > 0 ? psInfo([pid]).get(pid) : undefined
+  return 'token=' + (tok ? String(tok.token).slice(0, 8) : '（无令牌文件）')
+    + '；token.watchdogPid=' + (tok ? String(tok.watchdogPid) : 'n/a')
+    + '；pidAlive=' + (pid > 0 ? String(pidAlive(pid)) : 'n/a')
+    + '；psInfo.cmd=' + (info ? JSON.stringify(String(info.cmd).slice(0, 120)) : '（查不到该 pid）')
+    + '；services=' + (tok ? JSON.stringify(tok.services) : 'n/a')
+}
+
+// 有界等待"令牌文件里的看门狗登记就位且进程活着"（插件写令牌是异步的：不要用一次瞬时读去赌）
+async function waitForWatchdog(c, timeoutMs) {
+  const r = await waitFor(() => findWatchdogs(c.tokenFile).length === 1, timeoutMs || 20000, 400)
+  return { wds: findWatchdogs(c.tokenFile), ok: r.ok, ms: r.ms }
 }
 
 function portOwners(ports) {
@@ -931,33 +1062,50 @@ async function caseLogAppend(apiPort, bridgePort) {
   d2.stopFlush()
 
   const log2 = logText(c.voiceLog)
-  const rot = logText(c.voiceLog + '.1')
+  const rots = rotatedLogs(c)
+  const rotAll = rots.map((r) => r.text).join('\n')
   const sizeAfter = (() => { try { return statSync(c.voiceLog).size } catch (e) { return 0 } })()
   rec('log-append', '★ 第一代的行在第二代起来之后仍然查得到（append 语义，不再被整份覆写）',
-    rot.includes(marker1) || log2.includes(marker1),
-    'marker=「' + marker1 + '」；.1 档里有=' + rot.includes(marker1) + '；主档里有=' + log2.includes(marker1))
-  rec('log-append', '超过 1MB 时轮转出 .1（旧档保留一份）', rot.length > 0 && sizeAfter < sizeBefore,
-    '.1 长度=' + rot.length + '；主档 ' + sizeBefore + ' → ' + sizeAfter + ' 字节')
+    rotAll.includes(marker1) || log2.includes(marker1),
+    'marker=「' + marker1 + '」；历史档里有=' + rotAll.includes(marker1) + '；主档里有=' + log2.includes(marker1))
+  rec('log-append', '★ 超过 1MB 时轮转出**带时间戳**的历史档 .1-<ts>（不再用"先 rm 再 rename"那对会互相删档的 .1）',
+    rots.length >= 1 && /^voice-autostart\.log\.1-\d{4}-\d\d-\d\dT/.test(rots[0].name) && sizeAfter < sizeBefore,
+    '历史档=' + JSON.stringify(rots.map((r) => r.name)) + '；主档 ' + sizeBefore + ' → ' + sizeAfter + ' 字节')
+  rec('log-append', '★ 历史档最多保留 2 份（文件名互不相同 ⇒ 两代同时轮转也不会互相删掉刚写下的记录）',
+    rots.length <= 2, '历史档数=' + rots.length)
   rec('log-append', '第二代自己的记录写进了主档（新档从本代开始）', log2.includes('已拉起 GPT-SoVITS api pid='),
     (log2.split('\n').filter((l) => l.length > 0).slice(0, 3).join(' | ')).slice(0, 300))
+  // 源码级断言（无法用运行时事件直接证明"看门狗没有轮转"）：看门狗只 append，没有任何改名/删除/覆写动作
+  const wdSrc = readFileSync(path.join(PLUGIN, 'watchdog.mjs'), 'utf8')
+  rec('log-append', '★ 看门狗进程永不轮转（源码里只有 appendFileSync，没有 rename/rm/覆写日志的动作）',
+    /appendFileSync/.test(wdSrc) && !/renameSync|rmSync|unlinkSync|writeFileSync|truncate/.test(wdSrc),
+    'watchdog.mjs 里 appendFileSync=' + /appendFileSync/.test(wdSrc)
+    + '、rename/rm/覆写动作=' + /renameSync|rmSync|unlinkSync|writeFileSync|truncate/.test(wdSrc))
   console.log('  --- 原始证据 ---')
   console.log('  日志主档: ' + c.voiceLog + '（' + sizeAfter + ' 字节，前 3 行）')
   for (const l of log2.split('\n').filter((x) => x.length > 0).slice(0, 3)) console.log('    ' + l)
-  console.log('  日志轮转档: ' + c.voiceLog + '.1' + '（' + rot.length + ' 字符）')
-  for (const l of rot.split('\n').filter((x) => x.includes(marker1) || x.includes('[watchdog] 已拉起')).slice(0, 3)) console.log('    ' + l)
+  console.log('  日志历史档: ' + (rots.length === 0 ? '（无）' : JSON.stringify(rots.map((r) => r.name + '=' + r.text.length + '字符'))))
+  for (const l of rotAll.split('\n').filter((x) => x.includes(marker1) || x.includes('[watchdog] 已拉起')).slice(0, 3)) console.log('    ' + l)
   await cleanup(c, cx)
   if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
   return c
 }
 
-// 端口兜底单独验证（控制者要求）：登记的启动器**已死** + 关掉 PPID 链后代枚举 ⇒
-// 只剩"按端口找持有者 → 用 ppid 链判定它属于本代（走到已死的启动器 pid 上）→ 树杀"这一条路。
+// 端口兜底单独验证（诊断开关 --no-descendants）—— **契约在 2026-09-13 被 ① 改掉了**，本用例随之改写：
+// 旧契约（未修版本 c5860cf）：登记启动器已死 + 不做后代枚举 ⇒ 端口兜底的"祖先链判定"会走到已死的
+//   登记 pid 上，于是把 worker 认成"本代的"、树杀掉。为此 `allowed` 里必须塞进**未经校验的原始登记
+//   pid**（`...roots`）—— 而这正是 ① 的漏洞：同一个 pid 刚被判成"已被复用"也能被端口兜底认领。
+// 新契约：`allowed` 只含**通过校验的目标**（targets ∪ killed），skipped 是永久排除集。于是
+//   "登记启动器已死 + 关掉后代枚举"这条**诊断路径**下，端口持有者认不出来 ⇒ 只记日志、**不杀**。
+//   （方向按 fail-safe 选"宁可漏杀"：PID 复用的登记 pid 与"父已死"的登记 pid 在证据上无法区分。
+//    生产路径永远带后代枚举 —— host.mjs 拉起看门狗时只传 token/epoch/dsh-pid/token-file/log ——
+//    真实强杀形状的后代会被并进 targets，回收不受影响，见 positive 用例。）
 async function caseFallbackPort(apiPort, bridgePort) {
   const name = 'fallback-port'
   const c = makeCaseDir(name)
   const PORTS = [apiPort]
   const cx = { ports: PORTS, extraPids: [] }
-  console.log('\n=== case fallback-port（只靠端口兜底：登记启动器已死 + --no-descendants）===')
+  console.log('\n=== case fallback-port（诊断路径 --no-descendants：登记启动器已死 ⇒ 端口兜底**认不出**持有者）===')
   console.log('  tmp=' + c.dir + '\n  端口=' + apiPort + '（单服务）')
   const ch = spawn(process.execPath, [c.dummyScript, 'launcher', String(apiPort), path.join(c.dir, 'svc-' + apiPort + '.json')], { stdio: 'ignore', windowsHide: true })
   track(ch.pid)
@@ -970,11 +1118,10 @@ async function caseFallbackPort(apiPort, bridgePort) {
 
   // 令牌文件完全按插件的格式写：services 里登记的是**启动器** pid（与 host.mjs 一致）
   const token = 'fallback-port-' + Date.now()
-  mkdirSync(path.dirname(c.tokenFile), { recursive: true })
-  writeFileSync(c.tokenFile, JSON.stringify({
+  writeRawToken(c, {
     token, epoch: 1, dshPid: process.pid, watchdogPid: 0, updatedAt: new Date().toISOString(),
     services: [{ key: 'api', pid: pApi.launcher, port: apiPort }],
-  }, null, 2), 'utf8')
+  }, null)
   // 杀掉启动器（模拟"强杀 DSH 时启动器随父同刻死"），**不带 /T** ⇒ detached 的 worker/孙进程活下来
   killPidOnly(pApi.launcher, '制造启动器已死的形状')
   await sleep(900)
@@ -983,35 +1130,402 @@ async function caseFallbackPort(apiPort, bridgePort) {
     '启动器存活=' + JSON.stringify([pApi.launcher].filter(pidAlive)) + '（应为空）'
     + '；worker 存活=' + JSON.stringify([pApi.worker].filter(pidAlive)))
 
-  const wdScript = path.join(PLUGIN, 'watchdog.mjs')
-  const wd = spawn(process.execPath, [
-    wdScript, '--token', token, '--epoch', '1', '--dsh-pid', String(process.pid),
-    '--token-file', c.tokenFile, '--log', c.voiceLog, '--no-descendants', '--poll-ms', '60000',
-  ], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, detached: true, cwd: c.dir })
+  const wd = startWatchdogDirect(c, token, ['--no-descendants'])
   cx.wd = wd
-  track(wd.pid)
-  try { if (wd.stdin) wd.stdin.on('error', () => { /* EPIPE 无所谓 */ }) } catch (e) { /* ignore */ }
   await sleep(1500)
-  rec(name, '前置：看门狗已起来（--no-descendants：只走端口兜底这条安全网）', pidAlive(wd.pid), 'watchdog pid=' + wd.pid)
+  rec(name, '前置：看门狗已起来（--no-descendants：不做 PPID 链后代枚举）', pidAlive(wd.pid), 'watchdog pid=' + wd.pid)
 
   const t0 = Date.now()
   try { wd.stdin.end() } catch (e) { /* ignore */ }   // 主信号：stdin EOF ⇒ 触发回收
-  const clr = await waitFor(async () => !(await portOpen(apiPort, 400)), 15000, 400)
-  const elapsed = Date.now() - t0
-  rec(name, '≤15s 内端口空闲（登记 pid 已死、又不做后代枚举，只能靠端口兜底）', clr.ok, clr.ok
-    ? ('释放耗时 ' + elapsed + 'ms')
-    : ('15s 内仍未释放：' + apiPort + '=' + (await portOpen(apiPort, 400)) + '（' + elapsed + 'ms）'))
-  const dead = await waitFor(() => dummies.every((p) => !pidAlive(p)), 15000, 400)
-  rec(name, 'worker 与孙进程全部消失（启动器本就已经死了）', dead.ok,
-    'pids=' + dummies.join(',') + '；仍存活=' + dummies.filter(pidAlive).join(',') + '（空=全灭）')
-  const wdGone = await waitFor(() => !pidAlive(wd.pid), 15000, 400)
+  const wdGone = await waitFor(() => !pidAlive(wd.pid), 40000, 400)
   rec(name, '看门狗自行退出', wdGone.ok, '耗时 ' + (Date.now() - t0) + 'ms')
   const lg = logText(c.voiceLog)
-  rec(name, '★★ 日志出现「端口 … 的持有者 pid=… 确认属本代服务（登记集∪后代集）→ 树杀成功」',
-    /的持有者 pid=\d+ 确认属本代服务/.test(lg),
+  rec(name, '★★ 端口持有者**没有被杀**（allowed 里不再有"未经校验的登记 pid" ⇒ 认不出 ⇒ 不杀）',
+    pidAlive(pApi.worker) && (await portOpen(apiPort, 500)),
+    'worker 存活=' + pidAlive(pApi.worker) + '；端口在听=' + (await portOpen(apiPort, 500)) + '（旧契约下这里会被树杀）')
+  rec(name, '★ 日志如实写明"端口 … 的持有者 … 不在本代**已校验**的目标集内 → 不做任何操作（fail-safe）"',
+    /不在本代\*\*已校验\*\*的目标集内/.test(lg),
     (lg.split('\n').filter((l) => l.includes('持有者')).slice(-2).join(' | ')).slice(0, 300))
+  rec(name, '日志**没有**「确认属本代服务」（不再把未经校验的登记 pid 当所有权依据）',
+    !/确认属本代服务/.test(lg), '出现次数=' + (lg.match(/确认属本代服务/g) || []).length)
   rec(name, '日志同时写明「登记启动器已不存在」与「--no-descendants 生效」',
     /进程已不存在/.test(lg) && /--no-descendants 生效/.test(lg), '')
+  console.log('  --- 原始证据 ---')
+  for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+
+// ============================================================
+// R-A（对应审查 ① / 审查者的 S6b 反例）：端口兜底**不得绕过 PID 复用闸门**
+// ============================================================
+// 构造：令牌匹配、登记 api pid=X；X **自己就监听登记端口**；令牌文件的 mtime 被显式设到 X 的
+// 创建时间之前 6000ms（= "X 的现进程创建时间晚于令牌 mtime 5000ms 以上"，正是 pid 被复用的时间特征）。
+// 期望：闸门（"拒绝回收 … 该 pid 已被复用"）生效后，端口兜底**不许**再把 X 认领回来杀掉。
+// 未修版本在这里会自相矛盾：同一秒内先写"拒绝回收 … 该 pid 已被复用"，紧接着又写
+// 「端口 … 的持有者 pid=X 确认属本代服务（登记集∪后代集）→ 树杀成功」⇒ X 被整树杀掉。
+// variant: legacy-nodesc（--no-descendants，走祖先链那条路）/ legacy-desc（常规路径）/
+//          control（同构造但 X **不监听**端口 ⇒ 端口兜底这条路过都没走，用来区分"凶手就是端口兜底"）
+async function caseGateReuse(apiPort, bridgePort, variant) {
+  const listen = variant !== 'control'
+  const name = 'gate-reuse-' + variant
+  const c = makeCaseDir(name)
+  const cx = { ports: [apiPort], extraPids: [] }
+  console.log('\n=== case ' + name + '（① 端口兜底 vs PID 复用闸门；登记进程'
+    + (listen ? '**正在监听**登记端口' : '**不监听**登记端口 = 对照组') + '）===')
+  console.log('  tmp=' + c.dir + '\n  端口=' + apiPort)
+  writeConfig(c, apiPort, bridgePort)
+  const d = await startSingleDummy(c, listen ? 'squat' : 'sleeper', apiPort, name)
+  cx.extraPids = [d.pid]
+  const listening0 = listen ? await portOpen(apiPort, 400) : false
+  rec(name, '前置：登记 pid 进程已就位' + (listen ? '并监听 ' + apiPort : '（不监听任何端口）'),
+    d.ok && pidAlive(d.pid) && (!listen || listening0),
+    'pid=' + d.pid + ' created=' + new Date(d.createdMs).toISOString() + ' 监听=' + listening0)
+
+  const token = 'gate-reuse-' + variant + '-' + Date.now()
+  const mt = d.createdMs - 6000
+  writeRawToken(c, {
+    token, epoch: 1, dshPid: process.pid, watchdogPid: 0, updatedAt: new Date().toISOString(),
+    services: [{ key: 'api', pid: d.pid, port: apiPort }],     // 故意**不写** createdMs：走"旧世代"退化判据
+  }, { mtimeMs: mt })
+  rec(name, '★★★ 前置（构造有效性）：令牌登记的就是这个 pid，且它的现进程比令牌文件新 6000ms（PID 复用特征）',
+    d.createdMs > mt + 5000,
+    '令牌 mtime=' + new Date(mt).toISOString() + '（utimesSync 显式设定）；现进程创建=' + new Date(d.createdMs).toISOString()
+    + ' ⇒ 现进程比令牌新 ' + (d.createdMs - mt) + 'ms（大于旧 5000ms 窗口，也远大于收紧后的 1500ms）')
+
+  const wd = startWatchdogDirect(c, token, ['--no-descendants', '--budget-ms', '5000'])
+  cx.wd = wd
+  await sleep(1500)
+  rec(name, '前置：看门狗已起来（--no-descendants ⇒ 只剩"登记 pid + 端口兜底"两条路）', pidAlive(wd.pid), 'watchdog pid=' + wd.pid)
+
+  const t0 = Date.now()
+  try { wd.stdin.end() } catch (e) { /* ignore */ }
+  const wdGone = await waitFor(() => !pidAlive(wd.pid), 40000, 400)
+  rec(name, '看门狗在预算内收工退出', wdGone.ok, '耗时 ' + (Date.now() - t0) + 'ms')
+
+  const alive = pidAlive(d.pid)
+  rec(name, '★★★ X **没有被杀**（端口兜底不得绕过"该 pid 已被复用"这个闸门）', alive,
+    'pid=' + d.pid + ' 存活=' + alive + (listen ? '（未修版本在这里会被整树杀掉）' : '（对照组：本来就不该被杀）'))
+  const lg = logText(c.voiceLog)
+  rec(name, '★ 日志出现「拒绝回收 api pid=X：该 pid 已被复用」', /拒绝回收 api pid=\d+：该 pid 已被复用/.test(lg),
+    (lg.split('\n').filter((l) => l.includes('拒绝回收')).slice(-1).join('')).slice(0, 320))
+  rec(name, '★★ 日志**不再出现**「确认属本代服务 … 树杀成功」（未修版本那两行自相矛盾的日志）',
+    !/确认属本代服务/.test(lg) && !/树杀成功/.test(lg),
+    '「确认属本代服务」出现次数=' + (lg.match(/确认属本代服务/g) || []).length
+    + '；「树杀成功」出现次数=' + (lg.match(/树杀成功/g) || []).length)
+  const portNow = await portOpen(apiPort, 500)
+  rec(name, listen ? '端口仍被 X 占着（= 服务真没被杀；未修版本这里会是空闲）' : '对照组：端口本来就没有人监听（端口兜底这条路走都没走）',
+    listen ? portNow : !portNow, 'portOpen(' + apiPort + ')=' + portNow)
+  console.log('  --- 原始证据（看门狗日志全文）---')
+  for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+
+// ============================================================
+// R-B（对应审查 ②）：进程查询不可用（降级）时**不许盲杀**
+// ============================================================
+// 用 --ps-exe 指向一个不存在的可执行文件，强制走"进程表拿不到"的降级分支（生产路径不传这个开关）。
+// variant 'not-listening'：登记 pid 不监听登记端口 ⇒ **不许杀**（旧实现在这里直接盲杀）。
+// variant 'listening'    ：登记 pid 确实在监听登记端口 ⇒ **必须杀**（端口交叉证实的正向路径）。
+async function caseDegraded(apiPort, bridgePort, variant) {
+  const listen = variant === 'listening'
+  const name = 'degraded-' + variant
+  const c = makeCaseDir(name)
+  const cx = { ports: [apiPort], extraPids: [] }
+  console.log('\n=== case ' + name + '（② 降级模式：进程表不可用；登记 pid '
+    + (listen ? '**正在监听**登记端口 ⇒ 应被杀' : '**不监听**登记端口 ⇒ 不许杀') + '）===')
+  console.log('  tmp=' + c.dir + '\n  端口=' + apiPort)
+  writeConfig(c, apiPort, bridgePort)
+  const d = await startSingleDummy(c, listen ? 'squat' : 'sleeper', apiPort, name)
+  cx.extraPids = [d.pid]
+  rec(name, '前置：登记 pid 进程已就位（' + (listen ? '监听 ' + apiPort : '不监听任何端口') + '）',
+    d.ok && pidAlive(d.pid) && (!listen || (await portOpen(apiPort, 400))),
+    'pid=' + d.pid + ' created=' + new Date(d.createdMs).toISOString())
+
+  const token = 'degraded-' + variant + '-' + Date.now()
+  writeRawToken(c, {
+    token, epoch: 1, dshPid: process.pid, watchdogPid: 0, updatedAt: new Date().toISOString(),
+    services: [{ key: 'api', pid: d.pid, port: apiPort, createdMs: d.createdMs, createdSrc: 'test' }],
+  }, { mtimeMs: Date.now() })
+
+  const bogusPs = path.join(c.dir, 'no-such-powershell.exe')     // 保证不存在 ⇒ psExec 返回 null
+  const wd = startWatchdogDirect(c, token, ['--ps-exe', bogusPs, '--budget-ms', '5000'])
+  cx.wd = wd
+  await sleep(1500)
+  rec(name, '前置：看门狗已起来（--ps-exe 指向不存在的 ' + bogusPs + ' ⇒ 强制降级）', pidAlive(wd.pid), 'watchdog pid=' + wd.pid)
+
+  const t0 = Date.now()
+  try { wd.stdin.end() } catch (e) { /* ignore */ }
+  const wdGone = await waitFor(() => !pidAlive(wd.pid), 40000, 400)
+  rec(name, '看门狗在预算内收工退出', wdGone.ok, '耗时 ' + (Date.now() - t0) + 'ms')
+  const lg = logText(c.voiceLog)
+  rec(name, '★ 日志写明"进程查询不可用 … **已降级**：只杀能被端口持有者交叉证实的登记 pid"',
+    /进程查询不可用/.test(lg) && /已降级/.test(lg) && /只杀/.test(lg),
+    (lg.split('\n').filter((l) => l.includes('降级')).slice(0, 2).join(' | ')).slice(0, 320))
+
+  if (listen) {
+    rec(name, '★★★ 确实在监听登记端口的登记 pid **被杀掉**（降级时只杀端口可证实的）', !pidAlive(d.pid),
+      'pid=' + d.pid + ' 存活=' + pidAlive(d.pid))
+    rec(name, '★ 日志写明"（降级：已被端口 … 的持有者交叉证实）→ 树杀成功"',
+      /降级：已被端口 \d+ 的持有者交叉证实/.test(lg) && /树杀成功/.test(lg),
+      (lg.split('\n').filter((l) => l.includes('树杀成功')).slice(0, 1).join('')).slice(0, 320))
+    const clr = await waitFor(async () => !(await portOpen(apiPort, 400)), 10000, 400)
+    rec(name, '端口随之空闲', clr.ok, 'portOpen(' + apiPort + ')=' + (await portOpen(apiPort, 400)))
+  } else {
+    rec(name, '★★★ 不监听登记端口的登记 pid **没有被杀**（降级时不许盲杀；未修版本这里会盲杀）',
+      pidAlive(d.pid), 'pid=' + d.pid + ' 存活=' + pidAlive(d.pid))
+    rec(name, '★ 日志写明"降级模式：api pid=X 不是端口 P 的持有者（无人在听该端口）⇒ fail-safe 跳过（不杀）"',
+      /降级模式：api pid=\d+ 不是端口 \d+ 的持有者/.test(lg) && /fail-safe 跳过（不杀）/.test(lg),
+      (lg.split('\n').filter((l) => l.includes('降级模式')).slice(0, 1).join('')).slice(0, 320))
+    rec(name, '★ 日志里一点都没动手（没有「树杀成功」、没有「树杀失败」）',
+      !/树杀成功/.test(lg) && !/树杀失败/.test(lg),
+      '「树杀成功」次数=' + (lg.match(/树杀成功/g) || []).length)
+  }
+  console.log('  --- 原始证据（看门狗日志全文）---')
+  for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+
+// ============================================================
+// R-C（对应审查 ③）：PID 复用闸门 = **创建时间身份校验**，不再是时间启发式
+// ============================================================
+// 令牌里带 createdMs（host.mjs 现在会写这个字段，口径同 psProcTree）：
+//   mismatch：令牌记录的 createdMs 与现进程相差 30000ms（>2s）⇒ 判 pid 复用 ⇒ **不许杀**
+//   match   ：相差 800ms（≤2s）⇒ 按正常路径处理 ⇒ 杀掉
+// 两个 variant 的令牌 mtime 都设在"当下"，所以**旧的时间启发式不会拒绝它** —— 差异只来自身份字段，
+// 于是 mismatch 在未修版本上必然被杀（FAIL），在修好版上必然不杀（PASS）。
+async function caseCreatedMsIdentity(apiPort, bridgePort, variant) {
+  const mismatch = variant === 'mismatch'
+  const name = 'createdms-' + variant
+  const c = makeCaseDir(name)
+  const cx = { ports: [apiPort], extraPids: [] }
+  console.log('\n=== case ' + name + '（③ createdMs 身份校验；令牌与现进程相差 '
+    + (mismatch ? '30000ms > 2s ⇒ 不许杀' : '800ms ≤ 2s ⇒ 正常路径杀掉') + '）===')
+  console.log('  tmp=' + c.dir + '\n  端口=' + apiPort)
+  writeConfig(c, apiPort, bridgePort)
+  const d = await startSingleDummy(c, 'squat', apiPort, name)
+  cx.extraPids = [d.pid]
+  rec(name, '前置：登记 pid 正在监听 ' + apiPort, d.ok && pidAlive(d.pid) && (await portOpen(apiPort, 400)),
+    'pid=' + d.pid + ' created=' + new Date(d.createdMs).toISOString())
+
+  const token = 'createdms-' + variant + '-' + Date.now()
+  const recMs = mismatch ? d.createdMs + 30000 : d.createdMs + 800
+  const mt = Date.now()
+  writeRawToken(c, {
+    token, epoch: 1, dshPid: process.pid, watchdogPid: 0, updatedAt: new Date().toISOString(),
+    services: [{ key: 'api', pid: d.pid, port: apiPort, createdMs: recMs, createdSrc: 'test' }],
+  }, { mtimeMs: mt })
+  rec(name, '★★★ 前置（构造有效性）：令牌 mtime 就在当下（时间启发式**不会**拒绝它），差异只来自 createdMs',
+    Math.abs(recMs - d.createdMs) === (mismatch ? 30000 : 800),
+    '令牌 createdMs=' + new Date(recMs).toISOString() + ' vs 现进程=' + new Date(d.createdMs).toISOString()
+    + ' ⇒ 相差 ' + Math.abs(recMs - d.createdMs) + 'ms；令牌 mtime=' + new Date(mt).toISOString())
+
+  const wd = startWatchdogDirect(c, token, ['--budget-ms', '5000'])
+  cx.wd = wd
+  await sleep(1500)
+  rec(name, '前置：看门狗已起来（常规路径：带 PPID 链后代枚举）', pidAlive(wd.pid), 'watchdog pid=' + wd.pid)
+
+  const t0 = Date.now()
+  try { wd.stdin.end() } catch (e) { /* ignore */ }
+  const wdGone = await waitFor(() => !pidAlive(wd.pid), 40000, 400)
+  rec(name, '看门狗自行退出', wdGone.ok, '耗时 ' + (Date.now() - t0) + 'ms')
+  const lg = logText(c.voiceLog)
+  if (mismatch) {
+    rec(name, '★★★ 相差 30000ms ⇒ 判为 pid 复用，**没有被杀**', pidAlive(d.pid),
+      'pid=' + d.pid + ' 存活=' + pidAlive(d.pid) + '（未修版本忽略 createdMs ⇒ 会被杀）')
+    rec(name, '★ 日志写明「拒绝回收 … 现进程创建于 … 令牌记录的是 … 相差 30000ms > 2s」',
+      /拒绝回收 api pid=\d+：该 pid 已被复用/.test(lg) && /相差 30000ms > 2s/.test(lg),
+      (lg.split('\n').filter((l) => l.includes('拒绝回收')).slice(-1).join('')).slice(0, 360))
+    rec(name, '★ 端口仍被占着（= 服务真没被杀）', await portOpen(apiPort, 500), 'portOpen(' + apiPort + ')=true')
+    rec(name, '日志没有「确认属本代服务」（端口兜底同样不许认领它）', !/确认属本代服务/.test(lg), '')
+  } else {
+    rec(name, '★★★ 相差 800ms ≤ 2s ⇒ 按正常路径处理，**被杀掉**', !pidAlive(d.pid),
+      'pid=' + d.pid + ' 存活=' + pidAlive(d.pid) + '（身份匹配 ⇒ 不该被过度拦截）')
+    rec(name, '★ 日志写明「树杀成功」（身份校验没把正常情况误拦）', /树杀成功/.test(lg) && !/拒绝回收/.test(lg),
+      (lg.split('\n').filter((l) => l.includes('树杀成功')).slice(0, 1).join('')).slice(0, 320))
+    const clr = await waitFor(async () => !(await portOpen(apiPort, 400)), 10000, 400)
+    rec(name, '端口随之空闲', clr.ok, 'portOpen(' + apiPort + ')=' + (await portOpen(apiPort, 400)))
+  }
+  console.log('  --- 原始证据（看门狗日志全文）---')
+  for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+
+// ============================================================
+// R-D（对应审查 ④）：优雅停止后**有界端口复核** —— 端口仍在听就不许把看门狗收摊
+// ============================================================
+// 构造：假 DSH 里的 subprocess 句柄用 --terminate-launcher-only 1 ⇒ terminate() 只杀启动器（不带 /T），
+// 已经 detached 的 worker 继续占着端口（= 审查担心的"terminate 只终结了启动器"那种退化情形；
+// 本用例测的是**插件对这种情况的反应**，不是在断言真实 DSH 一定这么干）。
+// 期望：survivors 为空但端口还在听 ⇒ ① 不收摊看门狗；② 令牌不置失效；③ 如实报"未能停掉（端口仍在监听）"。
+async function caseStopPortRecheck(apiPort, bridgePort) {
+  const name = 'stop-port-recheck'
+  const c = makeCaseDir(name)
+  const PORTS = [apiPort]
+  const cx = { ports: PORTS, extraPids: [] }
+  console.log('\n=== case stop-port-recheck（④ ?action=stop 时句柄退出但端口仍被占）===')
+  console.log('  tmp=' + c.dir + '\n  端口=' + apiPort + '（单服务；terminate 只杀启动器、不带 /T）')
+  writeConfig(c, apiPort, bridgePort)
+  const d = startDriver(c, apiPort, bridgePort, 'stop-hold', { terminateLauncherOnly: true })
+  cx.driver = d
+  track(d.child.pid)
+  const up = await waitFor(async () => {
+    const a = svcRecord(c, apiPort)
+    const ga = gchildRecord(c, apiPort)
+    return !!a && !!ga && (await portOpen(apiPort, 400))
+  }, 60000, 500)
+  d.flush()
+  const pApi = dummyPids(c, apiPort)
+  const dummies = allDummyPids(c, PORTS)
+  for (const p of dummies) track(p)
+  cx.extraPids = dummies
+  rec(name, '前置：三代 dummy 已就位（启动器 + 监听 worker + 孙进程）', up.ok && dummies.length === 3, JSON.stringify(pApi))
+  const wdWait = await waitForWatchdog(c, 20000)
+  const wds = wdWait.wds
+  track(wds.length > 0 ? wds[0].pid : 0)
+  const wdPid0 = wds.length > 0 ? wds[0].pid : 0
+  rec(name, '前置：看门狗进程确实活着（否则本 case 会"空过"）', wds.length === 1,
+    wds.length > 0 ? pidDesc(wdPid0) : ('等待 ' + wdWait.ms + 'ms 仍未就位；' + wdDiag(c)))
+
+  const stopped = await waitFor(() => existsSync(path.join(c.dir, 'driver-stop.json')), 30000, 400)
+  rec(name, 'driver 调用了 ?action=stop 并拿到响应', stopped.ok,
+    stopped.ok ? logText(path.join(c.dir, 'driver-stop.json')).replace(/\s+/g, ' ').slice(0, 260) : '（超时）')
+  const launcherGone = await waitFor(() => !pidAlive(pApi.launcher), 8000, 400)
+  rec(name, '★★★ 前置（构造有效性）：被 terminate 的启动器已死，但 detached worker 仍占着端口',
+    launcherGone.ok && pidAlive(pApi.worker) && (await portOpen(apiPort, 500)),
+    '启动器存活=' + pidAlive(pApi.launcher) + '（应为 false）；worker 存活=' + pidAlive(pApi.worker)
+    + '；端口在听=' + (await portOpen(apiPort, 500)))
+
+  await sleep(1500)     // 给插件时间把 stop 路径走完（含 ≤3s 的有界端口复核）
+  const wdNow = findWatchdogs(c.tokenFile)
+  rec(name, '★★ 停止之后看门狗**仍然活着**（没有被收摊；未修版本会在这里被杀掉）',
+    wdNow.length === 1 && wdNow[0].pid === wdPid0,
+    '停止前 pid=' + wdPid0 + '；停止后=' + JSON.stringify(wdNow.map((x) => x.pid)) + '（' + wdDiag(c) + '）')
+  const tok = readJson(c.tokenFile)
+  rec(name, '★ 令牌文件**没有被置为失效态**（token 不是 null）⇒ 残留看门狗醒来仍按本代 token 判归属',
+    !!(tok && tok.token), tok ? JSON.stringify(tok).slice(0, 240) : '（令牌文件不存在）')
+  const resp = readJson(path.join(c.dir, 'driver-stop.json'))
+  rec(name, '★★ 停止响应如实报"未能停掉（端口仍在监听）"（phase=failed + detail 带端口）',
+    !!(resp && resp.phase === 'failed' && /端口仍在监听/.test(String(resp.detail || ''))),
+    resp ? ('phase=' + resp.phase + ' detail=' + String(resp.detail).slice(0, 200)) : '（无响应）')
+  const lg = logText(c.voiceLog)
+  rec(name, '★★ 语音日志同样如实记录「★ 未能停掉（端口仍在监听）：api:' + apiPort + '」', /未能停掉（端口仍在监听）：api:/.test(lg),
+    (lg.split('\n').filter((l) => l.includes('未能停掉')).slice(-1).join('')).slice(0, 260))
+  rec(name, '★ 日志写明"看门狗保持运行"', /看门狗保持运行/.test(lg), '')
+  const said = lg.includes('已停止看门狗')
+  rec(name, '★ 日志**没有**「已停止看门狗」（不许假装收工）', !said,
+    '「已停止看门狗」出现次数=' + (lg.match(/已停止看门狗/g) || []).length)
+  console.log('  --- 原始证据 ---')
+  for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]') || x.includes('未能停掉') || x.includes('已停止'))) console.log('    ' + l)
+  console.log('  driver 关键行:')
+  for (const l of d.out.join('').split('\n').filter((x) => x.includes('taskkill') || x.includes('STOP-RESPONSE'))) console.log('    ' + l.slice(0, 300))
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+
+// ③ 的 host 侧端到端验证：令牌里记的 createdMs 必须与**该进程真实的** CreationDate 很接近
+// （看门狗是拿自己 psProcTree 查到的 createdMs 与它比；两边差太多 ⇒ 身份校验会误判）。
+// 同时钉住"锚点来源 = spawn 时刻、**不**在 DSH 进程里起 powershell"这个实测结论。
+async function caseCreatedMsToken(apiPort, bridgePort) {
+  const name = 'createdms-token'
+  const c = makeCaseDir(name)
+  const PORTS = [apiPort]
+  const cx = { ports: PORTS, extraPids: [] }
+  console.log('\n=== case createdms-token（③ host 侧：令牌 createdMs 锚点 vs 真实 CreationDate ≤2s）===')
+  console.log('  tmp=' + c.dir)
+  writeConfig(c, apiPort, bridgePort)
+  const d = startDriver(c, apiPort, bridgePort, 'idle')
+  cx.driver = d
+  track(d.child.pid)
+  const up = await waitFor(async () => {
+    const a = svcRecord(c, apiPort)
+    const ga = gchildRecord(c, apiPort)
+    return !!a && !!ga && (await portOpen(apiPort, 400))
+  }, 60000, 500)
+  d.flush()
+  const pApi = dummyPids(c, apiPort)
+  const dummies = allDummyPids(c, PORTS)
+  for (const p of dummies) track(p)
+  cx.extraPids = dummies
+  rec(name, '前置：三代 dummy 已就位（启动器 + 监听 worker + 孙进程）', up.ok && dummies.length === 3, JSON.stringify(pApi))
+  const wdWait = await waitForWatchdog(c, 20000)
+  const wds = wdWait.wds
+  track(wds.length > 0 ? wds[0].pid : 0)
+  rec(name, '前置：看门狗进程确实活着', wds.length === 1,
+    wds.length > 0 ? pidDesc(wds[0].pid) : ('等待 ' + wdWait.ms + 'ms 仍未就位；' + wdDiag(c)))
+
+  // ③ host 侧的关键判据：令牌里的 createdMs（锚点）与**该进程真实的** CreationDate 必须很接近 ——
+  // 看门狗就是拿自己 psProcTree 查到的 createdMs 与它比、相差 >2s 判"pid 已复用"，
+  // 两边差得太多会让身份校验误判（要么误杀，要么漏杀）。
+  const tok = readJson(c.tokenFile)
+  const svc = tok && Array.isArray(tok.services) ? tok.services[0] : null
+  const info = pApi.launcher ? psInfo([pApi.launcher]).get(pApi.launcher) : undefined
+  const realMs = info ? Number(info.createdMs) || 0 : 0
+  const deltaMs = svc && realMs > 0 ? Math.abs(Number(svc.createdMs) - realMs) : -1
+  rec(name, '★ 令牌里的 services[0] 带 createdMs/createdSrc（③ 要求 host 在令牌里写下创建时间锚点）',
+    !!(svc && Number(svc.createdMs) > 0 && svc.createdSrc === 'spawn'),
+    tok ? JSON.stringify(tok.services) : '（令牌文件不存在）')
+  rec(name, '★★★ 令牌里的 createdMs 与该进程真实 CreationDate **相差 ≤2s**（身份判据成立）',
+    deltaMs >= 0 && deltaMs <= 2000,
+    '令牌 createdMs=' + msStr(svc && svc.createdMs)
+    + ' vs 测试侧 psInfo 实测=' + msStr(realMs)
+    + '；实测相差=' + deltaMs + 'ms（看门狗容忍窗 2000ms）')
+  rec(name, '★ 登记的就是插件自己 spawn 的那个启动器 pid、端口是本代 api 端口（所有权仍来自活句柄）',
+    !!svc && Number(svc.pid) === Number(pApi.launcher) && Number(svc.port) === apiPort,
+    '登记 pid=' + (svc ? svc.pid : 'n/a') + '（svc 记录里的启动器=' + pApi.launcher + '）；端口=' + (svc ? svc.port : 'n/a'))
+  rec(name, '★ createdSrc 只能是 "spawn"（**不**在 DSH 进程里起 powershell 查 CreationDate：那会把事件循环卡住 300~700ms）',
+    !!svc && svc.createdSrc === 'spawn', 'createdSrc=' + (svc ? svc.createdSrc : 'n/a'))
+  console.log('  --- 原始证据 ---')
+  console.log('  令牌文件: ' + JSON.stringify(tok))
+  for (const l of logText(c.voiceLog).split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
+  await cleanup(c, cx)
+  if (!KEEP) { try { rmSync(c.dir, { recursive: true, force: true }) } catch (e) { /* ignore */ } }
+  return c
+}
+// Minor-M3（顺手）：看门狗是 detached 起的，若 cwd 用了可被 SAKIKO_ROOT 覆盖的 ROOT，
+// 配错（目录不存在）就会 spawn ENOENT ⇒ **静默失去整个看门狗**。改用 MODULE_DIR 后，
+// 即使 SAKIKO_ROOT 指向不存在的目录，看门狗照样起得来。
+async function caseWatchdogCwd(apiPort, bridgePort) {
+  const name = 'watchdog-cwd'
+  const c = makeCaseDir(name)
+  const PORTS = [apiPort]
+  const cx = { ports: PORTS, extraPids: [] }
+  const bogusRoot = path.join(c.dir, 'nonexistent-root')     // 故意不存在
+  console.log('\n=== case watchdog-cwd（Minor：SAKIKO_ROOT 配错 ⇒ 看门狗仍必须起得来）===')
+  console.log('  tmp=' + c.dir + '\n  SAKIKO_ROOT=' + bogusRoot + '（不存在的目录）')
+  writeConfig(c, apiPort, bridgePort)
+  const d = startDriver(c, apiPort, bridgePort, 'idle', { sakikoRoot: bogusRoot })
+  cx.driver = d
+  track(d.child.pid)
+  const up = await waitFor(async () => {
+    const a = svcRecord(c, apiPort)
+    const ga = gchildRecord(c, apiPort)
+    return !!a && !!ga && (await portOpen(apiPort, 400))
+  }, 60000, 500)
+  d.flush()
+  const dummies = allDummyPids(c, PORTS)
+  for (const p of dummies) track(p)
+  cx.extraPids = dummies
+  rec(name, '前置：SAKIKO_ROOT 指向不存在的目录时，插件仍把 api 拉起来了（否则本 case 无效）',
+    up.ok && dummies.length === 3, 'dummy=' + JSON.stringify(dummyPids(c, apiPort)))
+  const token = readJson(c.tokenFile)
+  const wdWait = await waitForWatchdog(c, 20000)
+  const wds = wdWait.wds
+  track(wds.length > 0 ? wds[0].pid : 0)
+  rec(name, '★★ 看门狗**确实被拉起来了**（token.watchdogPid>0 且进程活着，cmd 指向 watchdog.mjs）',
+    wds.length === 1, 'token.watchdogPid=' + (token ? token.watchdogPid : 'n/a')
+    + (wds.length > 0 ? '；' + pidDesc(wds[0].pid) : '（等待 ' + wdWait.ms + 'ms 仍没找到；' + wdDiag(c) + '）'))
+  const lg = logText(c.voiceLog)
+  rec(name, '★ 日志里没有"看门狗出错 / 拉起看门狗失败"', !/看门狗出错|拉起看门狗失败/.test(lg),
+    (lg.split('\n').filter((l) => l.includes('看门狗')).slice(-2).join(' | ')).slice(0, 300))
   console.log('  --- 原始证据 ---')
   for (const l of lg.split('\n').filter((x) => x.includes('[watchdog]'))) console.log('    ' + l)
   await cleanup(c, cx)
@@ -1037,6 +1551,17 @@ async function main() {
   if (CASE === 'all' || CASE === 'external') await caseExternal(apiPort, bridgePort)
   if (CASE === 'all' || CASE === 'graceful') await caseGraceful(apiPort, bridgePort)
   if (CASE === 'all' || CASE === 'log-append') await caseLogAppend(apiPort, bridgePort)
+  // ↓ 2026-09-13 误杀类阻塞项（① ② ③ ④）与 Minor 的回归用例
+  if (CASE === 'all' || CASE === 'gate-reuse-legacy-nodesc') await caseGateReuse(apiPort, bridgePort, 'legacy-nodesc')
+  if (CASE === 'all' || CASE === 'gate-reuse-legacy-desc') await caseGateReuse(apiPort, bridgePort, 'legacy-desc')
+  if (CASE === 'all' || CASE === 'gate-reuse-control') await caseGateReuse(apiPort, bridgePort, 'control')
+  if (CASE === 'all' || CASE === 'degraded-not-listening') await caseDegraded(apiPort, bridgePort, 'not-listening')
+  if (CASE === 'all' || CASE === 'degraded-listening') await caseDegraded(apiPort, bridgePort, 'listening')
+  if (CASE === 'all' || CASE === 'createdms-mismatch') await caseCreatedMsIdentity(apiPort, bridgePort, 'mismatch')
+  if (CASE === 'all' || CASE === 'createdms-match') await caseCreatedMsIdentity(apiPort, bridgePort, 'match')
+  if (CASE === 'all' || CASE === 'stop-port-recheck') await caseStopPortRecheck(apiPort, bridgePort)
+  if (CASE === 'all' || CASE === 'watchdog-cwd') await caseWatchdogCwd(apiPort, bridgePort)
+  if (CASE === 'all' || CASE === 'createdms-token') await caseCreatedMsToken(apiPort, bridgePort)
 
   const failed = results.filter((r) => !r.ok)
   const survivors = liveFixturePids()

@@ -8,7 +8,7 @@
 //   - /sakiko/* 路由与 RPC、可选人格注入
 // ============================================================
 // 静态版 host（由 tools/build_static.mjs 生成，勿手改）
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import net from 'node:net'
 import { fileURLToPath } from 'node:url'
 // 看门狗（非优雅退出时的自清理）需要三样 ctx 服务给不了的东西：
@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 //   ② node:fs 的 rename —— 令牌文件要**原子替换**（临时文件 + rename），fs 服务没有 rename；
 //   ③ node:fs 的 appendFileSync —— 语音日志要 append 语义（fs 服务只有整份 writeText）。
 import { spawn as spawnChild, spawnSync as spawnSyncChild } from 'node:child_process'
-import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 export const inject = ['timer', 'fs', 'webServer', 'subprocess']
 
@@ -977,26 +977,41 @@ export function apply(ctx) {
     //     不会把要 30~60s 才加载完的模型杀掉重启。
     const myEpoch = ++voiceShared.epoch
 
-    // 语音日志：**append 语义 + 超过 1MB 轮转成 .1**（v2.1.0 修 Minor-M1）。
+    // 语音日志：**append 语义 + 超过 1MB 轮转**（v2.1.0 修 Minor-M1；2026-09-13 修轮转竞态 Minor-M2）。
     // 旧实现是「内存环形缓冲整份覆写文件」：新实例一起来就把上一代写下的记录（含"插件卸载 /
     // 延时停止"那几行 —— 事后取证唯一能看的东西）整段冲掉。控制者实测：重启后旧世代的行全没了。
     // 为什么用 node:fs 的 appendFileSync 而不是 fs 服务的 writeText：① fs 服务没有 append，
     // 只能"读旧档 + 拼新行 + 整份写回"，与看门狗进程（另一个进程也在 append 同一个文件）会互相
     // 覆盖；② O_APPEND 的写入在两端都不会互相截断，日志才可能真的跨进程/跨世代留痕。
     const VOICE_LOG_MAX = 1024 * 1024
+    const VOICE_LOG_KEEP = 2                  // 最多保留 2 份历史档
     let voiceLogChain = Promise.resolve()
+
+    // 轮转（**只有插件进程做，看门狗进程永不轮转、只 append**）：
+    //   旧写法 `rmSync(.1)` + `rename(主档 → .1)` 不是原子对：热重载时两代插件都会跨 1MB，
+    //   甲 rename 出 .1、乙 rm 掉 .1 再 rename，乙的 rm 可能删掉的正是甲刚写下的那一代记录
+    //   （= 互相删档，取证材料丢失）。改成"轮转到带时间戳的 .1-<ts>、按名字排序最多留 2 份"：
+    //   两代即使同时轮转，也各自产生**不同文件名**，谁都不会删掉谁刚写下的东西。
+    function rotateVoiceLog() {
+      let size = 0
+      try { size = statSync(VOICE_LOG_PATH).size } catch (e) { return }     // 没有主档就不用轮转
+      if (size <= VOICE_LOG_MAX) return
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      try { renameSync(VOICE_LOG_PATH, VOICE_LOG_PATH + '.1-' + ts) } catch (e) { return }   // 改不动就继续 append
+      try {
+        const base = basename(VOICE_LOG_PATH) + '.1-'
+        const olds = readdirSync(LOG_DIR).filter((n) => n.startsWith(base)).sort()
+        for (const n of olds.slice(0, Math.max(0, olds.length - VOICE_LOG_KEEP))) {
+          try { rmSync(LOG_DIR + '/' + n, { force: true }) } catch (e) { /* 删不掉就算了，绝不影响写入 */ }
+        }
+      } catch (e) { /* 列目录失败不影响 append */ }
+    }
 
     function voiceLogWriteLine(msg) {
       voiceLogChain = voiceLogChain.then(() => {
         try {
           mkdirSync(LOG_DIR, { recursive: true })
-          let size = 0
-          try { size = statSync(VOICE_LOG_PATH).size } catch (e) { size = 0 }
-          if (size > VOICE_LOG_MAX) {
-            // 轮转：旧档整体改名成 .1（保留一份），新档从下一行重新开始
-            try { rmSync(VOICE_LOG_PATH + '.1', { force: true }) } catch (e) { /* 没有旧 .1 就算了 */ }
-            try { renameSync(VOICE_LOG_PATH, VOICE_LOG_PATH + '.1') } catch (e) { /* 改不动就继续 append */ }
-          }
+          rotateVoiceLog()
           appendFileSync(VOICE_LOG_PATH, msg + '\n', 'utf8')
         } catch (e) {
           // 写不动日志绝不能影响语音链路；至少让它出现在 DSH 控制台
@@ -1042,6 +1057,8 @@ export function apply(ctx) {
 
     // 令牌文件：内容 = 本代身份 + **我们自己拉起的**服务清单（pid 来自手里的活句柄，
     // 不是从端口猜 —— 没 spawn 过就没有所有权，外来服务永不入册）。
+    // 每项还带 createdMs/createdSrc = 该服务进程的**创建时间锚点**（见 trackVoiceProc 上的说明）
+    // ⇒ 看门狗据此用**身份**而不是时间来判 PID 复用。
     // 原子写：临时文件 + rename，看门狗绝不会读到半个 JSON。
     function writeWatchdogState(token) {
       const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
@@ -1050,7 +1067,14 @@ export function apply(ctx) {
       if (token !== null && token !== undefined) {
         for (const key of ['api', 'bridge']) {
           const rec = voiceShared.procs[key]
-          if (voiceProcAlive(rec)) services.push({ key, pid: rec.pid, port: key === 'api' ? apiPort : bridgePort })
+          if (!voiceProcAlive(rec)) continue
+          // createdMs = 该服务进程的**创建时间锚点**（见上面那段注释：用"亲眼看到 spawn 返回的时刻"，
+          // 不在这里起 powershell 查 CreationDate —— 那会把 DSH 事件循环卡住 300~700ms）。
+          // 看门狗拿它跟自己 psProcTree 查到的 createdMs 比，相差 >2s 即判"这个 pid 已被复用"。
+          const anchor = Number(rec.spawnedAt) > 0 ? Number(rec.spawnedAt) : 0
+          const item = { key, pid: rec.pid, port: key === 'api' ? apiPort : bridgePort }
+          if (anchor > 0) { item.createdMs = anchor; item.createdSrc = 'spawn' }
+          services.push(item)
         }
       }
       const payload = {
@@ -1099,7 +1123,11 @@ export function apply(ctx) {
             '--token-file', WATCHDOG_STATE_PATH,
             '--log', VOICE_LOG_PATH,
           ], {
-            cwd: ROOT,
+            // cwd 必须用 MODULE_DIR（`import.meta.url` 推出的真实模块目录），不能用 ROOT：
+            // ROOT 可被环境变量 SAKIKO_ROOT 覆盖，配错（或不存在的路径）会让这次 spawn 直接
+            // ENOENT ⇒ **静默失去整个看门狗**（只剩一行"看门狗出错"日志）。脚本本身也是先从
+            // MODULE_DIR 找的（见 watchdogScriptPath），两处口径必须一致。
+            cwd: MODULE_DIR,
             detached: true,
             windowsHide: true,
             stdio: ['pipe', 'ignore', 'ignore'],    // stdin 管道 = 死亡信号，绝不写、绝不 end
@@ -1221,8 +1249,16 @@ export function apply(ctx) {
 
     // 子进程记录：就绪判据必须是「**我们拉起的进程还活着** ∧ 端口在听」。
     // 否则会出现审查 D4 那种情况：自己拉起的桥早就死了，端口被外部进程占着，却报 ready。
+    //
+    // spawnedAt = **本进程亲眼看到 spawn 返回的时刻**，它就是令牌里 createdMs 的来源
+    // （createdSrc='spawn'）。为什么不在这里查 Win32_Process.CreationDate 的那个"真值"：
+    // 2026-09-13 实测，在 DSH 进程里 spawn 一次 powershell.exe 会把事件循环**卡住 300~700ms**
+    // （CreateProcess 是同步的），于是 ① 令牌写入被推迟 ⇒ 保护窗口变窄；② 日志的异步 append 链
+    // 排水被推迟 700ms ⇒ 恰好强杀时丢掉"已拉起 api/看门狗/已更新令牌"这几行取证材料（trace 铁证：
+    // CHAIN-ENTER 比 CALL 晚 697ms）。而 spawn 返回与真实创建时间通常只差几 ms~几十 ms，
+    // 看门狗的容忍窗是 2000ms ⇒ 用 spawn 时刻当锚点既够用又不牺牲任何东西。
     function trackVoiceProc(handle) {
-      const rec = { handle: handle, pid: handle.pid, exited: false, exitCode: null }
+      const rec = { handle: handle, pid: handle.pid, exited: false, exitCode: null, spawnedAt: Date.now() }
       const settle = (o) => {
         rec.exited = true
         rec.exitCode = o && typeof o.exitCode === 'number' ? o.exitCode : null
@@ -1551,9 +1587,12 @@ export function apply(ctx) {
     async function stopVoiceServices(reason) {
       const stopped = []
       const survivors = []
+      const ownedPorts = []      // 本次真正持有句柄的服务端口（= 本代托管端口）
       for (const key of ['bridge', 'api']) {
         const rec = voiceShared.procs[key]
         if (!rec) continue
+        const port = Math.floor(Number(key === 'api' ? config.voiceApiPort : config.voiceBridgePort) || (key === 'api' ? 9880 : 8000))
+        if (port > 0) ownedPorts.push({ key, port })
         try {
           rec.handle.terminate()
         } catch (e) {
@@ -1586,14 +1625,48 @@ export function apply(ctx) {
       } else {
         setVoicePhase('idle', '没有本插件拉起的服务可停（' + reason + '）')
       }
+      // ④ 句柄退出 ≠ 端口释放（2026-09-13 独立审查 B4）：ctx.subprocess 的 terminate() 有可能只
+      //    终结了"启动器"，而已经 breakaway 逃出 job 的 worker 还占着端口。此时 survivors 为空，
+      //    旧代码会认为"停干净了"并把看门狗收摊 ⇒ 端口仍被占、而且没人守（正是本功能要修的那个坑）。
+      //    所以收摊前做一次**有界端口复核**：每次 TCP connect ≤1s、总共 ≤3s；只要还有本代托管端口
+      //    在监听，就**不收摊**看门狗，并如实报"未能停掉（端口仍在监听）"。
+      const stillListening = []
+      const unverified = []
+      const pt0 = Date.now()
+      for (const s of ownedPorts) {
+        const left = 3000 - (Date.now() - pt0)
+        if (left <= 0) { unverified.push(s.key + ':' + s.port); continue }      // 预算用尽 ⇒ 视为未复核（保守）
+        if (await portOpen(s.port, Math.min(1000, left))) stillListening.push(s.key + ':' + s.port)
+      }
+      if (stillListening.length > 0 || unverified.length > 0) {
+        // 端口是硬事实：句柄没了但端口还在听 ⇒ 状态里不许写"已停干净"
+        for (const s of ownedPorts) {
+          if (!stillListening.includes(s.key + ':' + s.port)) continue
+          if (s.key === 'api') voiceShared.state.api.up = true
+          else voiceShared.state.bridge.up = true
+          voiceShared.state.owner = 'plugin'      // 端口仍被占的正是我们这棵树的残骸 ⇒ owner 不可能是 none
+        }
+        const stoppedNote = stopped.length > 0 ? '（句柄侧已退出：' + stopped.join(' + ') + '）' : ''
+        const unNote = unverified.length > 0 ? '；另有未能复核的端口 ' + unverified.join(' / ') : ''
+        setVoicePhase('failed', '★ 未能停掉（端口仍在监听：' + (stillListening.join(' / ') || '（有端口没复核成）') + '）'
+          + stoppedNote + unNote + '（' + reason + '）')
+        voiceLog('★ 未能停掉（端口仍在监听）：' + (stillListening.join(' / ') || '（有端口没复核成）') + stoppedNote + unNote
+          + ' —— 句柄已经退出但端口还占着（breakaway worker 没随句柄回收）；看门狗**保持运行**，不当作「已停干净」')
+      }
       // 看门狗收摊的时机：**服务先停、看门狗后停**（顺序反了会留下一个"服务已经没了、
-      // 看门狗还醒着"的窗口）。还有幸存者时**不杀**看门狗 —— 否则非优雅退出又回到"端口被占"，
-      // 那正是这次要修的 bug。此时只刷新令牌文件，让看门狗继续守着剩下的服务。
-      if (survivors.length === 0) {
+      // 看门狗还醒着"的窗口）。还有幸存者/端口仍在监听时**不杀**看门狗 —— 否则非优雅退出又回到
+      // "端口被占"，那正是这次要修的 bug。此时只刷新令牌文件，让看门狗继续守着剩下的服务。
+      if (survivors.length === 0 && stillListening.length === 0 && unverified.length === 0) {
         await stopWatchdog(reason)
       } else if (voiceShared.watchdogToken !== null) {
         writeWatchdogState(voiceShared.watchdogToken)
-        voiceLog('[watchdog] 仍有未停掉的服务（' + survivors.join(' + ') + '）→ 看门狗保持运行并刷新登记清单')
+        const why = survivors.length > 0 ? survivors.join(' + ')
+          : ('端口仍在监听 ' + (stillListening.join(' / ') || unverified.join(' / ')))
+        voiceLog('[watchdog] 仍有未停掉的服务（' + why + '）→ 看门狗保持运行并刷新登记清单')
+        if (survivors.length === 0) {
+          voiceLog('[watchdog] 注意：句柄都已退出 ⇒ 令牌里没有活句柄可登记，看门狗只能守住"不误杀"，'
+            + '这一代无法再对 pid 归属不明的端口持有者动手（如实记录，不假装守住了）')
+        }
       }
       return voiceShared.state
     }
