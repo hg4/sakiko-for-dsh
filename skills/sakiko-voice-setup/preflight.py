@@ -71,6 +71,21 @@ def run(cmd, timeout=120, cwd=None):
     return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
 
 
+def resolve_plugin_ref(explicit):
+    """插件包内 assets/ref 的位置：显式给了就用它，否则探测两种常见安装位置。"""
+    if explicit:
+        return explicit
+    home = os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh")
+    cands = [
+        os.path.join(home, "profiles", "web", "node_modules", "sakiko-for-dsh", "assets", "ref"),
+        os.path.join(home, "profiles", "node_modules", "sakiko-for-dsh", "assets", "ref"),
+    ]
+    for p in cands:
+        if os.path.isdir(p):
+            return p
+    return cands[0]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--voice-root", default=os.path.join(os.path.expanduser("~"), ".dsh", "sakiko", "voice"))
@@ -78,6 +93,10 @@ def main():
                                                      "sakiko", "config", "sakiko.json"))
     ap.add_argument("--bridge", default="http://127.0.0.1:8000")
     ap.add_argument("--api", default="http://127.0.0.1:9880")
+    # 插件包内自带的音色参考素材（v2.2.0 起随包分发；插件配置留空时会兜底用它）
+    # 默认自动探测两种安装位置：`profiles/web/node_modules/<pkg>`（dsh plugin add 的标准位置）
+    # 与 `profiles/node_modules/<pkg>`（扁平回退位置，开发/免 web 层安装时用）。
+    ap.add_argument("--plugin-ref", default="", help="插件包内 assets/ref 目录（留空=自动探测）")
     ap.add_argument("--allow-no-gpu", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -86,6 +105,7 @@ def main():
     repo = os.path.join(root, "GPT-SoVITS-main")
     venv_py = os.path.join(root, "env", "Scripts", "python.exe")
     bridge_cfg = os.path.join(HERE, "bridge.config.json")
+    plugin_ref = resolve_plugin_ref(args.plugin_ref)
 
     # ---- 1. 目录与解释器 ----
     if not os.path.isdir(root):
@@ -209,8 +229,12 @@ def main():
         else:
             ok("插件通道", "provider=aqua → %s" % cfg.get("aquaUrl"))
         ref = cfg.get("aquaRefAudio") or ""
+        packaged_ref = os.path.join(plugin_ref, "sakiko_ref.wav")
+        packaged_prompt = os.path.join(plugin_ref, "sakiko_ref.prompt.txt")
+        packaged_ok = os.path.isfile(packaged_ref)
         if ref and not os.path.isfile(ref):
-            bad("参考音频", "配置里的路径不存在: %s" % ref, "填服务端可读的绝对路径（WAV 最稳）")
+            bad("参考音频", "配置里的路径不存在: %s" % ref,
+                "填服务端可读的绝对路径（WAV 最稳）；或把 aquaRefAudio 留空，改用包内自带的 %s" % packaged_ref)
         elif ref:
             try:
                 with wave.open(ref) as w:
@@ -218,10 +242,27 @@ def main():
                                                           w.getframerate(), w.getnchannels()))
             except Exception as e:
                 warn("参考音频", "存在但不是标准 WAV（%s）" % str(e)[:60], "转成 WAV 最稳：ffmpeg -i in.mp3 -ar 24000 -ac 1 out.wav")
+        elif packaged_ok:
+            try:
+                with wave.open(packaged_ref) as w:
+                    ok("参考音频", "未配置 aquaRefAudio → 用包内自带 %s  %.2fs %dHz %dch" % (
+                        os.path.basename(packaged_ref), w.getnframes() / max(1, w.getframerate()),
+                        w.getframerate(), w.getnchannels()))
+            except Exception as e:
+                bad("参考音频", "包内自带的 %s 不是标准 WAV（%s）" % (packaged_ref, str(e)[:60]), "重新安装插件包，或自己填 aquaRefAudio")
         else:
-            bad("参考音频", "aquaRefAudio 为空", "填参考音频的绝对路径（5~30 秒、单人、无 BGM）")
+            bad("参考音频", "aquaRefAudio 为空，且包内没有 %s" % packaged_ref,
+                "填参考音频的绝对路径（5~30 秒、单人、无 BGM），或重装带 assets/ref 的插件包")
         if not (cfg.get("aquaPromptText") or "").strip():
-            bad("参考文稿", "aquaPromptText 为空", "填与参考音频**逐字一致**的日文文稿（不一致会明显跑音）")
+            if packaged_ok and os.path.isfile(packaged_prompt):
+                try:
+                    with open(packaged_prompt, encoding="utf-8") as f:
+                        ok("参考文稿", "未配置 aquaPromptText → 用包内自带 %s（%s…）" % (
+                            os.path.basename(packaged_prompt), f.read().strip()[:24]))
+                except Exception as e:
+                    warn("参考文稿", "包内文稿读不到（%s）" % str(e)[:50], "自己填 aquaPromptText（与参考音频逐字一致）")
+            else:
+                bad("参考文稿", "aquaPromptText 为空", "填与参考音频**逐字一致**的日文文稿（不一致会明显跑音）")
         else:
             ok("参考文稿", (cfg.get("aquaPromptText") or "")[:28] + "…")
         if cfg.get("aquaVoice"):

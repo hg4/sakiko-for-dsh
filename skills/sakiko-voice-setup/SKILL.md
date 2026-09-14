@@ -30,11 +30,12 @@ DSH 插件 ──POST {aquaUrl}/tts/file?…──▶ 桥 bridge_tts.py :8000 �
 | --- | --- | --- |
 | GPT-SoVITS 本体 | **〈待填：网盘链接 + 提取码〉** | 解压后应有 `api.py`（main 分支快照即可） |
 | 祥子音色权重 | **〈待填：网盘链接 + 提取码〉** | **`.ckpt` 与 `.pth` 必须成对**，且版本与训练时一致 |
-| 参考音频 | **〈待填：网盘链接 + 提取码〉** | 5~30 秒、单人、无 BGM 的干声（WAV 最稳）+ **逐字日文文稿** |
+| 参考音频 | **插件包内已自带**（`assets/ref/`） | 7.6 秒 / 24 kHz 单声道干声 + 逐字日文文稿，配置留空即自动使用；想换音色再自备 |
 
 **动手前必须向用户问清**（答案决定后面每一步）：
 ① 权重是哪个版本（v2 / v2Pro / v2ProPlus / v3 / v4）？v3/v4 才需要 BigVGAN 声码器与 `sample_steps`；
-② 网盘里有没有参考音频的**逐字文稿**？没有就得让用户提供（文稿与音频不一致会明显跑音）；
+② 要不要换参考音频？**不换就用包内自带的那份**（`assets/ref/sakiko_ref.wav` + `sakiko_ref.prompt.txt`，
+   文稿与音频逐字一致，已实测可用）；要换的话得同时给出**逐字文稿**（文稿与音频不一致会明显跑音）；
 ③ 目标机有没有 N 卡、驱动版本多少？没有就走 `-d cpu`（很慢）。本机实测：RTX 3060 12GB / driver 591.86，
    api 常驻约 3.5–5GB 显存，冷启峰值可到 9GB+。
 
@@ -50,7 +51,7 @@ VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 放 DSH 数据目录里，�
 | Python 环境 | `VOICE_ROOT\env\`（venv，3.10.x） |
 | 基础模型 | `VOICE_ROOT\GPT-SoVITS-main\GPT_SoVITS\pretrained_models\` |
 | 音色权重 | `VOICE_ROOT\weights\`（`.ckpt` + `.pth`） |
-| 参考音频 | `VOICE_ROOT\ref\sakiko_ref.wav` |
+| 参考音频 | `VOICE_ROOT\ref\sakiko_ref.wav`（也可直接留空用**插件包内自带**的 `assets/ref/sakiko_ref.wav`） |
 | 桥（本 skill 附带） | `VOICE_ROOT\bridge_tts.py` + `bridge.config.json` |
 | 插件运行时配置 | `%DSH_HOME%\sakiko\config\sakiko.json` |
 
@@ -97,7 +98,10 @@ $py = "$env:USERPROFILE\.dsh\sakiko\voice\env\Scripts\python.exe"
 → 放进 `GPT_SoVITS\pretrained_models\` 对应子目录。国内走 **modelscope**（HF 不通）。
 判据：四个路径都存在且非 0 字节。（BigVGAN 只有 v3 用得到，v2ProPlus 不必下。）
 
-**3. 放权重与参考音频**：`.ckpt` + `.pth` 放 `weights\`，参考音频放 `ref\`，并记下**逐字文稿**。
+**3. 放权重与参考音频**：`.ckpt` + `.pth` 放 `weights\`。参考音频**可以不放**——
+插件包内已自带一份可用的（`<插件目录>\assets\ref\sakiko_ref.wav` + 逐字文稿 `sakiko_ref.prompt.txt`），
+配置里 `aquaRefAudio` / `aquaPromptText` 留空时插件会自动用它（日志会写一行「未配置 aquaRefAudio ⇒ 使用包内参考音频」）。
+要换成自己的素材就放进 `ref\` 并把绝对路径填进配置，同时**必须**填与之一致的逐字文稿。
 
 **4. 补 NLTK 数据（★ 最容易漏）** —— 放进 `%USERPROFILE%\nltk_data\`：
 ```
@@ -128,8 +132,9 @@ cd "<repo>"
 "provider": "aqua",
 "aquaUrl": "http://127.0.0.1:8000",        // 桥地址
 "aquaVoice": "sakiko",                     // bridge.config.json 里的键名
-"aquaRefAudio": "…\\ref\\sakiko_ref.wav",  // 服务端可读的绝对路径
-"aquaPromptText": "<与参考音频逐字一致的日文>",
+"aquaRefAudio": "",                        // 留空 = 用插件包内自带的 assets/ref/sakiko_ref.wav
+"aquaPromptText": "",                      // 留空 = 用包内自带的 sakiko_ref.prompt.txt
+// 要换素材才填这两项：服务端可读的绝对路径 + 与它逐字一致的日文文稿
 "aquaTextLanguage": "日文", "aquaPromptLanguage": "日文",
 "aquaPreset": "fast",
 "voiceStability": true                     // 失败宁可不发声，也别偷偷换成 Windows 日语女声

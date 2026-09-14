@@ -1816,6 +1816,54 @@ export function apply(ctx) {
       return { bytes, words: [], mime: 'audio/mpeg' }
     }
 
+    // ---------------- 包内自带的音色参考素材（v2.2.0） ----------------
+    // GPT-SoVITS 除权重之外，**每次请求还要一段参考干声 + 与之逐字一致的文稿**（ref_audio_path /
+    // prompt_text）。历史版本把这份素材当成"用户自备"，于是别人装完只有权重仍然出不了声。
+    // 现在包内自带一份（assets/ref/），未配置 aquaRefAudio / aquaPromptText 时兜底使用。
+    // 注意两条边界：
+    //   1) 只作为**兜底**：配置里写了就用配置里的，绝不覆盖用户的选择；
+    //   2) **不因此把默认 provider 切到 aqua** —— `aquaReady` 的判据保持原样（见 synthesizeText），
+    //      否则没配 aqua 的用户会被静默改道去请求 127.0.0.1:8000。
+    const PACKAGED_REF_WAV = ROOT + '/assets/ref/sakiko_ref.wav'
+    const PACKAGED_REF_PROMPT = ROOT + '/assets/ref/sakiko_ref.prompt.txt'
+    let packagedRefCache = null            // { ref, prompt } | false（包内没有 / 读不到）
+    let packagedRefLogged = false
+
+    async function packagedRefAssets() {
+      if (packagedRefCache !== null) return packagedRefCache
+      try {
+        if (!(await pathExists(PACKAGED_REF_WAV))) { packagedRefCache = false; return false }
+        let prompt = ''
+        try { prompt = String((await readTextFile(PACKAGED_REF_PROMPT)) || '').trim() } catch (e) { prompt = '' }
+        packagedRefCache = { ref: PACKAGED_REF_WAV, prompt }
+      } catch (e) { packagedRefCache = false }
+      return packagedRefCache
+    }
+
+    // aqua 是不是"用户在用的通道"（判据与 aquaReady 一致，但**不含**包内素材）
+    function aquaConfigured() {
+      return config.provider === 'aqua' || !!config.aquaVoice || !!config.aquaRefAudio
+    }
+
+    // 取本次请求实际要用的 { ref, prompt }：配置优先，缺的用包内兜底
+    async function resolveAquaRef() {
+      let ref = String(config.aquaRefAudio || '')
+      let prompt = String(config.aquaPromptText || '')
+      if ((ref && prompt) || !aquaConfigured()) return { ref, prompt }
+      const pack = await packagedRefAssets()
+      if (pack === false || !pack.ref) return { ref, prompt }
+      if (!ref) {
+        ref = pack.ref
+        if (!packagedRefLogged) {
+          packagedRefLogged = true
+          voiceLog('未配置 aquaRefAudio ⇒ 使用包内参考音频 ' + PACKAGED_REF_WAV
+            + (pack.prompt ? '（文稿同用包内 ' + PACKAGED_REF_PROMPT + '）' : ''))
+        }
+      }
+      if (!prompt && pack.prompt) prompt = pack.prompt
+      return { ref, prompt }
+    }
+
     async function synthesizeAqua(text, emotion) {
       const slot = nextSlot()
       const oPath = TMP_DIR + '/aqua-' + slot + '.wav'
@@ -1823,10 +1871,11 @@ export function apply(ctx) {
       let voice = config.aquaVoice || ''
       const emoMap = config.aquaEmotionVoices
       if (emotion && emoMap && emoMap[emotion]) voice = emoMap[emotion]
+      const refUse = await resolveAquaRef()
       const params = ['text=' + encURI(text)]
       if (voice) params.push('voice=' + encURI(voice))
-      if (config.aquaRefAudio) params.push('ref_audio_path=' + encURI(config.aquaRefAudio))
-      if (config.aquaPromptText) params.push('prompt_text=' + encURI(config.aquaPromptText))
+      if (refUse.ref) params.push('ref_audio_path=' + encURI(refUse.ref))
+      if (refUse.prompt) params.push('prompt_text=' + encURI(refUse.prompt))
       params.push('text_language=' + encURI(config.aquaTextLanguage || '日文'))
       params.push('prompt_language=' + encURI(config.aquaPromptLanguage || '日文'))
       if (config.aquaPreset) params.push('preset=' + encURI(config.aquaPreset))
@@ -1870,7 +1919,7 @@ export function apply(ctx) {
       const useCache = config.provider !== 'auto'
       // provider 缓存键包含 provider 专属参数，避免切换音色/角色后命中旧缓存。
       let providerKey = config.provider
-      if (config.provider === 'aqua') providerKey = 'aqua:' + (config.aquaVoice || '') + ':' + (config.aquaRefAudio || '') + ':' + (config.aquaPreset || 'fast')
+      if (config.provider === 'aqua') providerKey = 'aqua:' + (config.aquaVoice || '') + ':' + (config.aquaRefAudio || '(包内参考音频)') + ':' + (config.aquaPreset || 'fast')
       if (config.provider === 'voicevox') providerKey = 'voicevox:' + (config.voicevoxSpeaker || 8)
       if (config.provider === 'openai') providerKey = 'openai:' + (config.openaiTtsModel || 'tts-1') + ':' + (config.openaiTtsVoice || 'nova') + ':' + (config.openaiTtsUrl || config.chatBaseUrl || '')
       const key = [providerKey, text, voice, rate, pitch, emo].join('\u0001')

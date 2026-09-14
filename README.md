@@ -97,11 +97,23 @@ dsh plugin --profile web add <新的 spec>
 
 ### 2. 安装语音
 
-音色模型与运行环境（约 9 GB）**不随包分发**，需自行准备三样：
+音色模型与运行环境（约 9 GB）**不随包分发**，需自行准备：
 
 - **GPT-SoVITS 本体**
 - **祥子音色权重**（`.ckpt` + `.pth` 成对）
-- **参考音频**（5~30 秒单人干声 + 与之一致的逐字日文文稿）
+
+**音色参考素材已随包分发**（`assets/ref/`）：GPT-SoVITS 除了权重，每次请求还需要一段**参考干声**
+与**与它逐字一致的文稿**（`ref_audio_path` / `prompt_text`）。
+
+| 包内文件 | 内容 |
+| --- | --- |
+| `assets/ref/sakiko_ref.wav` | 参考干声：7.6 秒 / 24 kHz 单声道 |
+| `assets/ref/sakiko_ref.prompt.txt` | 与上面那段音频逐字一致的日文文稿 |
+
+配置里 `aquaRefAudio` / `aquaPromptText` **留空**时自动使用包内这份（日志会写一行
+「未配置 aquaRefAudio ⇒ 使用包内参考音频」）；想换音色就填自己的绝对路径，配置**优先**。
+注意：包内素材只是**兜底**，不会因此把默认 TTS 通道切到 aqua —— 要启用日语语音仍需把
+`aquaVoice`（例如 `sakiko`）或 `aquaRefAudio` 配上。
 
 **推荐做法**：把包内自带的安装 skill 放进 DSH，然后交给 AI agent 完成：
 
