@@ -2304,11 +2304,31 @@ export function apply(ctx) {
     function normTitle(v) {
       return (typeof v === 'string' && v.trim().length > 0) ? truncCps(v.trim(), 40) : ''
     }
+    // 取某个会话的事件日志。
+    //   ★ 2026-09-14 修复：DSH 的 Session 对象**没有 `.events` 属性** —— 事件日志只通过
+    //     `snapshotEvents()` 方法暴露（dsh-session/lib/index.js L1107：无参调用返回已被缓存并
+    //     `Object.freeze` 的完整快照；DSH 自己 L1219 / L1594 也是这么用的）。
+    //     旧实现直接读 `session.events`，恒为 undefined → titleFromLog 永远返回 ''
+    //     → 「标签三级回退」的第①级（会话标题）从不生效 → 永远落到第②级 `basename(cwd)`，
+    //     即**工作区目录名**。现场表现：祥子播报前缀显示 "deepseek harness"（cwd 的 basename）
+    //     而不是会话标题（如 "sakiko"）。
+    //   按「当前 API → 旧形状 → 内部字段」依次探测，任一可用即可。
+    function sessionEvents(session) {
+      try {
+        if (session === null || session === undefined) return []
+        if (typeof session.snapshotEvents === 'function') {
+          const evs = session.snapshotEvents()
+          if (Array.isArray(evs)) return evs
+        }
+        if (Array.isArray(session.events)) return session.events   // 旧形状（历史上曾可用）
+        if (Array.isArray(session.log)) return session.log         // 内部字段兜底（非公开 API）
+      } catch (e) { /* 任何一步异常都退到下一种来源 */ }
+      return []
+    }
     // 会话标题也可从事件日志回折（插件晚挂载时首见即拿到既有标题；不可读则走 cwd 回退）
     function titleFromLog(session) {
       try {
-        const evs = (session === null || session === undefined) ? undefined : session.events
-        if (!Array.isArray(evs)) return ''
+        const evs = sessionEvents(session)
         for (let i = evs.length - 1; i >= 0; i--) {
           const ev = evs[i]
           if (ev && ev.type === 'session/title') {
