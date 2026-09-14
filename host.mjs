@@ -451,26 +451,24 @@ export function apply(ctx) {
       return fs.writeText(t, content, undefined, undefined, policy)
     }
 
-    // 数据目录（config/memory/tmp）不存在时用系统命令补建（fs 服务无 mkdir）
+    // 数据目录（config/memory/tmp/logs）不存在时补建。
+    //
+    // 2026-09-14 修复（静默失效类）：原先这里走 `subprocess.spawn(cmd.exe /c mkdir)`，
+    //   派生一旦失败就只 `console.error` 然后继续往下跑。而 `TMP_DIR` 是
+    //   aqua / quest / voicevox / openai 四条 curl 通道与 stt / chat 的**落盘目录**，
+    //   `curl -o` 不会创建父目录 —— 于是这些通道会**全部**以极具误导性的
+    //   `curl exited 23`（写盘失败）报错，现场表现是「插件级 /sakiko/tts 秒回 502，
+    //   但直连 bridge :8000 却完全正常」，与语音链路无关，极难定位。
+    //   实测触发条件：插件首次加载时宿主正处在「无法创建任何新进程」的状态
+    //   （子进程派生 0xC0000142 / EPERM），此时 `cmd /c mkdir` 起不来，
+    //   tmp 建不出来 —— 而 logs/run 因为用的是 mkdirSync 所以建成了，对比明显。
+    //   改用 node:fs 的 mkdirSync（进程内、recursive 幂等、不经子进程），
+    //   与本文件 L1013(LOG_DIR) / L1089(RUN_DIR) 既有做法一致，从根上消除该失败模式。
     async function ensureDataDirs() {
       const dirs = [DATA_DIR, DATA_DIR + '/config', DATA_DIR + '/memory', DATA_DIR + '/tmp', DATA_DIR + '/logs']
       for (const d of dirs) {
         try {
-          const t = await fs.resolve(d)
-          const info = await fs.stat(t)
-          if (info !== undefined) continue
-        } catch (e) { /* 不存在 → 尝试创建 */ }
-        try {
-          const win = typeof process !== 'undefined' && process.platform === 'win32'
-          const exe = win ? (process.env.ComSpec || 'cmd.exe') : 'mkdir'
-          const args = win ? ['/c', 'mkdir', d] : ['-p', d]
-          const proc = subprocess.spawn({
-            argv: [exe].concat(args),
-            cwd: ROOT,
-            stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
-            graceMs: 8000,
-          })
-          await raceDone(proc, 'mkdir ' + d)
+          mkdirSync(d, { recursive: true })
         } catch (e) {
           console.error('[sakiko] 创建数据目录失败:', d, e && e.message ? e.message : String(e))
         }
