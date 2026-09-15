@@ -20,21 +20,25 @@ DSH 插件 ──POST {aquaUrl}/tts/file?…──▶ 桥 bridge_tts.py :8100 �
 在根路径用另一套参数名，两者不通用 —— 所以中间**必须有一个桥**。本 skill 附带写好并实测过的桥
 （纯标准库、零依赖、配置驱动、会自动 `set_model`），不要自己另写。
 
-## 开工前先读这三条（否则一定踩）
+## 开工前先读这四条（否则一定踩）
 
 1. **改插件配置必须在 DSH 停止状态下改**。`%DSH_HOME%\sakiko\config\sakiko.json` 只在启动时读一次，
    之后面板上任何一次改动都会把内存里那份**整份回写**，覆盖掉你的手工修改。
+   （DSH 运行时想改，就走 `setConfig` RPC，它热生效且会落盘。）
 2. **api 重启后音色注册表会清空**，必须重新发 `/set_model`，否则报错/空音频。本 skill 的桥会在首次
    用到某音色时自动补这一步（旧版手写桥不会，所以换音色必须重启 api）。
 3. **含拉丁字母的文本走英语 G2P**：缺 NLTK 数据时它会联网下载并**卡死约 2 分钟**，表现为
-   「纯假名正常、含 `DSH`/`GPT` 的句子必失败」。第 4 步必须先补数据。
+   「纯假名正常、含 `DSH`/`GPT` 的句子必失败」。第 2 步的第 ③ 条会一并把数据放好。
+4. **别用 PATH 上的 `tar` 解压 zip**：那多半是 GNU tar，不认 zip，会"0.6 秒成功"却什么都没解出来
+   （实测踩过）。一律用绝对路径 `"$env:SystemRoot\System32\tar.exe"`（bsdtar）。
 
-## 资源清单（网盘）
+## 资源清单（全部为公开来源，不需要网盘）
 
-| 资源 | 链接 | 说明 |
+| 资源 | 来源 | 说明 |
 | --- | --- | --- |
-| GPT-SoVITS 本体 | **〈待填：网盘链接 + 提取码〉** | 解压后应有 `api.py`（main 分支快照即可） |
-| 祥子音色权重 | **〈待填：网盘链接 + 提取码〉** | **`.ckpt` 与 `.pth` 必须成对**，且版本与训练时一致 |
+| GPT-SoVITS 本体 | **官方仓库**：<https://github.com/RVC-Boss/GPT-SoVITS> | clone 或下 ZIP 均可；目录名通常形如 `GPT-SoVITS-main`，里面必须有 `api.py` |
+| GPT-SoVITS 基础模型 | **ModelScope 整合包**（第 2 步一条命令下完） | 三个 zip：4.24GB + 561.6MB + 9.5MB；比去 HuggingFace 逐个下省事得多（HF 在国内不通） |
+| 祥子音色权重（v2Pro） | **本仓库 Release**：<https://github.com/hg4/sakiko-for-dsh/releases/download/weights-v2p/sakiko-weights-v2p.tar.gz> | **289.4 MB**；SHA256 `169283eb1b611e0d5d0e0156429ba05eb2f4ea25e2022b8f4529d6af6c706f4a`；`.ckpt` 与 `.pth` **必须成对** |
 | 参考音频 | **插件包内已自带**（`assets/ref/`） | 7.6 秒 / 24 kHz 单声道干声 + 逐字日文文稿，配置留空即自动使用；想换音色再自备 |
 
 **动手前必须向用户问清**（答案决定后面每一步）：
@@ -47,17 +51,18 @@ DSH 插件 ──POST {aquaUrl}/tts/file?…──▶ 桥 bridge_tts.py :8100 �
 ## 落点（默认布局；换盘就把 `VOICE_ROOT` 整体替换）
 
 ```
-VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 放 DSH 数据目录里，重装插件不丢
+VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 默认放 DSH 数据目录里，重装插件不丢
+             H:\sakiko-voice                       # 本机实测用的是这个（换盘就整体替换，下文用 $v 代表它）
 ```
 
 | 内容 | 路径 |
 | --- | --- |
-| GPT-SoVITS 源码 | `VOICE_ROOT\GPT-SoVITS-main\`（**api 必须以它为 cwd 启动**，模型路径都相对 cwd） |
-| Python 环境 | `VOICE_ROOT\env\`（venv，3.10.x） |
-| 基础模型 | `VOICE_ROOT\GPT-SoVITS-main\GPT_SoVITS\pretrained_models\` |
-| 音色权重 | `VOICE_ROOT\weights\`（`.ckpt` + `.pth`） |
-| 参考音频 | `VOICE_ROOT\ref\sakiko_ref.wav`（也可直接留空用**插件包内自带**的 `assets/ref/sakiko_ref.wav`） |
-| 桥（本 skill 附带） | `VOICE_ROOT\bridge_tts.py` + `bridge.config.json` |
+| GPT-SoVITS 源码 | `$v\GPT-SoVITS-main\`（**api 必须以它为 cwd 启动**，模型路径都相对 cwd） |
+| Python 环境 | `$v\env\`（venv，3.10.x） |
+| 基础模型 | `$v\GPT-SoVITS-main\GPT_SoVITS\pretrained_models\` |
+| 音色权重 | `$v\weights\`（`.ckpt` + `.pth`） |
+| 参考音频 | `$v\ref\sakiko_ref.wav`（也可直接留空用**插件包内自带**的 `assets/ref/sakiko_ref.wav`） |
+| 桥（本 skill 附带） | `$v\bridge_tts.py` + `bridge.config.json` |
 | 插件运行时配置 | `%DSH_HOME%\sakiko\config\sakiko.json` |
 
 ## 更省事：让插件自己拉起服务（第 6/7 步可跳过）
@@ -67,10 +72,10 @@ VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 放 DSH 数据目录里，�
 
 ```jsonc
 "voiceAutoStart":    true,                 // 默认开
-"voiceRoot":         "D:\\sakiko-voice",   // 前面的 VOICE_ROOT
+"voiceRoot":         "H:\\sakiko-voice",   // 前面的 VOICE_ROOT
 "voiceDevice":       "cuda",
-"voiceGptWeights":   "D:\\...\\x.ckpt",    // 留空 = 零样本克隆
-"voiceSovitsWeights":"D:\\...\\x.pth",
+"voiceGptWeights":   "H:\\sakiko-voice\\weights\\sakiko_v2p.ckpt",   // 留空 = 零样本克隆
+"voiceSovitsWeights":"H:\\sakiko-voice\\weights\\sakiko_v2p.pth",
 "voiceApiPort":      9880,
 "voiceBridgePort":   8100
 ```
@@ -85,57 +90,133 @@ VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 放 DSH 数据目录里，�
 ## 步骤（判据不成立就别往下走）
 
 **1. 建 Python 环境**（3.10.x；**先装 torch 再装 requirements**，否则会装成 CPU 版）
+
 ```powershell
-py -3.10 -m venv "$env:USERPROFILE\.dsh\sakiko\voice\env"
-$py = "$env:USERPROFILE\.dsh\sakiko\voice\env\Scripts\python.exe"
+$v = 'H:\sakiko-voice'                              # ← VOICE_ROOT，按需替换
+py -3.10 -m venv "$v\env"
+$py = "$v\env\Scripts\python.exe"
 & $py -m pip install -U pip
-& $py -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://mirrors.nju.edu.cn/pytorch/whl/cu121/
+# torch 走官方源：nju 镜像只有 2.36MB/s，官方 32.71MB/s（实测差 14 倍）
+& $py -m pip install --index-url https://pypi.org/simple --progress-bar off `
+    torch==2.5.1 torchaudio==2.5.1
 # requirements.txt 第 1 行 --no-binary=opencc 在 Windows 上编不过：删掉它，改装 opencc-python-reimplemented
-& $py -m pip install -r "<repo>\requirements.txt" opencc-python-reimplemented -i https://pypi.tuna.tsinghua.edu.cn/simple
+& $py -m pip install -r "$v\GPT-SoVITS-main\requirements.txt" opencc-python-reimplemented -i https://pypi.tuna.tsinghua.edu.cn/simple
 & $py -m pip install "transformers==4.51.3" "numpy==1.26.4"
 ```
+
 判据：`& $py -c "import torch,transformers;print(torch.__version__,torch.cuda.is_available(),transformers.__version__)"`
 → `2.5.1+cu121 True 4.51.3`。**transformers ≥4.57 会强制 torch≥2.6，必须钉住 4.51.3。**
 
-**2. 下基础模型**（v2ProPlus 推理必需四件；缺任一项启动或推理就失败）
-`chinese-hubert-base`(188MB)、`chinese-roberta-wwm-ext-large`(651MB)、
-`sv\pretrained_eres2netv2w24s4ep4.ckpt`(107MB)、`fast_langdetect\lid.176.ftz`(0.9MB)
-→ 放进 `GPT_SoVITS\pretrained_models\` 对应子目录。国内走 **modelscope**（HF 不通）。
-判据：四个路径都存在且非 0 字节。（BigVGAN 只有 v3 用得到，v2ProPlus 不必下。）
+> 踩坑：`--index-url` 指向 PyTorch 索引会让 pip 因元数据大小写/下划线不规范而丢弃 wheel、
+> 退化成编 sdist（报 `Could not find a version that satisfies flit_core`）。
+> 所以 **torch 单独用官方源装**，其余依赖仍走 PyPI/清华镜像。
 
-**3. 放权重与参考音频**：`.ckpt` + `.pth` 放 `weights\`。参考音频**可以不放**——
-插件包内已自带一份可用的（`<插件目录>\assets\ref\sakiko_ref.wav` + 逐字文稿 `sakiko_ref.prompt.txt`），
-配置里 `aquaRefAudio` / `aquaPromptText` 留空时插件会自动用它（日志会写一行「未配置 aquaRefAudio ⇒ 使用包内参考音频」）。
-要换成自己的素材就放进 `ref\` 并把绝对路径填进配置，同时**必须**填与之一致的逐字文稿。
+**2. 下基础模型（★ 一条命令搞定，别去 HuggingFace 逐个下）**
 
-**4. 补 NLTK 数据（★ 最容易漏）** —— 放进 `%USERPROFILE%\nltk_data\`：
+用 ModelScope 的整合包（`XXXXRT/GPT-SoVITS-Pretrained`，国内直连、实测 24.3MB/s）：
+
+```powershell
+$v = 'H:\sakiko-voice'
+$ms  = 'https://modelscope.cn/models/XXXXRT/GPT-SoVITS-Pretrained/resolve/master'
+$tar = "$env:SystemRoot\System32\tar.exe"           # 必须绝对路径调 bsdtar，见"开工前先读"第 4 条
+New-Item -ItemType Directory -Force -Path "$v\_dl" | Out-Null
+$dl = { param($name) curl.exe -L --fail --ssl-no-revoke --retry 3 --retry-delay 5 -o "$v\_dl\$name" "$ms/$name" }
+
+# ① 基础模型 4.24GB（实测 2 分 58 秒）
+& $dl 'pretrained_models.zip'
+& $tar -xf "$v\_dl\pretrained_models.zip" -C "$v\GPT-SoVITS-main\GPT_SoVITS\"
+
+# ② 中文 G2P 模型 561.6MB → g2pW.onnx 605.8MB
+& $dl 'G2PWModel.zip'
+& $tar -xf "$v\_dl\G2PWModel.zip" -C "$v\GPT-SoVITS-main\GPT_SoVITS\text\"
+
+# ③ NLTK 数据 9.5MB（"开工前先读"第 3 条要的就是它，别再手工凑四个文件）
+& $dl 'nltk_data.zip'
+& $tar -xf "$v\_dl\nltk_data.zip" -C "$env:USERPROFILE\"
 ```
-corpora\cmudict.zip        和  corpora\cmudict\
-taggers\averaged_perceptron_tagger.zip      （NLTK 3.10 还要 _eng 变体）
-taggers\averaged_perceptron_tagger_eng.zip
-```
-**必须是 `.zip` 文件本身**（`english.py` 找的是 zip，不是解压目录）。
-判据（免重启）：`& $py -c "import time;from g2p_en import G2p;t=time.time();g=G2p();print(g('DSH'),time.time()-t)"`
-→ **<5 秒**且不打印 `[nltk_data] Error loading`；卡 90 秒以上就是没修好。**改完必须重启 api。**
 
-**5. 配桥**：把本 skill 的 `bridge_tts.py` 复制到 `VOICE_ROOT\`，同目录复制一份
+判据（**实测大小**，对不上就是没下全）：
+
+| 路径（相对 `GPT_SoVITS\pretrained_models\`） | 大小 |
+| --- | --- |
+| `chinese-hubert-base\` | 180.1 MB |
+| `chinese-roberta-wwm-ext-large\` | 621.3 MB |
+| `sv\pretrained_eres2netv2w24s4ep4.ckpt` | 102.5 MB |
+| `v2Pro\s2Gv2Pro.pth` | 154.8 MB |
+| `s1v3.ckpt` | 148.1 MB |
+| `fast_langdetect\lid.176.bin` | **125.2 MB** |
+
+> **`lid.176` 是 `.bin` 不是 `.ftz`**：新版 `fast_langdetect` 用的是大模型 `lid.176.bin`（125.2MB），
+> 早期文档里写的 `lid.176.ftz`（0.9MB）是旧版描述 —— 按 `.ftz` 去核对会误判成"装错了"。
+> 另：`gsv-v4-pretrained` / BigVGAN 等目录**不是 v2Pro 推理的必需项**，别多下（本机当初多下了约 2GB）。
+
+**3. 放权重**（`.ckpt` + `.pth` 必须成对，版本要与训练时一致）
+
+从本仓库 Release 下载（289.4 MB；实测 GitHub Release CDN 在这台机器上 2.4MB/s、支持断点续传）：
+
+```powershell
+$v = 'H:\sakiko-voice'
+curl.exe -L --fail --ssl-no-revoke --retry 3 --retry-delay 5 `
+  -o "$v\_dl\sakiko-weights-v2p.tar.gz" `
+  'https://github.com/hg4/sakiko-for-dsh/releases/download/weights-v2p/sakiko-weights-v2p.tar.gz'
+
+# 校验（可选但推荐）
+(Get-FileHash "$v\_dl\sakiko-weights-v2p.tar.gz" -Algorithm SHA256).Hash.ToLower()
+# 应为 169283eb1b611e0d5d0e0156429ba05eb2f4ea25e2022b8f4529d6af6c706f4a
+
+& "$env:SystemRoot\System32\tar.exe" -xf "$v\_dl\sakiko-weights-v2p.tar.gz" -C "$v\"
+# → $v\weights\sakiko_v2p.ckpt 与 $v\weights\sakiko_v2p.pth
+```
+
+包内用的是 **ASCII 文件名**（`sakiko_v2p.ckpt` / `sakiko_v2p.pth`），刻意避开中文名在解压工具里的乱码坑。
+自己训练或另找的权重也行，成对放进 `$v\weights\` 即可。
+
+**参考音频可以不放** —— 插件包内已自带一份可用的（`<插件目录>\assets\ref\sakiko_ref.wav` + 逐字文稿
+`sakiko_ref.prompt.txt`），配置里 `aquaRefAudio` / `aquaPromptText` 留空时插件会自动用它
+（日志会写一行「未配置 aquaRefAudio ⇒ 使用包内参考音频」）。要换成自己的素材就放进 `$v\ref\`
+并把绝对路径填进配置，同时**必须**填与之一致的逐字文稿。
+
+**4. 核对 NLTK 数据（第 2 步的 ③ 已放好，这里只核对）**
+
+第 2 步会把 `nltk_data.zip` 解压到 `%USERPROFILE%\nltk_data\`。需要存在的是这四个，
+**`.zip` 文件本身必须在**（`english.py` 找的是 zip，不是解压目录）：
+
+```
+corpora\cmudict.zip          corpora\cmudict\
+taggers\averaged_perceptron_tagger.zip
+taggers\averaged_perceptron_tagger_eng.zip      # NLTK 3.10 才需要
+```
+
+判据（免重启 api）：
+
+```powershell
+& $py -c "import time;from g2p_en import G2p;t=time.time();g=G2p();print(g('DSH'),time.time()-t)"
+```
+
+→ **<5 秒**且不打印 `[nltk_data] Error loading`；卡 90 秒以上就是没修好。**补完必须重启 api。**
+
+**5. 配桥**：把本 skill 的 `bridge_tts.py` 复制到 `$v\`，同目录复制一份
 `bridge.config.example.json` 改名 `bridge.config.json`，填 `gpt_api` / `bridge_port` / 各音色的
 `gpt`+`sovits` 绝对路径。（没有训练权重也能用：`voices` 里只留一个空对象 = 零样本克隆。）
 
 **6. 起 api**（cwd 必须是 repo 根，端口被占就换 9880 → 记得同步改桥的 `gpt_api`）
-```powershell
-cd "<repo>"
-& $py -u api.py -a 127.0.0.1 -p 9880 -d cuda -g "<weights>\x.ckpt" -s "<weights>\x.pth"
-```
-判据：9880 在监听，且日志出现 `模型版本: v2ProPlus`。（`-u` 保证日志实时；不加会长时间 0 字节。）
 
-**7. 起桥**：`& $py -u "<VOICE_ROOT>\bridge_tts.py"`（用**任意** python 都行，桥不依赖 GPT-SoVITS 环境）
+```powershell
+cd "$v\GPT-SoVITS-main"
+& $py -u api.py -a 127.0.0.1 -p 9880 -d cuda -g "$v\weights\sakiko_v2p.ckpt" -s "$v\weights\sakiko_v2p.pth"
+```
+
+判据：9880 在监听，且日志出现 `模型版本: …`（按你实际权重的版本，本机用的是 v2Pro）。
+（`-u` 保证日志实时；不加会长时间 0 字节。）
+
+**7. 起桥**：`& $py -u "$v\bridge_tts.py"`（用**任意** python 都行，桥不依赖 GPT-SoVITS 环境）
 判据：`curl -sS http://127.0.0.1:8100/health` → `{"ok":true,"api":true,…}`
 
 **8. 写插件配置**（**先停 DSH**）——`%DSH_HOME%\sakiko\config\sakiko.json`：
+
 ```jsonc
 "provider": "aqua",
-"aquaUrl": "http://127.0.0.1:8100",        // 桥地址
+"aquaUrl": "http://127.0.0.1:8100",        // 桥地址（桥默认端口 8100，不是 8000）
 "aquaVoice": "sakiko",                     // bridge.config.json 里的键名
 "aquaRefAudio": "",                        // 留空 = 用插件包内自带的 assets/ref/sakiko_ref.wav
 "aquaPromptText": "",                      // 留空 = 用包内自带的 sakiko_ref.prompt.txt
@@ -144,11 +225,21 @@ cd "<repo>"
 "aquaPreset": "fast",
 "voiceStability": true                     // 失败宁可不发声，也别偷偷换成 Windows 日语女声
 ```
-面板**只暴露** provider / preset / 语速 / 音高，`aquaUrl/aquaVoice/aquaRefAudio/aquaPromptText` 没有 UI，
-只能手改 JSON。
 
-**9. 体检 + 端到端验证**：先 `python preflight.py --voice-root "<VOICE_ROOT>"`（退出码 0 才继续），
+面板**只暴露** provider / preset / 语速 / 音高，`aquaUrl/aquaVoice/aquaRefAudio/aquaPromptText` 没有 UI，
+只能手改 JSON（或在 DSH 运行时走 `setConfig` RPC）。
+
+**9. 体检 + 端到端验证**：先 `python preflight.py --voice-root "$v"`（退出码 0 才继续），
 再照下面的验证阶梯做。
+
+## 各步骤实测耗时（本机 RTX 3060，供预期）
+
+| 步骤 | 耗时 |
+| --- | --- |
+| 基础模型三个 zip（4.8GB） | 约 3 分钟（24.3MB/s） |
+| 权重 289.4MB（GitHub Release） | 约 2 分钟（2.4MB/s） |
+| Python 环境 + 依赖 | 10–20 分钟（取决于源） |
+| api 冷启动（加载模型） | **41–56 秒**（这一段没就绪时插件会等，不会丢欢迎语） |
 
 ## 验证阶梯（L1/L2 不算通过）
 
@@ -175,11 +266,13 @@ curl.exe -sS -m 60 -X POST $u -o "$env:TEMP\v.wav" -w "code=%{http_code} bytes=%
 
 | 现象 | 根因 | 修法 |
 | --- | --- | --- |
-| 纯假名正常，含英文/拉丁词的句子必失败或卡 2 分钟 | 缺 NLTK 数据 | 第 4 步；补完**重启 api** |
+| 纯假名正常，含英文/拉丁词的句子必失败或卡 2 分钟 | 缺 NLTK 数据 | 第 2 步的第 ③ 条；补完**重启 api** |
 | `aqua: empty audio` / 500 `IncompleteRead` | api 没起、权重没注册、或参考音频路径错 | 看 api 的 stderr（桥的 500 body 里带 api 原始错误）；重发 `/set_model` |
 | 换音色没反应 | 旧版桥把权重路径解包后没用、真正载入的是 api 启动时那对权重 | 用本 skill 的桥（会自动 set_model），或重启 api 换 `-g/-s` |
-| 明明改了配置却不生效 | DSH 运行时只读一次 + 面板整份回写覆盖 | 停 DSH 再改 |
-| 端口 8000/8100 被别的程序占了 | 两者都是常见 HTTP 端口 | 桥设 `BRIDGE_PORT`，插件 `aquaUrl` 同步改 |
+| 明明改了配置却不生效 | DSH 运行时只读一次 + 面板整份回写覆盖 | 停 DSH 再改，或运行时走 `setConfig` RPC |
+| 端口被别的程序占了（桥默认 **8100**） | 8000/8100 都是常见 HTTP 端口（**UnrealEditor 官方 MCP 就默认占 8000**，所以本插件默认避开它用 8100） | 桥设 `BRIDGE_PORT`，插件 `aquaUrl` 同步改 |
+| 解压 zip "成功"却没有文件 | PATH 上的 `tar` 是 GNU tar，不认 zip | 用 `"$env:SystemRoot\System32\tar.exe"` |
+| `curl: (35) schannel: CRYPT_E_NO_REVOCATION_CHECK` | Windows schannel 查吊销列表失败 | curl 加 `--ssl-no-revoke` |
 | 合成很慢 / 显存不够 | 没走 CUDA，或与别的 GPU 任务抢卡 | 确认 `-d cuda` 与 `torch.cuda.is_available()`；错开重负载 |
 | 音色不像/时好时坏 | 参考音频有 BGM/噪音，或文稿与音频不一致 | 换 5~30s 干声；文稿逐字对齐；开 `voiceStability` |
 

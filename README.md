@@ -33,7 +33,8 @@
 3. **上游角色素材**：《命运石之门》相关权利归 MAGES./Nitroplus。
 4. **使用限制**：仅供**个人学习、研究与技术交流**。**禁止任何形式的商业使用**
    （包括但不限于售卖、付费分发、植入广告、以本插件作为付费服务的一部分）。
-5. **语音模型**：音色模型由公开动画音源训练而成，仅供个人试听与研究，**不随包分发**。
+5. **语音模型**：音色权重由公开动画音源训练而成，仅供个人试听与研究。权重以**独立 Release 资产**
+   的形式提供（**不随插件包分发**），下载后请仅用于个人学习 —— **不要再分发、不要商用**。
    若权利方对相关内容提出异议，将立即删除相关素材与模型。
 6. **立绘素材**：Live2D 模型来自网络公开的粉丝制作资源，版权归原作者。
 7. **第三方组件**：pixi.js 等第三方组件遵循其各自许可，
@@ -97,10 +98,23 @@ dsh plugin --profile web add <新的 spec>
 
 ### 2. 安装语音
 
-音色模型与运行环境（约 9 GB）**不随包分发**，需自行准备：
+音色通道 `aqua` 要准备的东西**全部有公开来源，不需要网盘**：
 
-- **GPT-SoVITS 本体**
-- **祥子音色权重**（`.ckpt` + `.pth` 成对）
+| 要准备的 | 从哪来 | 大小 |
+| --- | --- | --- |
+| GPT-SoVITS 本体 | 官方仓库 <https://github.com/RVC-Boss/GPT-SoVITS> | — |
+| GPT-SoVITS 基础模型（含中文 G2P、NLTK 数据） | ModelScope 整合包，三个 zip 一条命令下完 —— 见 [安装 skill 第 2 步](./skills/sakiko-voice-setup/SKILL.md) | 约 4.8 GB |
+| **祥子音色权重**（`.ckpt` + `.pth` 成对） | **本项目 Release**：<https://github.com/hg4/sakiko-for-dsh/releases/download/weights-v2p/sakiko-weights-v2p.tar.gz> | **289.4 MB** |
+| Python 运行环境（3.10 + torch 2.5.1/cu121） | 自行建立，逐条命令见 skill 第 1 步 | 约 4 GB |
+
+权重包 SHA256（下载后可校验）：
+
+```
+169283eb1b611e0d5d0e0156429ba05eb2f4ea25e2022b8f4529d6af6c706f4a
+```
+
+包内是 **ASCII 文件名**（`sakiko_v2p.ckpt` / `sakiko_v2p.pth`，刻意避开中文名在解压工具里的乱码坑），
+解压后放进语音根目录的 `weights\`，再把两个绝对路径填进配置的 `voiceGptWeights` / `voiceSovitsWeights`。
 
 **音色参考素材已随包分发**（`assets/ref/`）：GPT-SoVITS 除了权重，每次请求还需要一段**参考干声**
 与**与它逐字一致的文稿**（`ref_audio_path` / `prompt_text`）。
