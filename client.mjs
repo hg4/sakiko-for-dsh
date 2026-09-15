@@ -50,7 +50,23 @@ export function apply(ctx) {
       // P6 补丁 2：36px 圆角 + 深蓝深端色 #0c1428 填充四角弧口 + 环绕双影，消除四角白斑） ----------------
       ".amad-float-shell{pointer-events:auto;position:fixed;display:block;border:0;border-radius:36px;background:#0c1428;box-shadow:0 8px 28px rgba(0,0,0,.5),0 0 40px rgba(0,0,0,.38);overflow:hidden;user-select:none;}" +
       ".amad-float-body{position:absolute;inset:0;display:block;}" +
-      ".amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;}" +
+      // 2026-09-15「浮窗四角白边」修复（黑底矩阵实测，逐条排除后唯一有效机制）：
+      //   Chrome 给子框架文档画布填**不透明白**（html/body 的 background:transparent 只作用于元素，
+      //   不作用于画布 —— 实测清空面板内容后整块 iframe 呈纯白 255,255,255），且
+      //   **composited iframe 会逃逸祖先的 overflow:hidden + border-radius 圆角裁切**。
+      //   因此下列手段全部无效（黑底实测，圆角外白像素 12400~28651 一个都没消掉）：
+      //   壳的圆角边框 / 同色 border / 同色画布 / clip-path(壳·body·root) / contain:paint /
+      //   transform / filter / isolation / iframe 自身 border-radius。
+      //   唯一有效：给 **iframe 自身**加圆角遮罩 —— mask 由合成器作用在 iframe 自己的层上，
+      //   圆角半径 36px 与 #phone 的 36px、外壳的 36px 同 rect 同心，故白边被彻底裁掉且轮廓完全对齐。
+      //   写法要点（两种踩过的坑）：data URI 里的 SVG 是独立 XML 文档，**属性值必须加引号**；
+      //   且必须带 `;utf8` 参数并让 CSS 侧用双引号包裹（SVG 属性用单引号）——
+      //   整串百分号编码那种写法实测会让 mask 图像加载失败，导致 iframe 被整个遮没。
+      ".amad-float-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent;pointer-events:auto;" +
+        "-webkit-mask-image:url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' rx='36' ry='36' fill='%23fff'/></svg>\");" +
+        "-webkit-mask-size:100% 100%;-webkit-mask-repeat:no-repeat;" +
+        "mask-image:url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><rect width='100%' height='100%' rx='36' ry='36' fill='%23fff'/></svg>\");" +
+        "mask-size:100% 100%;mask-repeat:no-repeat;}" +
       ".amad-float-strip{position:absolute;top:0;left:0;right:0;height:10px;cursor:move;touch-action:none;z-index:6;pointer-events:auto;}" +
       ".amad-float-strip:hover{background:rgba(255,255,255,.08);}" +
       ".amad-float-chrome{position:absolute;top:16px;left:10px;display:flex;gap:6px;z-index:7;opacity:0;transition:opacity .15s;pointer-events:none;}" +
