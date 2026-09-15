@@ -522,14 +522,18 @@ function apply(ctx) {
       const s = setFloatState({ x: d.x, y: d.y, w: d.w, h: d.h, collapsed: false });
       saveFloatState(s);
     };
-    // 2026-09-15「浮窗四角白边」根因与修复位置（黑底实测定位，非推测）：
-    //   白边既不是壳的边框、也不是壳的背景，而是 **iframe 文档画布**的底色 ——
-    //   Chrome 给子框架画布填不透明白，`html,body{background:transparent}` 只让元素透明、
-    //   并不改变画布底色（实测：清空面板内容后整块 iframe 呈纯白 255,255,255）。
-    //   #phone 的 36px 圆角盖不住 iframe 的方形四角，露出的正是这层白画布。
-    //   因此修复落在 panel.css：float 模式下 `body.float-fill{background:var(--p-bezel3)}`，
-    //   把画布底色改成与本壳同色的深端色（--p-bezel3 与 shellCornerFill 派生公式已逐行比对一致）。
-    //   本文件只需保证壳背景用同一个 shellCornerFill，不需要 border / clip-path 之类的遮盖 hack。
+    // 2026-09-15「浮窗四角白边」修复（黑底矩阵实测，逐条排除后唯一有效机制）：
+    //   Chrome 给子框架文档画布填**不透明白**（html/body 的 background:transparent 只作用于元素、
+    //   不作用于画布 —— 实测清空面板内容后整块 iframe 呈纯白 255,255,255），且
+    //   **composited iframe 会逃逸祖先的 overflow:hidden + border-radius 圆角裁切**。
+    //   所以下面这些手段全都无效（黑底实测，圆角外白像素 12400~28651，一个都没消掉）：
+    //   壳的圆角边框 / 同色 border / 同色画布 / clip-path（壳·body·root）/ contain:paint /
+    //   transform / filter / isolation / iframe 自身 border-radius。
+    //   唯一有效的是给 **iframe 自身**加圆角遮罩（见上面 .amad-float-frame 的 mask-image）：
+    //   mask 由合成器作用在 iframe 自己的层上，圆角 36px 与 #phone、外壳的 36px 同 rect 同心，
+    //   白边被彻底裁掉、轮廓完全对齐。
+    //   ⚠ 本文件（client.js）是构建产物，client.mjs 是源码，**两者必须一致**：曾因为只改了产物、
+    //   源码里还留着「同色 border + box-sizing」的旧 hack，险些在下次同步时把已修好的白边带回来。
     const shellCornerFill = hexDarken((config && config.colorBezel) || "#223058", 0.41);
     const shellStyle = {
       left: f.x + "px",
