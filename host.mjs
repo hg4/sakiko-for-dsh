@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 //   ③ node:fs 的 appendFileSync —— 语音日志要 append 语义（fs 服务只有整份 writeText）。
 import { spawn as spawnChild, spawnSync as spawnSyncChild } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 export const inject = ['timer', 'fs', 'webServer', 'subprocess']
 
 // ---------------- 语音服务自管理：**进程级**状态（跨插件实例、跨模块重导入共享） ----------------
@@ -1920,14 +1920,32 @@ export function apply(ctx) {
     //   同理漏掉的还有：语言设置（决定 G2P 走哪条路）、情绪→音色映射（同一 emo 会映射到不同
     //   voice）、桥地址（换了后端）。这些值改动频率极低，纳入键最多让缓存 miss 一次（重新合成），
     //   代价可以忽略；不纳入则是静默错音，代价高得多。
+    // 2026-09-15 独立复审补漏（B-1 / B-2 / B-3）：
+    //   · B-1 `questSpeaker` 与 `emotionIntensity` 原先没进键。二者都是**面板可见**的设置，
+    //     改了却不生效：quest 通道的键原先恒为 "quest"（而 speaker 是它唯一的说话人参数），
+    //     edge 通道的 key 里也没有 intensity（synthesizeEdge 用 config.emotionIntensity 算强度）。
+    //     注意**只往真正用到它的 provider 里加** —— 例如 voicevox 的音色由 speaker +
+    //     voicevoxEmotionSpeakers 决定、aqua 由 aquaEmotionVoices 决定，都不吃 intensity，
+    //     硬塞进去只会让「改 intensity」造成无谓的缓存 miss。
+    //   · B-2 两个 TTS 的 apiKey 以**指纹**入键：换 key/租户理论上会换音源，但把明文塞进键里
+    //     有被日志或调试输出带出去的风险，故只取 SHA-256 前 12 位。openai 还要算上
+    //     `chatApiKey` 的回退（synthesizeOpenai 在没配 openaiTtsApiKey 时会用它）。
+    //   · B-3 `stableJson` 原先用 `k=v` 逗号拼接，有两个洞：`{a:'1,b=2'}` 与 `{a:'1',b:'2'}` 会同串
+    //     （构造得出碰撞）、嵌套对象被 String() 塌成 `[object Object]`（`{a:{x:1}}` 与 `{a:{y:2}}` 同串）。
+    //     改成递归 + JSON 转义后两者都消除，且键排序保证稳定。
     // auto 模式动态选后端、不参与共享缓存，故这里返回什么都不会被用到（保留原语义）。
     function stableJson(v) {
       if (v === null || v === undefined) return ''
-      if (typeof v !== 'object') return String(v)
+      if (typeof v !== 'object') return JSON.stringify(v)
+      if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']'
       try {
-        // 键排序后再拼，避免 setConfig 改写对象导致键序变化而误 miss
-        return Object.keys(v).sort().map((k) => k + '=' + v[k]).join(',')
+        return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}'
       } catch (e) { return '' }
+    }
+    // apiKey 只入指纹，不入明文（键可能被日志/调试输出带出去）
+    function keyFingerprint(v) {
+      if (typeof v !== 'string' || v.length === 0) return ''
+      try { return createHash('sha256').update(v).digest('hex').slice(0, 12) } catch (e) { return '' }
     }
     function providerCacheKey(cfg) {
       const c = cfg || {}
@@ -1942,13 +1960,30 @@ export function apply(ctx) {
           c.aquaTextLanguage || '',
           c.aquaUrl || '',
           stableJson(c.aquaEmotionVoices),
+          keyFingerprint(c.aquaApiKey),
         ].join(':')
       }
       if (c.provider === 'voicevox') {
         return ['voicevox', c.voicevoxSpeaker || 8, c.voicevoxUrl || '', stableJson(c.voicevoxEmotionSpeakers)].join(':')
       }
       if (c.provider === 'openai') {
-        return ['openai', c.openaiTtsModel || 'tts-1', c.openaiTtsVoice || 'nova', c.openaiTtsUrl || c.chatBaseUrl || '', c.openaiTtsSpeed || 1].join(':')
+        return [
+          'openai',
+          c.openaiTtsModel || 'tts-1',
+          c.openaiTtsVoice || 'nova',
+          c.openaiTtsUrl || c.chatBaseUrl || '',
+          c.openaiTtsSpeed || 1,
+          keyFingerprint(c.openaiTtsApiKey || c.chatApiKey),
+        ].join(':')
+      }
+      if (c.provider === 'quest') {
+        // B-1：quest 通道原先恒返回 "quest"，而 speaker 是它唯一的说话人参数
+        return ['quest', c.questSpeaker || 8].join(':')
+      }
+      if (c.provider === 'edge') {
+        // B-1：edge 的音色由 voice/rate/pitch/emo（在外层 key 里）+ intensity 共同决定
+        const intensity = typeof c.emotionIntensity === 'number' ? c.emotionIntensity : 1
+        return ['edge', String(intensity)].join(':')
       }
       return String(c.provider)
     }
@@ -2205,6 +2240,9 @@ export function apply(ctx) {
     //   实测（2026-09-15，停掉语音服务再让它自启动）：闸门在桥不可达时连续等了 **48.2s**、
     //   探针 13 次（≈4s 一次），直到 /health 报 api=true 才放行 —— 与冷启动 41~56s 的窗口正好对上。
     const VOICE_WAIT_MAX_MS = 240000      // 等待上限：api 首次加载模型的内部预算是 180s（L1472），留 60s 余量
+    // C-2：voiceStability=false 表示「失败可以回退到别的通道」，那就不必按"宁可不出声"的上限死等。
+    // 60s 仍覆盖实测 41~56s 的冷启动；到点放行让 synthesize 去走回退链，比白等 4 分钟合理。
+    const VOICE_WAIT_FALLBACK_MAX_MS = 60000
     const VOICE_WAIT_INTERVAL_MS = 4000   // 轮询间隔：4s。冷启动是几十秒级事件，4s 足够细且不会压垮桥
     const VOICE_WAIT_PROBE_MS = 1200      // 单次 /health 预算：比 8100 端口的 TCP 探测(1500)更紧，避免探针本身拖长等待
 
@@ -2269,17 +2307,22 @@ export function apply(ctx) {
         if (first.ready) {
           return { ready: true, waitedMs: Date.now() - t0, why: first.why, timeout: false, skipped: first.skipped === true }
         }
-        voiceLog('等待语音就绪：' + first.why + '（上限 ' + Math.round(VOICE_WAIT_MAX_MS / 1000) + 's）')
+        // C-2：voiceStability=false（允许回退）时不必按"宁可不出声"的上限死等，缩短到 60s
+        const maxMs = config.voiceStability === false ? VOICE_WAIT_FALLBACK_MAX_MS : VOICE_WAIT_MAX_MS
+        voiceLog('等待语音就绪：' + first.why + '（上限 ' + Math.round(maxMs / 1000) + 's）')
         for (;;) {
           const ph = voiceShared.state.phase
-          // 早退：状态机已经明确告诉我们「这次就是起不来」，再等满 4 分钟只是白等
+          // 早退：状态机已经明确告诉我们「这次就是起不来」，再等满上限只是白等
           if (ph === 'failed' || ph === 'disabled' || ph === 'stopped') {
             return { ready: false, waitedMs: Date.now() - t0, why: first.why + '；语音状态机已判定 phase=' + ph + '（' + String(voiceShared.state.detail || '').slice(0, 120) + '），不再空等', timeout: false, skipped: false }
           }
-          if (Date.now() - t0 >= VOICE_WAIT_MAX_MS) {
+          // C-5：按「剩余预算」睡，避免最后一轮睡过头。原先是先判超时再睡满一个周期，
+          // 最坏会等 上限+4s+探针耗时（≈245s）；现在睡眠被夹在剩余时间里，实际不超过 上限+单次探针预算(1.2s)。
+          const remaining = maxMs - (Date.now() - t0)
+          if (remaining <= 0) {
             return { ready: false, waitedMs: Date.now() - t0, why: first.why + '（等待超过上限，按未就绪降级）', timeout: true, skipped: false }
           }
-          await new Promise((r) => setTimeout(r, VOICE_WAIT_INTERVAL_MS))
+          await new Promise((r) => setTimeout(r, Math.min(VOICE_WAIT_INTERVAL_MS, remaining)))
           const now = await voiceBackendReadyNow()
           if (now.ready) {
             voiceLog('语音已就绪（等待 ' + Math.round((Date.now() - t0) / 1000) + 's）：' + now.why)
@@ -2297,34 +2340,44 @@ export function apply(ctx) {
 
     // 通用同步出声：所有宿主发起的固定话语（播报/来电/空闲/指令朗读）统一走这里。
     // 先合成进 TTS 缓存，成功后才把条目推给面板 → 气泡与语音基本同帧；合成失败仅文字（无声=自检信号）。
-    async function speakSynced(jp, cn, emotion, kind, tags, noWait) {
+    async function speakSynced(jp, cn, emotion, kind, tags) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
       // 时间线：合成前记录意图与文本（截断）；完成记耗时，失败也留痕（无声=自检信号）
       tlLog({ ev: 'synth_start', kind: String(kind || ''), text: tlTrunc(jp, 160), cn: tlTrunc(cn, 120), emotion: emo, tags: tlTagFields(tags) })
-      // 等语音服务真的能出声再合成（见上面「语音就绪闸门」；voiceOn=false 时 speakSynced 根本不会被调用，
-      // 所以这里不必再判开关）。就绪/超时都会立刻放行：绝不因为等语音而丢掉这句话。
-      // noWait=true 直接跳过（连探针都不发）——给"明知不会出声、只求留痕"的调用方用（见 announce）。
-      const gate = noWait === true
-        ? { ready: false, waitedMs: 0, why: '调用方要求不等语音（noWait）', timeout: false, skipped: true }
+      // voiceOn=false（语音关）时**不出声但仍要出气泡** —— 统一在这里判定，调用方不必各自处理。
+      // 独立复审 C-3/C-4 指出：原先 announce 里 `if (voiceOn !== true) return` 会在写完备忘后提前返回，
+      // 把气泡一起吞掉，与它自己的注释「立刻留痕 + 出气泡」矛盾；而为此加的 noWait 参数永远传不到这里，
+      // 是个死参数（唯一调用点被那道 return 挡住）。改成在这里判定后，那条路径与 noWait 都不需要了。
+      const voiceOff = config.voiceOn !== true
+      // 等语音服务真的能出声再合成（见上面「语音就绪闸门」）。就绪/超时都会立刻放行：绝不因为等语音丢掉这句话。
+      const gate = voiceOff
+        ? { ready: false, waitedMs: 0, why: 'voiceOn=false（语音关，只出气泡）', timeout: false, skipped: true }
         : await waitVoiceReady()
       tlLog({ ev: 'voice_wait', ready: gate.ready, ms: gate.waitedMs, timeout: gate.timeout, why: tlTrunc(gate.why, 200), kind: String(kind || '') })
-      if (!gate.ready) {
-        // 超时降级：**只出气泡不发声**。日志必须写清为什么没出声，否则用户只会看到"气泡有、没声音"
-        // 这种与旧 bug 一模一样的现象，无法区分「修复后降级」和「根本没修好」。
-        console.warn('[sakiko] 语音未就绪，本句降级为只显示文字（无法出声）:', gate.why,
+      if (!gate.ready && !voiceOff) {
+        // 这是「预告」不是「结论」：下面仍会尝试合成，成不成要看结果。
+        // 独立复审 C-1 指出原先这里断言"无法出声"，却紧接着照样调 synthesize()，一旦它成功
+        // （桥在超时后刚好起来、或 auto 回退到别的通道）就会出现「日志说没声音、实际有声」的自相矛盾。
+        // 真正的结论在下面的 catch 里（'合成失败（仅显示文字）'）。
+        console.warn('[sakiko] 语音未就绪，本句将尝试降级为只显示文字:', gate.why,
           '| 已等待 ' + Math.round(gate.waitedMs / 1000) + 's | kind=' + String(kind || '-'),
           '| text=' + tlTrunc(String(jp === undefined ? '' : jp), 24))
       }
       const t0 = Date.now()
-      try {
-        await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
-        tlLog({ ev: 'synth_done', ms: Date.now() - t0 })
-      } catch (e) {
-        // Fix R6：失败告警补上 sid + 文本前缀（截断 24 字），便于把失败对到具体那条聊天记录。
-        const failSid = (tags && typeof tags.sid === 'string' && tags.sid.length > 0) ? tags.sid.slice(0, 8) : '-'
-        console.warn('[sakiko] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e),
-          '| sid=' + failSid + ' text=' + tlTrunc(String(jp === undefined ? '' : jp), 24))
-        tlLog({ ev: 'synth_fail', ms: Date.now() - t0 })
+      if (voiceOff) {
+        // 语音关：不出声是预期行为，不算失败，也不打失败日志（否则日志会误导排查）
+        tlLog({ ev: 'synth_skip', why: 'voiceOn=false' })
+      } else {
+        try {
+          await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
+          tlLog({ ev: 'synth_done', ms: Date.now() - t0 })
+        } catch (e) {
+          // Fix R6：失败告警补上 sid + 文本前缀（截断 24 字），便于把失败对到具体那条聊天记录。
+          const failSid = (tags && typeof tags.sid === 'string' && tags.sid.length > 0) ? tags.sid.slice(0, 8) : '-'
+          console.warn('[sakiko] 合成失败（仅显示文字）:', e && e.message ? e.message : String(e),
+            '| sid=' + failSid + ' text=' + tlTrunc(String(jp === undefined ? '' : jp), 24))
+          tlLog({ ev: 'synth_fail', ms: Date.now() - t0 })
+        }
       }
       if (kind === 'call') {
         pushCall(jp, emo, cn || '')
@@ -2334,17 +2387,20 @@ export function apply(ctx) {
     }
 
     // 播报（欢迎语/完成/事件）走 speakSynced：语音就绪后同发气泡+声音。
-    // noWait=true 仅供「明知不会出声」的路径（voiceOn=false 的欢迎语留痕）跳过就绪等待用，默认不跳。
-    async function announce(jp, cn, emotion, noWait) {
+    // voiceOn=false 时**不在这里提前 return** —— 统一交给 speakSynced（它会跳过合成但仍然推气泡）。
+    // 独立复审 C-3/C-4：原先这里的 `if (voiceOn !== true) return` 会让语音关时连气泡都没有，
+    // 与它自己的注释「立刻留痕 + 出气泡」矛盾；旧版之所以"不写 history、不出气泡"，是因为调用方
+    // 把它挡在了 announce 之前 —— 属巧合而非设计。本注释一直声明「无论语音开关都记录」，
+    // 现在行为终于与之一致。顺带：为那条被挡死的路径而加的 noWait 参数已删除（死参数）。
+    async function announce(jp, cn, emotion) {
       const now = Date.now()
       const cnText = (typeof cn === 'string' && cn.length > 0) ? cn : jp
       // 播报留痕对话区（无论语音开关都记录；对话区显示中文 cn）
       memory.history.push({ role: 'assistant', jp, cn: cnText, emotion: emotion || 'neutral', announce: true, t: now })
       if (memory.history.length > 60) maybeCompactHistory()
-      if (config.voiceOn !== true) return
       if (now - lastAnnounceAt < 8000) return
       lastAnnounceAt = now
-      await speakSynced(jp, cnText, emotion || 'neutral', 'force', { announce: true }, noWait === true)
+      await speakSynced(jp, cnText, emotion || 'neutral', 'force', { announce: true })
     }
 
     // ============================================================
@@ -3442,7 +3498,11 @@ export function apply(ctx) {
       lastNarrSpeaks.push({ at: Date.now(), intent, source, jp: line.jp, cn: cnText, bubble: bubbleCn, sid: sidKey, label: narrLabel, emotion: line.emotion || 'neutral' })
       if (lastNarrSpeaks.length > 8) lastNarrSpeaks.shift()
       scheduleSaveNarrator()
-      if (config.voiceOn !== true) return
+      // voiceOn=false 时**不在这里 return** —— 与 announce 保持一致：上面 history / 计数 / lastNarrSpeaks
+      // 都已经写了，若在此提前返回就只剩留痕、气泡没了（独立复审 C-3 指出的是同一类问题）。
+      // 真正的"不出声"由 speakSynced 统一处理（它会跳过合成、照常推气泡）。
+      // 对照：checkCalls / checkIdle / checkHum 里的同类 return 是**另一回事** —— 那三处是
+      // "语音关就别做这件事"（来电/闲聊/哼歌的目的本来就是发声），语义正确，保持不动。
       // tags 里的 sid/label 会被 pushUtterances 拷进队列条目（面板端不消费，供日志/调试/后续 Task 使用）
       await speakSynced(line.jp, bubbleCn, line.emotion || 'neutral', 'force', { announce: true, narrate: intent, sid: sidKey, label: narrLabel })
     }
@@ -4955,17 +5015,13 @@ export function apply(ctx) {
       ;(async () => {
         if (startupGreetingSent) return
         startupGreetingSent = true
-        if (config.voiceOn !== true) {
-          // 语音关：行为与旧版一致 —— 立刻留痕 + 出气泡，不进就绪闸门（不白白多等 8s）
-          announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion, true)
-          console.log('[sakiko] 启动欢迎语已播报（voiceOn=false，仅气泡）:', STARTUP_GREETING.jp)
-          return
-        }
-        if (voiceShared.state.phase !== 'ready' && voiceShared.state.phase !== 'external') {
+        // voiceOn=false 不再单独分支：announce → speakSynced 会统一处理（跳过合成、仍然出气泡）。
+        // 独立复审 C-3：旧分支的注释写着"立刻留痕 + 出气泡"，实际因 announce 内部提前 return 而只剩留痕。
+        if (config.voiceOn === true && voiceShared.state.phase !== 'ready' && voiceShared.state.phase !== 'external') {
           console.log('[sakiko] 启动欢迎语：语音未就绪（phase=' + voiceShared.state.phase + '），等待就绪后再出声')
         }
         await announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion)
-        console.log('[sakiko] 启动欢迎语已播报:', STARTUP_GREETING.jp)
+        console.log('[sakiko] 启动欢迎语已播报' + (config.voiceOn === true ? '' : '（voiceOn=false，仅气泡）') + ':', STARTUP_GREETING.jp)
       })().catch((e) => {
         console.error('[sakiko] 启动欢迎语失败:', e && e.message ? e.message : String(e))
       })
