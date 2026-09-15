@@ -1,7 +1,7 @@
 {
   "_说明": "复制成 bridge.config.json 后按注释改。零样本克隆（没有训练权重）时 voices 里可以不写 gpt/sovits。",
   "gpt_api": "http://127.0.0.1:9880",
-  "bridge_port": 8000,
+  "bridge_port": 8100,
   "voices": {
     "sakiko": {
       "gpt": "D:\\sakiko-voice\\weights\\Mujica_豊川祥子_白_v2p.ckpt",

@@ -53,7 +53,7 @@ const AQUA = {
   aquaPromptText: 'これから私たちはバンド、共に音楽を奏でる運命共同体となるのです。',
   aquaPromptLanguage: '日文',
   aquaTextLanguage: '日文',
-  aquaUrl: 'http://127.0.0.1:8000',
+  aquaUrl: 'http://127.0.0.1:8100',
   aquaEmotionVoices: { happy: 'sakiko-happy' }
 }
 const key = (over) => providerCacheKey(Object.assign({}, AQUA, over))

@@ -13,7 +13,7 @@ description: 'Use when installing, moving or repairing the sakiko-for-dsh voice 
 把插件（`provider=aqua`）接到本机 GPT-SoVITS 上，让她用「祥子」的音色说话：
 
 ```
-DSH 插件 ──POST {aquaUrl}/tts/file?…──▶ 桥 bridge_tts.py :8000 ──▶ GPT-SoVITS api :9880 ──▶ 权重 + 参考音频
+DSH 插件 ──POST {aquaUrl}/tts/file?…──▶ 桥 bridge_tts.py :8100 ──▶ GPT-SoVITS api :9880 ──▶ 权重 + 参考音频
 ```
 
 插件说的是 **Aqua 私有协议**（`/tts/file?text=…&voice=…&ref_audio_path=…`），GPT-SoVITS 自己的 api
@@ -72,7 +72,7 @@ VOICE_ROOT = %USERPROFILE%\.dsh\sakiko\voice      # 放 DSH 数据目录里，�
 "voiceGptWeights":   "D:\\...\\x.ckpt",    // 留空 = 零样本克隆
 "voiceSovitsWeights":"D:\\...\\x.pth",
 "voiceApiPort":      9880,
-"voiceBridgePort":   8000
+"voiceBridgePort":   8100
 ```
 
 - 端口已在监听 → 判定为「外部服务」，插件只读状态、不接管、也不会停它。
@@ -130,12 +130,12 @@ cd "<repo>"
 判据：9880 在监听，且日志出现 `模型版本: v2ProPlus`。（`-u` 保证日志实时；不加会长时间 0 字节。）
 
 **7. 起桥**：`& $py -u "<VOICE_ROOT>\bridge_tts.py"`（用**任意** python 都行，桥不依赖 GPT-SoVITS 环境）
-判据：`curl -sS http://127.0.0.1:8000/health` → `{"ok":true,"api":true,…}`
+判据：`curl -sS http://127.0.0.1:8100/health` → `{"ok":true,"api":true,…}`
 
 **8. 写插件配置**（**先停 DSH**）——`%DSH_HOME%\sakiko\config\sakiko.json`：
 ```jsonc
 "provider": "aqua",
-"aquaUrl": "http://127.0.0.1:8000",        // 桥地址
+"aquaUrl": "http://127.0.0.1:8100",        // 桥地址
 "aquaVoice": "sakiko",                     // bridge.config.json 里的键名
 "aquaRefAudio": "",                        // 留空 = 用插件包内自带的 assets/ref/sakiko_ref.wav
 "aquaPromptText": "",                      // 留空 = 用包内自带的 sakiko_ref.prompt.txt
@@ -156,7 +156,7 @@ cd "<repo>"
 | --- | --- | --- |
 | L1 | 端口在听 | **不算通过** |
 | L2 | 环境自检（torch/cuda/transformers/g2p 计时） | **不算通过** |
-| L3 | `curl :8000/health` | `ok=true` |
+| L3 | `curl :8100/health` | `ok=true` |
 | L4 | **真合成**（用**含拉丁字母**的日文句，历史故障就是这类句子） | 200 + RIFF/WAVE + **32000Hz** + 时长与字数成比例 + 耗时 <35s |
 | L5 | **反例对照**：参考音频路径写错必须 500；缺 `text` 必须 400 | 拿不到 500 就说明 L4 的 200 没有鉴别力 |
 | L6 | 插件级 `curl "http://127.0.0.1:3080/sakiko/tts?text=…"` + 人耳试听 | 200 `audio/wav`；与参考音频 A/B 比音色 |
@@ -167,7 +167,7 @@ cd "<repo>"
 ```powershell
 # L4/L5 一条命令（把 <…> 换成实际值）
 $e=[uri]::EscapeDataString
-$u="http://127.0.0.1:8000/tts/file?text=$($e.Invoke('DSHのプラグイン、テスト中ですわ。'))&voice=sakiko&ref_audio_path=$($e.Invoke('<ref wav>'))&prompt_text=$($e.Invoke('<逐字文稿>'))&text_language=$($e.Invoke('日文'))&prompt_language=$($e.Invoke('日文'))&preset=fast"
+$u="http://127.0.0.1:8100/tts/file?text=$($e.Invoke('DSHのプラグイン、テスト中ですわ。'))&voice=sakiko&ref_audio_path=$($e.Invoke('<ref wav>'))&prompt_text=$($e.Invoke('<逐字文稿>'))&text_language=$($e.Invoke('日文'))&prompt_language=$($e.Invoke('日文'))&preset=fast"
 curl.exe -sS -m 60 -X POST $u -o "$env:TEMP\v.wav" -w "code=%{http_code} bytes=%{size_download} t=%{time_total}`n"
 ```
 
@@ -179,7 +179,7 @@ curl.exe -sS -m 60 -X POST $u -o "$env:TEMP\v.wav" -w "code=%{http_code} bytes=%
 | `aqua: empty audio` / 500 `IncompleteRead` | api 没起、权重没注册、或参考音频路径错 | 看 api 的 stderr（桥的 500 body 里带 api 原始错误）；重发 `/set_model` |
 | 换音色没反应 | 旧版桥把权重路径解包后没用、真正载入的是 api 启动时那对权重 | 用本 skill 的桥（会自动 set_model），或重启 api 换 `-g/-s` |
 | 明明改了配置却不生效 | DSH 运行时只读一次 + 面板整份回写覆盖 | 停 DSH 再改 |
-| 端口 8000 被别的程序占了 | 8000 是常见端口 | 桥设 `BRIDGE_PORT`，插件 `aquaUrl` 同步改 |
+| 端口 8000/8100 被别的程序占了 | 两者都是常见 HTTP 端口 | 桥设 `BRIDGE_PORT`，插件 `aquaUrl` 同步改 |
 | 合成很慢 / 显存不够 | 没走 CUDA，或与别的 GPU 任务抢卡 | 确认 `-d cuda` 与 `torch.cuda.is_available()`；错开重负载 |
 | 音色不像/时好时坏 | 参考音频有 BGM/噪音，或文稿与音频不一致 | 换 5~30s 干声；文稿逐字对齐；开 `voiceStability` |
 

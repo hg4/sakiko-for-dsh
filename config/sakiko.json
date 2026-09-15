@@ -17,7 +17,7 @@
   "sttApiUrl": "",
   "sttApiKey": "",
   "sttModel": "whisper-1",
-  "aquaUrl": "http://127.0.0.1:8000",
+  "aquaUrl": "http://127.0.0.1:8100",
   "aquaVoice": "",
   "aquaRefAudio": "",
   "aquaPromptText": "",

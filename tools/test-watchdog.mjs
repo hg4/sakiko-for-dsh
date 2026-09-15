@@ -45,7 +45,7 @@ function argOf(name, dflt) {
 const PLUGIN = path.resolve(argOf('plugin', REPO))
 const CASE = argOf('case', 'all')
 const KEEP = argv.includes('--keep')
-// 默认端口避开 19880/18000（验收台在用那一对），也避开真实服务端口 9880/8000
+// 默认端口避开 19880/18000（验收台在用那一对），也避开真实服务端口 9880/8100
 const API_PORT_WANT = Number(argOf('api-port', '21880'))
 const BRIDGE_PORT_WANT = Number(argOf('bridge-port', '21000'))
 const OUT_ROOT = path.resolve(argOf('out', path.join(os.tmpdir(), 'sakiko-wd-watchdog-test')))

@@ -10,12 +10,12 @@
 不需要装任何依赖，因此可以独立于 GPT-SoVITS 的 python 环境运行）。
 
 配置（优先级：环境变量 > 同目录 bridge.config.json > 内置默认）
-    BRIDGE_PORT   本桥监听端口，默认 8000
+    BRIDGE_PORT   本桥监听端口，默认 8100
     GPT_API       GPT-SoVITS api 地址，默认 http://127.0.0.1:9880
     bridge.config.json:
         {
           "gpt_api": "http://127.0.0.1:9880",
-          "bridge_port": 8000,
+          "bridge_port": 8100,
           "voices": {
             "sakiko": { "gpt": "D:\\\\voice\\\\sakiko.ckpt", "sovits": "D:\\\\voice\\\\sakiko.pth" }
           }
@@ -43,7 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------- 配置 ----------------
-DEFAULTS = {"gpt_api": "http://127.0.0.1:9880", "bridge_port": 8000, "voices": {}}
+DEFAULTS = {"gpt_api": "http://127.0.0.1:9880", "bridge_port": 8100, "voices": {}}
 
 
 def load_config():

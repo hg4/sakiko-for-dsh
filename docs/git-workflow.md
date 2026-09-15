@@ -152,7 +152,7 @@ git -C $repo -c http.proxy= ls-remote origin refs/heads/main    # 核对远端 =
      已实现）；不要盲起。
    - ⇒ **停止方式决定语音服务是否被回收**：在 DSH 窗口 **Ctrl+C** = 优雅退出，DSH 的 subprocess 服务
      会 `process.on('exit')` 回收插件托管的 python 子进程，插件自身也会在 dispose 时排 8s 停止；
-     **点窗口 X / 强杀进程** = 两者都不执行 ⇒ GPT-SoVITS api(9880)/bridge(8000) 残留成孤儿。
+     **点窗口 X / 强杀进程** = 两者都不执行 ⇒ GPT-SoVITS api(9880)/bridge(8100) 残留成孤儿。
      这种残留只能用 `stop-all.bat`（按端口 `Stop-Process -Force`）清。
    - ⇒ 语音服务的归属是**插件**（`sakiko-for-dsh` 的 autostart 拉起），所以"是哪个插件没清理"的答案
      永远是它；但**没清理的前提是 DSH 没优雅退出**——DSH 活着的时候它本来也不该清理。

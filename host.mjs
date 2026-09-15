@@ -162,7 +162,7 @@ export function apply(ctx) {
       sttApiUrl: '',
       sttApiKey: '',
       sttModel: 'whisper-1',
-      aquaUrl: 'http://127.0.0.1:8000',
+      aquaUrl: 'http://127.0.0.1:8100',
       aquaVoice: '',
       aquaRefAudio: '',
       aquaPromptText: '',
@@ -181,7 +181,7 @@ export function apply(ctx) {
       voiceGptWeights: '',         // .ckpt（留空则用 api 启动时的默认/基础模型 = 零样本克隆）
       voiceSovitsWeights: '',      // .pth
       voiceApiPort: 9880,
-      voiceBridgePort: 8000,
+      voiceBridgePort: 8100,
       voicevoxUrl: 'http://127.0.0.1:50021',
       voicevoxSpeaker: 8,
       voicevoxEmotionSpeakers: {},
@@ -458,7 +458,7 @@ export function apply(ctx) {
     //   aqua / quest / voicevox / openai 四条 curl 通道与 stt / chat 的**落盘目录**，
     //   `curl -o` 不会创建父目录 —— 于是这些通道会**全部**以极具误导性的
     //   `curl exited 23`（写盘失败）报错，现场表现是「插件级 /sakiko/tts 秒回 502，
-    //   但直连 bridge :8000 却完全正常」，与语音链路无关，极难定位。
+    //   但直连 bridge :8100 却完全正常」，与语音链路无关，极难定位。
     //   实测触发条件：插件首次加载时宿主正处在「无法创建任何新进程」的状态
     //   （子进程派生 0xC0000142 / EPERM），此时 `cmd /c mkdir` 起不来，
     //   tmp 建不出来 —— 而 logs/run 因为用的是 mkdirSync 所以建成了，对比明显。
@@ -623,13 +623,13 @@ export function apply(ctx) {
       if (typeof p.voiceGptWeights === 'string' && p.voiceGptWeights.length <= 300) out.voiceGptWeights = p.voiceGptWeights
       if (typeof p.voiceSovitsWeights === 'string' && p.voiceSovitsWeights.length <= 300) out.voiceSovitsWeights = p.voiceSovitsWeights
       // D7（审查 2026-09-13）：原来是 >=1，等于允许 80/443 这类特权端口（插件去抢会直接失败或与系统服务打架）；
-      // 且从不校验两端口互异 —— 两个都填 9880/8000 时会互相踩（api 与桥抢同一个端口，后起的静默绑不上）。
+      // 且从不校验两端口互异 —— 两个都填 9880/8100 时会互相踩（api 与桥抢同一个端口，后起的静默绑不上）。
       if (typeof p.voiceApiPort === 'number' && p.voiceApiPort >= 1024 && p.voiceApiPort <= 65535) out.voiceApiPort = Math.floor(p.voiceApiPort)
       if (typeof p.voiceBridgePort === 'number' && p.voiceBridgePort >= 1024 && p.voiceBridgePort <= 65535) out.voiceBridgePort = Math.floor(p.voiceBridgePort)
       {
         // 互异校验要拿"生效后的值"比：只改一个端口时，撞上另一个的现有值同样要拒。
         const effApi = out.voiceApiPort !== undefined ? out.voiceApiPort : Math.floor(Number(config.voiceApiPort) || 9880)
-        const effBridge = out.voiceBridgePort !== undefined ? out.voiceBridgePort : Math.floor(Number(config.voiceBridgePort) || 8000)
+        const effBridge = out.voiceBridgePort !== undefined ? out.voiceBridgePort : Math.floor(Number(config.voiceBridgePort) || 8100)
         if (effApi === effBridge && (out.voiceApiPort !== undefined || out.voiceBridgePort !== undefined)) {
           console.warn('[sakiko] 拒绝端口改动：voiceApiPort 与 voiceBridgePort 不能相同（生效值 ' + effApi + '），该项已忽略')
           delete out.voiceApiPort
@@ -1036,7 +1036,7 @@ export function apply(ctx) {
 
     // ---------------- 看门狗（watchdog）：非优雅退出时的自清理（v2.1.0） ----------------
     // 背景（用户实测）：ctx.subprocess 的回收只挂在 JS 退出钩子上，点控制台 X / taskkill /F /
-    // DSH 崩溃时钩子根本不跑 ⇒ 插件拉起的 GPT-SoVITS api(9880) 与桥(8000) 变孤儿，端口一直被占，
+    // DSH 崩溃时钩子根本不跑 ⇒ 插件拉起的 GPT-SoVITS api(9880) 与桥(8100) 变孤儿，端口一直被占，
     // 下次启动被判成"外部服务、不接管"，用户必须先跑 stop-all.bat。
     // 契约（详见 watchdog.mjs 顶部注释）：
     //   * 用 node:child_process.spawn 拉起（**不是 ctx.subprocess**，那一套会被 DSH 的退出钩子回收，
@@ -1060,7 +1060,7 @@ export function apply(ctx) {
     // 原子写：临时文件 + rename，看门狗绝不会读到半个 JSON。
     function writeWatchdogState(token) {
       const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
-      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8100)
       const services = []
       if (token !== null && token !== undefined) {
         for (const key of ['api', 'bridge']) {
@@ -1360,7 +1360,7 @@ export function apply(ctx) {
       const ownBr = voiceShared.procs.bridge
       if (!voiceProcAlive(ownApi) || !voiceProcAlive(ownBr)) return null
       const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
-      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8100)
       voiceShared.state.api.port = apiPort
       voiceShared.state.bridge.port = bridgePort
       voiceShared.state.api.pid = ownApi.pid
@@ -1392,7 +1392,7 @@ export function apply(ctx) {
       const run = (async () => {
         try {
           const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
-          const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+          const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8100)
           voiceShared.state.api.port = apiPort
           voiceShared.state.bridge.port = bridgePort
           if (config.voiceAutoStart !== true) { setVoicePhase('disabled', 'voiceAutoStart=false'); return syncVoiceOwnership() }
@@ -1589,7 +1589,7 @@ export function apply(ctx) {
       for (const key of ['bridge', 'api']) {
         const rec = voiceShared.procs[key]
         if (!rec) continue
-        const port = Math.floor(Number(key === 'api' ? config.voiceApiPort : config.voiceBridgePort) || (key === 'api' ? 9880 : 8000))
+        const port = Math.floor(Number(key === 'api' ? config.voiceApiPort : config.voiceBridgePort) || (key === 'api' ? 9880 : 8100))
         if (port > 0) ownedPorts.push({ key, port })
         try {
           rec.handle.terminate()
@@ -1823,7 +1823,7 @@ export function apply(ctx) {
     // 注意两条边界：
     //   1) 只作为**兜底**：配置里写了就用配置里的，绝不覆盖用户的选择；
     //   2) **不因此把默认 provider 切到 aqua** —— `aquaReady` 的判据保持原样（见 synthesizeText），
-    //      否则没配 aqua 的用户会被静默改道去请求 127.0.0.1:8000。
+    //      否则没配 aqua 的用户会被静默改道去请求 127.0.0.1:8100。
     const PACKAGED_REF_WAV = ROOT + '/assets/ref/sakiko_ref.wav'
     const PACKAGED_REF_PROMPT = ROOT + '/assets/ref/sakiko_ref.prompt.txt'
     let packagedRefCache = null            // { ref, prompt } | false（包内没有 / 读不到）
@@ -1867,7 +1867,7 @@ export function apply(ctx) {
     async function synthesizeAqua(text, emotion) {
       const slot = nextSlot()
       const oPath = TMP_DIR + '/aqua-' + slot + '.wav'
-      const base = (config.aquaUrl || 'http://127.0.0.1:8000').replace(/\/+$/, '')
+      const base = (config.aquaUrl || 'http://127.0.0.1:8100').replace(/\/+$/, '')
       let voice = config.aquaVoice || ''
       const emoMap = config.aquaEmotionVoices
       if (emotion && emoMap && emoMap[emotion]) voice = emoMap[emotion]
@@ -2164,7 +2164,7 @@ export function apply(ctx) {
     //   speakSynced 旧实现**从不等待**语音服务，直接就 `synthesize()`。DSH 启动时
     //   `startVoiceServices()` 与播报是并行的，而它要等 api 加载完权重（实测 41~56s）才会把
     //   phase 置成 ready；入口欢迎语却是 `ctx.timeout(..., 15000)` 的**固定 15 秒**无条件播报
-    //   ⇒ 那一刻桥(8000)还没在听 → curl 连接被拒 → synthesizeAqua 抛错 → speakSynced 只
+    //   ⇒ 那一刻桥(8100)还没在听 → curl 连接被拒 → synthesizeAqua 抛错 → speakSynced 只
     //   console.warn 后照旧 pushUtterances ⇒ **气泡出来了、没有声音**（用户报的现象）。
     //   证据：`%DSH_HOME%/sakiko/logs/voice-autostart.log` 与 `logs/timeline.jsonl` 时间戳对齐 ——
     //     [05:05:18] 开始自启动 → (05:05:33 欢迎语 synth_start) →[05:05:34] synth_fail ms=2318
@@ -2206,7 +2206,7 @@ export function apply(ctx) {
     //   探针 13 次（≈4s 一次），直到 /health 报 api=true 才放行 —— 与冷启动 41~56s 的窗口正好对上。
     const VOICE_WAIT_MAX_MS = 240000      // 等待上限：api 首次加载模型的内部预算是 180s（L1472），留 60s 余量
     const VOICE_WAIT_INTERVAL_MS = 4000   // 轮询间隔：4s。冷启动是几十秒级事件，4s 足够细且不会压垮桥
-    const VOICE_WAIT_PROBE_MS = 1200      // 单次 /health 预算：比 8000 端口的 TCP 探测(1500)更紧，避免探针本身拖长等待
+    const VOICE_WAIT_PROBE_MS = 1200      // 单次 /health 预算：比 8100 端口的 TCP 探测(1500)更紧，避免探针本身拖长等待
 
     // 当下是否已能出声 —— { ready, why, phase, skipped }
     //
@@ -2226,7 +2226,7 @@ export function apply(ctx) {
       if (!bridgeNeeded()) return { ready: true, why: 'provider=' + String(config.provider || '') + ' 不走 aqua 桥（无需等待）', phase: voiceShared.state.phase, skipped: true }
       const phase = voiceShared.state.phase
       if (phase === 'ready' || phase === 'external') return { ready: true, why: 'phase=' + phase, phase }
-      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8100)
       const base = String(config.aquaUrl || 'http://127.0.0.1:' + bridgePort).replace(/\/+$/, '')
       const r = await httpProbe(base + '/health', VOICE_WAIT_PROBE_MS)
       if (r.up === true) {
@@ -2251,7 +2251,7 @@ export function apply(ctx) {
           }
           return { ready: false, why: '桥 /health 未就绪（api=' + String(h.api) + '）', phase }
         }
-        // 端口在听但不是桥（旧版桥 / 别的服务占着 8000）：不因探针看不懂就判定不可用
+        // 端口在听但不是桥（旧版桥 / 别的服务占着 8100）：不因探针看不懂就判定不可用
         return { ready: true, why: '桥端口在听但 /health 非 JSON（按可用处理）', phase }
       }
       return { ready: false, why: '桥 ' + base + '/health 不可达（' + String(r.err || '') + '）', phase }
@@ -4300,7 +4300,7 @@ export function apply(ctx) {
             // 旧写法只刷新 api.up/bridge.up，phase/owner 原样留着 ⇒ 会出现
             // `phase:"idle"` 与 `api.up:true, bridge.up:true` 同时出现这种自相矛盾的响应。
             const apiPort = Math.floor(Number(config.voiceApiPort) || 9880)
-            const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+            const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8100)
             voiceShared.state.api.port = apiPort
             voiceShared.state.bridge.port = bridgePort
             // 一律 TCP connect 判"在听"（与自启动同一判据，见 D3）

@@ -91,7 +91,7 @@ def main():
     ap.add_argument("--voice-root", default=os.path.join(os.path.expanduser("~"), ".dsh", "sakiko", "voice"))
     ap.add_argument("--config", default=os.path.join(os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh"),
                                                      "sakiko", "config", "sakiko.json"))
-    ap.add_argument("--bridge", default="http://127.0.0.1:8000")
+    ap.add_argument("--bridge", default="http://127.0.0.1:8100")
     ap.add_argument("--api", default="http://127.0.0.1:9880")
     # 插件包内自带的音色参考素材（v2.2.0 起随包分发；插件配置留空时会兜底用它）
     # 默认自动探测两种安装位置：`profiles/web/node_modules/<pkg>`（dsh plugin add 的标准位置）
@@ -272,7 +272,7 @@ def main():
 
     # ---- 6. 服务与端口 ----
     api_up = port_listening(9880)
-    bridge_up = port_listening(8000)
+    bridge_up = port_listening(8100)
     if api_up:
         try:
             http_get(args.api + "/docs", 5)
@@ -286,13 +286,13 @@ def main():
             st, body = http_get(args.bridge + "/health", 8)
             info = json.loads(body.decode("utf-8", "replace"))
             if info.get("api") is None:
-                ok("语音桥 :8000", "ok=%s（未上报 api/voices 字段 = 旧版桥，功能可用；本 skill 附带的桥会多报两项）" % info.get("ok"))
+                ok("语音桥 :8100", "ok=%s（未上报 api/voices 字段 = 旧版桥，功能可用；本 skill 附带的桥会多报两项）" % info.get("ok"))
             else:
-                ok("语音桥 :8000", "ok=%s api=%s voices=%s" % (info.get("ok"), info.get("api"), info.get("voices")))
+                ok("语音桥 :8100", "ok=%s api=%s voices=%s" % (info.get("ok"), info.get("api"), info.get("voices")))
         except Exception as e:
-            bad("语音桥 :8000", "端口在监听但 /health 异常: %s" % str(e)[:80], "看桥的窗口/日志输出")
+            bad("语音桥 :8100", "端口在监听但 /health 异常: %s" % str(e)[:80], "看桥的窗口/日志输出")
     else:
-        bad("语音桥 :8000", "未监听", "按 SKILL.md 第 7 步启动 bridge_tts.py（端口被占则改 BRIDGE_PORT 并同步改 aquaUrl）")
+        bad("语音桥 :8100", "未监听", "按 SKILL.md 第 7 步启动 bridge_tts.py（端口被占则改 BRIDGE_PORT 并同步改 aquaUrl）")
 
     # ---- 输出 ----
     if args.json:
