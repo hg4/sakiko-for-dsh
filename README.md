@@ -77,17 +77,29 @@
 
 ### 1. 安装插件
 
+**推荐装固定版本**（跟 Release，行为可预期）：
+
+```powershell
+dsh plugin --profile web add github:hg4/sakiko-for-dsh#v2.2.0
+```
+
+把 `v2.2.0` 换成 [Releases](https://github.com/hg4/sakiko-for-dsh/releases) 上的最新 tag 即可。
+也可以下载对应 Release 的 tarball 后本地安装：
+
+```powershell
+dsh plugin --profile web add file:<下载目录>\sakiko-for-dsh-2.2.0.tgz
+```
+
+**想跟随主干**（拿到的是最新提交，可能不稳定，适合本地开发调试）：
+
 ```powershell
 dsh plugin --profile web add github:hg4/sakiko-for-dsh
 ```
 
-或从 [Releases](https://github.com/hg4/sakiko-for-dsh/releases) 下载 tarball 后本地安装：
-
-```powershell
-dsh plugin --profile web add file:<下载目录>\sakiko-for-dsh-<版本>.tgz
-```
-
 **装完即生效，不需要手工改任何配置文件。** 重启 `dsh web` 后，Web 界面右侧会出现祥子的浮窗面板。
+
+> ⚠️ **改动过 `host.mjs` 的版本需要重启 `dsh web` 才生效** —— profile patch 的热重载只会重新
+> `apply()` 同一个已加载模块，不会重新 import 宿主模块。
 
 要换版本时**先 `remove` 再 `add`**：
 
@@ -95,6 +107,11 @@ dsh plugin --profile web add file:<下载目录>\sakiko-for-dsh-<版本>.tgz
 dsh plugin --profile web remove sakiko-for-dsh
 dsh plugin --profile web add <新的 spec>
 ```
+
+> 💡 **关于 `pnpm-lock.yaml`**：用浮动 spec（`github:hg4/sakiko-for-dsh`）时，pnpm 会把依赖
+> **钉死在安装那一刻的 commit**。之后想更新到最新主干，要重新 `remove` + `add`，或者
+> `pnpm update sakiko-for-dsh` —— 直接 `pnpm install` 只会按 lock 把旧版本还原回来。
+> 用带 tag 的 spec（`#vX.Y.Z`）则锁在对应发布版本上，升级时改 tag 即可。
 
 ### 2. 安装语音
 
