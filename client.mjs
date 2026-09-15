@@ -522,6 +522,18 @@ export function apply(ctx) {
         saveFloatState(s)
       }
 
+      // P8：浮窗壳四角深色随 config.colorBezel 单色派生（hexDarken 深端）；未定义回退 CSS #0c1428
+      //
+      // 2026-09-15 修复「浮窗四角白边」：只把 shell 的 background 涂深**挡不住**渗色 ——
+      //   面板本体渲染在 .amad-float-body > iframe.amad-float-frame 里，iframe 画在 shell
+      //   背景**之上**，四角（圆角 36px 之外的三角区）露出的就是 iframe 层的底色，而它既
+      //   不受 shell 的 overflow:hidden + border-radius 裁切，也不受 iframe 自身
+      //   border-radius / clip-path / 文档背景色影响（上面几种都实测过，均无效）。
+      //   有效做法是改用 **同色 border**：.amad-float-body 是 position:absolute;inset:0，
+      //   定位基准为 **padding box**，因此子元素够不到 border 区 —— 最外圈这 2px 由 border
+      //   独占绘制，把渗色完全盖住；子元素同时被内缩 2px。
+      //   配 box-sizing:border-box 后浮窗的尺寸与位置**完全不变**（1589,229,320×626 实测一致）。
+      const shellCornerFill = hexDarken((config && config.colorBezel) || '#223058', 0.41)
       const shellStyle = {
         left: f.x + 'px',
         top: f.y + 'px',
@@ -529,8 +541,9 @@ export function apply(ctx) {
         height: f.h + 'px',
         zIndex: FLOAT_Z,
         display: f.collapsed ? 'none' : 'block',
-        // P8：浮窗壳四角深色随 config.colorBezel 单色派生（hexDarken 深端）；未定义回退 CSS #0c1428
-        background: hexDarken((config && config.colorBezel) || '#223058', 0.41),
+        boxSizing: 'border-box',
+        background: shellCornerFill,
+        border: '2px solid ' + shellCornerFill,
       }
 
       return React.createElement('div', { className: 'amad-float-root' },
