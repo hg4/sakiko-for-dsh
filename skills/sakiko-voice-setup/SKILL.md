@@ -1,6 +1,11 @@
 ---
 name: sakiko-voice-setup
-description: Use when installing, moving or repairing the sakiko-for-dsh voice stack (aqua / GPT-SoVITS channel) — the panel is silent or shows "aqua: empty audio", the bridge or api is not running, setting up on a new machine, or switching voice models/weights.
+# 注意：description 里含 `"aqua: empty audio"` 这种「冒号 + 空格」。在 YAML 的 plain scalar 里
+# 冒号加空格是非法的（会被当成 compact mapping 的嵌套），会让**整个 frontmatter 解析失败**，
+# 于是 skill 被 skill provider 静默丢弃 —— 只在宿主日志留一条
+# `skill file ... ignored: invalid YAML frontmatter` 的 warn，模型侧完全看不到。
+# 所以凡是描述里出现冒号、井号、引号、方括号等 YAML 指示符，**必须整体加引号**。
+description: 'Use when installing, moving or repairing the sakiko-for-dsh voice stack (aqua / GPT-SoVITS channel) — the panel is silent or shows "aqua: empty audio", the bridge or api is not running, setting up on a new machine, or switching voice models/weights.'
 ---
 
 # SAKIKO 语音一键安装与配置
