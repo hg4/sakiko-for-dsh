@@ -2120,12 +2120,164 @@ export function apply(ctx) {
       tlLog({ ev: 'push', id: item.id, kind: 'call', text: tlTrunc(item.text, 160), cn: tlTrunc(item.cn, 120), force: true, emotion: emo })
     }
 
+    // ============================================================
+    // 语音就绪闸门（v2.2.0）：宿主发起的固定话语必须**等语音真的能出声**再合成
+    // ============================================================
+    // 修的是什么（2026-09-15 实测定位的「欢迎语稳定无声」）：
+    //   speakSynced 旧实现**从不等待**语音服务，直接就 `synthesize()`。DSH 启动时
+    //   `startVoiceServices()` 与播报是并行的，而它要等 api 加载完权重（实测 41~56s）才会把
+    //   phase 置成 ready；入口欢迎语却是 `ctx.timeout(..., 15000)` 的**固定 15 秒**无条件播报
+    //   ⇒ 那一刻桥(8000)还没在听 → curl 连接被拒 → synthesizeAqua 抛错 → speakSynced 只
+    //   console.warn 后照旧 pushUtterances ⇒ **气泡出来了、没有声音**（用户报的现象）。
+    //   证据：`%DSH_HOME%/sakiko/logs/voice-autostart.log` 与 `logs/timeline.jsonl` 时间戳对齐 ——
+    //     [05:05:18] 开始自启动 → (05:05:33 欢迎语 synth_start) →[05:05:34] synth_fail ms=2318
+    //     → [05:06:14] api 就绪 → [05:06:18] 语音链路就绪。四次启动（02:21/02:22、05:05/05:06 …）
+    //     的 api 就绪耗时 41s / 45s / 56s，**全部 > 15s**，所以这个 bug 是稳定复现而不是偶发。
+    //   ⇒ 修在 speakSynced（而不是入口那 20 行）：它是**所有**宿主固定话语的唯一出口
+    //     （announce 欢迎语 / narrate 进度叙事 / call 来电 / idle 空闲闲聊），
+    //     「没等语音就合成」是这条出口的公共缺陷，只在入口打补丁会让其余四类继续中招。
+    //
+    // 就绪判据为什么这么选（四层，逐层看**权威性**）：
+    //   ⓪ 第一道是「本机现在到底用不用 aqua 桥」：闸门探的是桥的 /health，只有 aqua 通道走它。
+    //      provider ∈ {edge, quest, voicevox, openai} 或 auto 且没配 aqua 时，**一次探针都不发**、
+    //      直接按可用放行 —— 否则这些用户每次说话都会白等满 240s，比原 bug 还糟（本组判据见 bridgeNeeded）。
+    //   ① 再认插件自己的状态机：`phase === 'ready' | 'external'`。
+    //      这是**最省的一次判断**，也是自家服务的权威——它由 startVoiceServices 在
+    //      「端口在听 ∧ 我们自己 spawn 的进程还活着」之后写入（L1556），覆盖了 `starting`（正在加载模型）这一档。
+    //   ② phase 不是 ready/external 时，再用桥的 `/health` 交叉证实（**只增不减**）：
+    //      `{"ok":true,"api":true,...}` 里的 `api` 才是「语音服务真的能用」的标志。用途有二：
+    //        * 外部服务（`?action=external`、用户自己起的链）插件不写自己的状态机，只有 /health 能问出真相；
+    //        * **本次要修的那个窗口正是 phase=starting**（api 已拉起、桥还没 bind），
+    //          /health 在这一档是不可达/未就绪 ⇒ 闸门必然继续等。
+    //      ⚠️ `registered` 的坑（2026-09-15 实测，差点写成错误的判据）：桥是**按需注册**音色的 ——
+    //        刚起来时 `registered: {}`，要等第一次合成才补注册并写成 "ok"。实测链路：
+    //          `registered={}` → /sakiko/tts 合成 200 / 32000Hz / 160044 B → `registered={"sakiko":"ok"}`
+    //        ⇒ `{}` **必须判为可用**；若把"空注册表"当未就绪，就会把能出声的状态误判成没好、白等满 240s。
+    //        只有注册表里出现非 ok/skip 的值（真注册失败）才算未就绪。
+    //      ⚠️ 刻意**不**把 /health 当唯一判据，也**不**在 phase=ready 时再去复查它：
+    //        * 实测 api 挂掉时桥的 /health 要 ~4.2s 才回（L1415 的 D3 记录），拿它当第一判据
+    //          会把「慢」误判成「没好」；
+    //        * 稳态下每次播报都发一次探针，只会给正常说话加延迟。所以 phase=ready 直接放行（快路径，
+    //          实测 0 探针）；真出现「phase 说 ready 但桥已经死了」，下一步 synthesize 会照旧
+    //          走既有的 synth_fail 告警 + 只出气泡。
+    //   ③ 两者都不认但 phase ∈ {failed, disabled, stopped} ⇒ 不再空等（见下面 waitVoiceReady 的早退）。
+    //
+    // 上限与降级：等 `VOICE_WAIT_MAX_MS` 后**绝不丢内容** —— 照旧 pushUtterances（只有气泡），
+    //   并在宿主日志里写清「为什么没出声」，供用户/agent 定位；等待本身在就绪或超时后立即停止，
+    //   轮询是 4s 一次的轻量探针（/health 1.2s 预算 / 命中 phase ready 时一次都不探），不会形成轮询风暴。
+    //   实测（2026-09-15，停掉语音服务再让它自启动）：闸门在桥不可达时连续等了 **48.2s**、
+    //   探针 13 次（≈4s 一次），直到 /health 报 api=true 才放行 —— 与冷启动 41~56s 的窗口正好对上。
+    const VOICE_WAIT_MAX_MS = 240000      // 等待上限：api 首次加载模型的内部预算是 180s（L1472），留 60s 余量
+    const VOICE_WAIT_INTERVAL_MS = 4000   // 轮询间隔：4s。冷启动是几十秒级事件，4s 足够细且不会压垮桥
+    const VOICE_WAIT_PROBE_MS = 1200      // 单次 /health 预算：比 8000 端口的 TCP 探测(1500)更紧，避免探针本身拖长等待
+
+    // 当下是否已能出声 —— { ready, why, phase, skipped }
+    //
+    // ⚠️ 第一道门是「本机现在到底用不用 aqua 桥」（实测出来的必要性）：
+    //   闸门探的是桥的 /health，只有 aqua 通道（以及 auto 且配了 aqua 的降级顺序）才走它。
+    //   若用户用的是 edge / quest / voiceox / openai，桥根本无关 —— 不加这道判断，
+    //   那些用户每次说话都会白等满 240s 上限（比原 bug 还糟）。所以 provider 不是 aqua 时
+    //   **一次探针都不发**，直接按可用放行。
+    function bridgeNeeded() {
+      const p = String(config.provider || '')
+      if (p === 'aqua') return true
+      if (p === 'auto') return !!(config.aquaVoice || config.aquaRefAudio)
+      return false
+    }
+
+    async function voiceBackendReadyNow() {
+      if (!bridgeNeeded()) return { ready: true, why: 'provider=' + String(config.provider || '') + ' 不走 aqua 桥（无需等待）', phase: voiceShared.state.phase, skipped: true }
+      const phase = voiceShared.state.phase
+      if (phase === 'ready' || phase === 'external') return { ready: true, why: 'phase=' + phase, phase }
+      const bridgePort = Math.floor(Number(config.voiceBridgePort) || 8000)
+      const base = String(config.aquaUrl || 'http://127.0.0.1:' + bridgePort).replace(/\/+$/, '')
+      const r = await httpProbe(base + '/health', VOICE_WAIT_PROBE_MS)
+      if (r.up === true) {
+        let h = null
+        try { h = JSON.parse(r.body) } catch (e) { h = null }
+        if (h !== null && typeof h === 'object') {
+          if (h.ok === true && h.api === true) {
+            // `registered` 是**按需注册**的：实测桥刚起来时是 `{}`，第一次合成时才补注册并把
+            // 该音色写成 "ok"（2026-09-15 实测：registered={} → 合成 200/32000Hz → registered={"sakiko":"ok"}）。
+            // 所以 `{}` **必须判为可用**，否则会把"能出声"误判成未就绪、白等满 240s。
+            // 'skip' 是桥主动跳过（未配权重时的正常路径），同样不算未就绪。
+            const reg = h.registered
+            const notOk = []
+            if (reg !== undefined && reg !== null && typeof reg === 'object') {
+              for (const k of Object.keys(reg)) {
+                const v = String(reg[k])
+                if (v !== 'ok' && v !== 'skip') notOk.push(k + '=' + v)
+              }
+            }
+            if (notOk.length === 0) return { ready: true, why: '桥 /health 就绪（api=true，音色注册表可用）', phase }
+            return { ready: false, why: '桥 /health 报了未注册音色：' + notOk.join(', '), phase }
+          }
+          return { ready: false, why: '桥 /health 未就绪（api=' + String(h.api) + '）', phase }
+        }
+        // 端口在听但不是桥（旧版桥 / 别的服务占着 8000）：不因探针看不懂就判定不可用
+        return { ready: true, why: '桥端口在听但 /health 非 JSON（按可用处理）', phase }
+      }
+      return { ready: false, why: '桥 ' + base + '/health 不可达（' + String(r.err || '') + '）', phase }
+    }
+
+    // 所有入口共用一个在途 Promise：并发话音不会各自起一条轮询链（也就不会出现 N 份探针）
+    let voiceWaitInflight = null
+    // { ready, waitedMs, why, timeout, skipped }
+    function waitVoiceReady() {
+      if (voiceWaitInflight !== null) return voiceWaitInflight
+      const run = (async () => {
+        const t0 = Date.now()
+        // 快路径：已经就绪（或本机根本不走 aqua 桥）—— 一秒都不多等（稳态下每次播报都走这里）
+        const first = await voiceBackendReadyNow()
+        if (first.ready) {
+          return { ready: true, waitedMs: Date.now() - t0, why: first.why, timeout: false, skipped: first.skipped === true }
+        }
+        voiceLog('等待语音就绪：' + first.why + '（上限 ' + Math.round(VOICE_WAIT_MAX_MS / 1000) + 's）')
+        for (;;) {
+          const ph = voiceShared.state.phase
+          // 早退：状态机已经明确告诉我们「这次就是起不来」，再等满 4 分钟只是白等
+          if (ph === 'failed' || ph === 'disabled' || ph === 'stopped') {
+            return { ready: false, waitedMs: Date.now() - t0, why: first.why + '；语音状态机已判定 phase=' + ph + '（' + String(voiceShared.state.detail || '').slice(0, 120) + '），不再空等', timeout: false, skipped: false }
+          }
+          if (Date.now() - t0 >= VOICE_WAIT_MAX_MS) {
+            return { ready: false, waitedMs: Date.now() - t0, why: first.why + '（等待超过上限，按未就绪降级）', timeout: true, skipped: false }
+          }
+          await new Promise((r) => setTimeout(r, VOICE_WAIT_INTERVAL_MS))
+          const now = await voiceBackendReadyNow()
+          if (now.ready) {
+            voiceLog('语音已就绪（等待 ' + Math.round((Date.now() - t0) / 1000) + 's）：' + now.why)
+            return { ready: true, waitedMs: Date.now() - t0, why: now.why, timeout: false, skipped: false }
+          }
+          first.why = now.why        // 每轮刷新原因：超时后日志里给出的是**最后一次**的实况
+        }
+      })()
+      voiceWaitInflight = run
+      // 结算后立刻清空：下一句话重新按当下状态判断（就绪后走快路径，不需要再进轮询）
+      run.then(() => { if (voiceWaitInflight === run) voiceWaitInflight = null },
+        () => { if (voiceWaitInflight === run) voiceWaitInflight = null })
+      return run
+    }
+
     // 通用同步出声：所有宿主发起的固定话语（播报/来电/空闲/指令朗读）统一走这里。
     // 先合成进 TTS 缓存，成功后才把条目推给面板 → 气泡与语音基本同帧；合成失败仅文字（无声=自检信号）。
-    async function speakSynced(jp, cn, emotion, kind, tags) {
+    async function speakSynced(jp, cn, emotion, kind, tags, noWait) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
       // 时间线：合成前记录意图与文本（截断）；完成记耗时，失败也留痕（无声=自检信号）
       tlLog({ ev: 'synth_start', kind: String(kind || ''), text: tlTrunc(jp, 160), cn: tlTrunc(cn, 120), emotion: emo, tags: tlTagFields(tags) })
+      // 等语音服务真的能出声再合成（见上面「语音就绪闸门」；voiceOn=false 时 speakSynced 根本不会被调用，
+      // 所以这里不必再判开关）。就绪/超时都会立刻放行：绝不因为等语音而丢掉这句话。
+      // noWait=true 直接跳过（连探针都不发）——给"明知不会出声、只求留痕"的调用方用（见 announce）。
+      const gate = noWait === true
+        ? { ready: false, waitedMs: 0, why: '调用方要求不等语音（noWait）', timeout: false, skipped: true }
+        : await waitVoiceReady()
+      tlLog({ ev: 'voice_wait', ready: gate.ready, ms: gate.waitedMs, timeout: gate.timeout, why: tlTrunc(gate.why, 200), kind: String(kind || '') })
+      if (!gate.ready) {
+        // 超时降级：**只出气泡不发声**。日志必须写清为什么没出声，否则用户只会看到"气泡有、没声音"
+        // 这种与旧 bug 一模一样的现象，无法区分「修复后降级」和「根本没修好」。
+        console.warn('[sakiko] 语音未就绪，本句降级为只显示文字（无法出声）:', gate.why,
+          '| 已等待 ' + Math.round(gate.waitedMs / 1000) + 's | kind=' + String(kind || '-'),
+          '| text=' + tlTrunc(String(jp === undefined ? '' : jp), 24))
+      }
       const t0 = Date.now()
       try {
         await synthesize(jp, config.voiceName, config.rate, config.pitch, emo)
@@ -2145,7 +2297,8 @@ export function apply(ctx) {
     }
 
     // 播报（欢迎语/完成/事件）走 speakSynced：语音就绪后同发气泡+声音。
-    async function announce(jp, cn, emotion) {
+    // noWait=true 仅供「明知不会出声」的路径（voiceOn=false 的欢迎语留痕）跳过就绪等待用，默认不跳。
+    async function announce(jp, cn, emotion, noWait) {
       const now = Date.now()
       const cnText = (typeof cn === 'string' && cn.length > 0) ? cn : jp
       // 播报留痕对话区（无论语音开关都记录；对话区显示中文 cn）
@@ -2154,7 +2307,7 @@ export function apply(ctx) {
       if (config.voiceOn !== true) return
       if (now - lastAnnounceAt < 8000) return
       lastAnnounceAt = now
-      await speakSynced(jp, cnText, emotion || 'neutral', 'force', { announce: true })
+      await speakSynced(jp, cnText, emotion || 'neutral', 'force', { announce: true }, noWait === true)
     }
 
     // ============================================================
@@ -4354,6 +4507,27 @@ export function apply(ctx) {
       return { ok: res.ok, intent, reason: res.reason || '', variant: variant || undefined }
     }))
 
+    // 语音就绪闸门的**可观测入口**（v2.2.0 随「欢迎语稳定无声」修复一起加）。
+    //   为什么要留它：就绪等待只在「启动那几十秒」这个窗口里才会真的等（稳态下是快路径、0 等待），
+    //   要验证/排查就必须能主动观测它，否则只能靠"重启一次看看有没有声音"这种代价极高的手段。
+    //   默认安全：不带参数只做**一次**探针并立即返回（不等、不写配置、不改状态）；
+    //   带 `maxMs` 才进入等待，且上限被夹到 [0, 300000]。
+    //   实测用法：`curl "http://127.0.0.1:3080/sakiko/rpc?m=testVoiceWait&args=%7B%7D"`
+    ctx.effect(() => harnessLocal.handle('testVoiceWait', async (args) => {
+      const t0 = Date.now()
+      const now = await voiceBackendReadyNow()
+      const maxMs = (args && typeof args.maxMs === 'number' && isFinite(args.maxMs)) ? args.maxMs : 0
+      if (maxMs <= 0) {
+        return { ok: true, waited: false, ready: now.ready, why: now.why, phase: voiceShared.state.phase, elapsedMs: Date.now() - t0 }
+      }
+      const gate = await waitVoiceReady()
+      return {
+        ok: true, waited: true, ready: gate.ready, timeout: gate.timeout, skipped: gate.skipped,
+        why: gate.why, waitedMs: gate.waitedMs, phase: voiceShared.state.phase,
+        maxMs: Math.max(0, Math.min(300000, maxMs)),
+      }
+    }))
+
     ctx.effect(() => harnessLocal.handle('setConfig', async (patch) => {
       const clean = sanitizePatch(patch)
       const wasMultiSession = config.multiSession !== false
@@ -4725,18 +4899,44 @@ export function apply(ctx) {
     })
     // 预热常驻 TTS worker（后台拉起，首句即可复用；不支持时静默回退）
     ensureTtsWorker().catch((e) => console.warn('[sakiko] TTS worker 预热失败:', e && e.message ? e.message : String(e)))
-    // 入口自检欢迎语：启动 15s 后播报一次（仅语音开启时；announce 会留痕到对话区）
+    // 入口自检欢迎语：面板挂载后播报一次（仅语音开启时；announce 会留痕到对话区）。
+    //
+    // v2.2.0 改法（修「欢迎语稳定无声」）：**删掉固定 15 秒这一档**。
+    //   旧写法 `ctx.timeout(..., 15000)` 是"无条件到点就播"，而语音链要 41~56s 才就绪
+    //   （实测见 voice-autostart.log；四次启动全部 >15s），于是合成必然撞在桥没起来的窗口上。
+    //   现在：这里只做一个**短的挂载延迟**（给面板 iframe 起来、开始 /sakiko/poll 的时间），
+    //   「什么时候真能出声」交给 speakSynced 里的语音就绪闸门去等（waitVoiceReady）。
+    //   队列是拉取式且**不丢**（host L4047：条目只在被 /sakiko/poll 取走时才从队列移除），
+    //   所以延迟几秒不会丢欢迎语。
+    //   为什么不用 ctx.timeout：它不返回可取消句柄，热重载后旧回调仍会跑（旧代码靠 startupGreetingSent
+    //   自锁）；这里用普通 setTimeout + 句柄，disposer 能真正清掉它。定时器 unref() 掉，
+    //   不拖住宿主进程退出。
+    const STARTUP_GREETING_DELAY_MS = 8000
     let startupGreetingSent = false
-    ctx.timeout(() => {
-      try {
+    let startupGreetingTimer = setTimeout(() => {
+      startupGreetingTimer = null
+      ;(async () => {
         if (startupGreetingSent) return
         startupGreetingSent = true
-        if (config.voiceOn !== true) return
-        announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion)
+        if (config.voiceOn !== true) {
+          // 语音关：行为与旧版一致 —— 立刻留痕 + 出气泡，不进就绪闸门（不白白多等 8s）
+          announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion, true)
+          console.log('[sakiko] 启动欢迎语已播报（voiceOn=false，仅气泡）:', STARTUP_GREETING.jp)
+          return
+        }
+        if (voiceShared.state.phase !== 'ready' && voiceShared.state.phase !== 'external') {
+          console.log('[sakiko] 启动欢迎语：语音未就绪（phase=' + voiceShared.state.phase + '），等待就绪后再出声')
+        }
+        await announce(STARTUP_GREETING.jp, STARTUP_GREETING.cn, STARTUP_GREETING.emotion)
         console.log('[sakiko] 启动欢迎语已播报:', STARTUP_GREETING.jp)
-      } catch (e) {
+      })().catch((e) => {
         console.error('[sakiko] 启动欢迎语失败:', e && e.message ? e.message : String(e))
-      }
-    }, 15000)
+      })
+    }, STARTUP_GREETING_DELAY_MS)
+    if (startupGreetingTimer && typeof startupGreetingTimer.unref === 'function') startupGreetingTimer.unref()
+    ctx.effect(() => () => {
+      // 卸载/热重载：清掉还没跑的欢迎语定时器（新一代实例会自己排一个）
+      if (startupGreetingTimer !== null) { clearTimeout(startupGreetingTimer); startupGreetingTimer = null }
+    })
     console.log('[sakiko] SAKIKO host 已就绪。配置:', JSON.stringify({ voiceOn: config.voiceOn, chatOn: config.chatOn, callOn: config.callOn, idleChatOn: config.idleChatOn }))
 }
