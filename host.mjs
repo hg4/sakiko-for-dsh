@@ -1913,15 +1913,52 @@ export function apply(ctx) {
       return { bytes, words: [], mime: 'audio/wav', slotPath: oPath }
     }
 
+    // provider 缓存键：必须覆盖**一切会改变合成结果**的 provider 专属参数。
+    // 踩坑记录（独立审查 2026-09-15 报的隐患）：aqua 的键原先只含 voice/refAudio/preset 三项，
+    //   漏了 aquaPromptText（参考音频的逐字文稿）。而 promptText 直接决定音色还原质量 ——
+    //   用户热改文稿后键不变 ⇒ 命中旧音频 ⇒ 「改了没反应」，而且是**静默**的（日志里也不报）。
+    //   同理漏掉的还有：语言设置（决定 G2P 走哪条路）、情绪→音色映射（同一 emo 会映射到不同
+    //   voice）、桥地址（换了后端）。这些值改动频率极低，纳入键最多让缓存 miss 一次（重新合成），
+    //   代价可以忽略；不纳入则是静默错音，代价高得多。
+    // auto 模式动态选后端、不参与共享缓存，故这里返回什么都不会被用到（保留原语义）。
+    function stableJson(v) {
+      if (v === null || v === undefined) return ''
+      if (typeof v !== 'object') return String(v)
+      try {
+        // 键排序后再拼，避免 setConfig 改写对象导致键序变化而误 miss
+        return Object.keys(v).sort().map((k) => k + '=' + v[k]).join(',')
+      } catch (e) { return '' }
+    }
+    function providerCacheKey(cfg) {
+      const c = cfg || {}
+      if (c.provider === 'aqua') {
+        return [
+          'aqua',
+          c.aquaVoice || '',
+          c.aquaRefAudio || '(包内参考音频)',
+          c.aquaPreset || 'fast',
+          c.aquaPromptText || '',
+          c.aquaPromptLanguage || '',
+          c.aquaTextLanguage || '',
+          c.aquaUrl || '',
+          stableJson(c.aquaEmotionVoices),
+        ].join(':')
+      }
+      if (c.provider === 'voicevox') {
+        return ['voicevox', c.voicevoxSpeaker || 8, c.voicevoxUrl || '', stableJson(c.voicevoxEmotionSpeakers)].join(':')
+      }
+      if (c.provider === 'openai') {
+        return ['openai', c.openaiTtsModel || 'tts-1', c.openaiTtsVoice || 'nova', c.openaiTtsUrl || c.chatBaseUrl || '', c.openaiTtsSpeed || 1].join(':')
+      }
+      return String(c.provider)
+    }
+
     async function synthesize(text, voice, rate, pitch, emotion) {
       const emo = EMOTIONS.indexOf(emotion) >= 0 ? emotion : 'neutral'
       // auto 模式会动态选择 Aqua/VOICEVOX，不写共享缓存，避免换后端后命中旧音色。
       const useCache = config.provider !== 'auto'
       // provider 缓存键包含 provider 专属参数，避免切换音色/角色后命中旧缓存。
-      let providerKey = config.provider
-      if (config.provider === 'aqua') providerKey = 'aqua:' + (config.aquaVoice || '') + ':' + (config.aquaRefAudio || '(包内参考音频)') + ':' + (config.aquaPreset || 'fast')
-      if (config.provider === 'voicevox') providerKey = 'voicevox:' + (config.voicevoxSpeaker || 8)
-      if (config.provider === 'openai') providerKey = 'openai:' + (config.openaiTtsModel || 'tts-1') + ':' + (config.openaiTtsVoice || 'nova') + ':' + (config.openaiTtsUrl || config.chatBaseUrl || '')
+      const providerKey = providerCacheKey(config)
       const key = [providerKey, text, voice, rate, pitch, emo].join('\u0001')
       if (useCache) {
         const hit = ttsCache.get(key)
