@@ -43,9 +43,11 @@ git -C $repo switch -c fix/<topic>
 **并行做事时用 worktree**，不要在同一棵树上同时改：
 
 ```powershell
-git -C $repo worktree add G:\workspace\<topic> -b fix/<topic>
+# 工作树放哪随机器而定：下面是占位值，按自己的目录替换（占位值不指向任何真实目录）：
+$workspace = '<工作区根>'
+git -C $repo worktree add "$workspace\<topic>" -b fix/<topic>
 # 干完、合并后清理：
-git -C $repo worktree remove G:\workspace\<topic>
+git -C $repo worktree remove "$workspace\<topic>"
 ```
 
 ## 3. 分支内开发
