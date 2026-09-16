@@ -3231,6 +3231,10 @@ export function apply(ctx) {
       // 进入即登记 lastLLMAt（先于本函数首个 await）：以“启动时刻”卡 8s 门，
       // 两个并发 LLM 总结的第二个必在门处被拦；失败返回 null 不回滚已登记时间（宁可少跑 LLM 不多烧 token）。
       // lastLLMAt/lastSummary 为全局（跨会话共享：总结节奏与上一句总结都不因会话切换而重置）。
+      // ⚠️ 但全局 lastSummary **不可**当作某个会话的"上一句总结"用 —— 它是"最后说话的那个会话"的
+      //    总结，多会话下会张冠李戴（见下方 prevSummary 处的实测记录）；它现在只用于单会话兜底与兼容读。
+      //    `lastLLMAt` 的全局节流同理：一个会话的总结会压掉另一个会话的 LLM 总结（表现为退回模板句），
+      //    这是已知的次生影响，本次未动（不属于本次报的串台问题）。
       narrGlobal.lastLLMAt = now
       scheduleSaveNarrator()
       const o = opts && typeof opts === 'object' ? opts : {}
@@ -3266,13 +3270,23 @@ export function apply(ctx) {
       const wsLine = wsName.length > 0
         ? '作業中のワークスペース：' + wsName + (wsBase.length > 0 && wsBase !== wsName ? '（フォルダ名：' + wsBase + '）' : '')
         : ''
-      // Fix R1（Minor-4）：上一句总结优先取**本会话**的分片（更贴题：说的是这个工作区自己的进展）；
-      // 分片缺失/为空（老档、未写过、无归属事件）→ 回落全局 `narrGlobal.lastSummary`，
-      // 因此单会话与无分片场景的 prompt 与改动前逐字相同。全局 lastSummary 仍是写入侧与兼容读的兜底。
+      // Fix R1（Minor-4）：上一句总结优先取**本会话**的分片（更贴题：说的是这个工作区自己的进展）。
+      //
+      // 2026-09-15 修「多会话串台」（用户实测）：
+      //   原先分片为空时**回落全局** `narrGlobal.lastSummary`，而全局是"最后说话的那个会话"的总结
+      //   （narrateSummary 末尾无条件覆盖它）⇒ 本会话还没写过摘要时，prompt 会把**别的会话**的进展
+      //   当成「前回の進捗サマリ」喂给 LLM，生成张冠李戴的播报。
+      //   实测现场：A 会话（Max减面合图后缀错误，首次 milestone）播出了「QnMobile_Artistの最終確認…」，
+      //   而那其实是 B 会话（特效自动化LOD工具）上一轮的总结「审校…修完14条。QnMobile_Artist只剩最终确认」
+      //   的改写 —— 两个会话的 shard 与全局 lastSummary 里都能看到这条污染链。
+      //   ⇒ 多会话模式下**不再回落**：没有本会话分片就写「（なし）」。宁可少一层上下文，
+      //     也不能拿别的会话的进展当自己的。单会话（multiSession === false）下全局就是这个会话自己，
+      //     回落等价，保持原样以零回归；无 sid（无归属播报）时同样不回落，因为它本就不属于任何一个会话。
       const shardProgress = (wsSid.length > 0 && memory.progress && typeof memory.progress === 'object') ? memory.progress[wsSid] : undefined
       const shardSummary = (shardProgress && typeof shardProgress.lastSummary === 'string' && shardProgress.lastSummary.length > 0) ? shardProgress.lastSummary : ''
       const globalSummary = (typeof narrGlobal.lastSummary === 'string' && narrGlobal.lastSummary.length > 0) ? narrGlobal.lastSummary : ''
-      const prevSummary = truncCps(shardSummary || globalSummary, 200)
+      const allowGlobalFallback = config.multiSession === false && wsSid.length > 0
+      const prevSummary = truncCps(shardSummary || (allowGlobalFallback ? globalSummary : ''), 200)
       // C：kind 文案——旧 done 句「進んだこと＋次の一手を伝える」在**本回合没有进展**时（只是启动了长任务、
       //   或正在等待）会诱导模型「报成绩」，把**计划**包装成**已完成的成果**（用户实测故障的另一半根因）。
       //   改为先判断此刻状态（进行中／完了／待ち）再说下一步；milestone 句同步去掉「順調であること」这一
