@@ -80,14 +80,14 @@
 **推荐装固定版本**（跟 Release，行为可预期）：
 
 ```powershell
-dsh plugin --profile web add github:hg4/sakiko-for-dsh#v2.2.0
+dsh plugin --profile web add github:hg4/sakiko-for-dsh#v2.2.1
 ```
 
-把 `v2.2.0` 换成 [Releases](https://github.com/hg4/sakiko-for-dsh/releases) 上的最新 tag 即可。
+把 `v2.2.1` 换成 [Releases](https://github.com/hg4/sakiko-for-dsh/releases) 上的最新 tag 即可。
 也可以下载对应 Release 的 tarball 后本地安装：
 
 ```powershell
-dsh plugin --profile web add file:<下载目录>\sakiko-for-dsh-2.2.0.tgz
+dsh plugin --profile web add file:<下载目录>\sakiko-for-dsh-2.2.1.tgz
 ```
 
 **想跟随主干**（拿到的是最新提交，可能不稳定，适合本地开发调试）：
