@@ -68,12 +68,16 @@ rebase 之后**必须重跑验收**（§5）—— 基线变了，之前的绿�
 | 闸门 | 何时必须 | 判据 |
 | --- | --- | --- |
 | 语法检查 | 改 JS/Python | `node --check host.mjs`；`python -m py_compile` |
-| 打包自检 | 改包内容/manifest/路径 | `python G:\workspace\sakiko-plugin-dist\build_dist.py` 自检全过（含"必需项缺失=0"与"未跟踪文件"警告） |
-| 隔离安装验证 | 改发布形态/入口 | `verify-github-install.ps1`：装进**全新隔离 profile** ⇒ 成为 bundle 层、路由 200、BOOT 注册客户端插件 |
-| 真机验收 | 改语音链路/服务生命周期 | `verify-voice-autostart.ps1`：`owner=plugin`、父进程=DSH、合成 32000Hz、反例对照 500 |
+| 打包自检 | 改包内容/manifest/路径 | 打包后逐项对账 `package.json` 的 `files` / `config/manifest.json`：**必需项缺失=0**，且不夹带**未跟踪**文件（后者只警告） |
+| 隔离安装验证 | 改发布形态/入口 | 装进**全新隔离 profile** ⇒ 成为 bundle 层、路由 200、BOOT 注册客户端插件 |
+| 真机验收 | 改语音链路/服务生命周期 | `owner=plugin`、父进程=DSH、合成 32000Hz，并有**反例对照**（500 应被拒） |
 | **独立复审** | 任何能决定结论真假的改动 | 由**非作者**的子代理实测后给结论（作者不自审）；复审点出阻塞项就**先修再合** |
 
 **"跑完了/无报错/有产物"不算通过**；每一步都要有已知答案的对照。
+
+> 上表只写**判据**，不写具体脚本：本仓库**不自带**打包自检 / 隔离安装验证 / 真机验收的验证程序，
+> 它们由本机另行落成脚本或人工执行。所以照上表执行时，先自备一个能给出该判据的入口（脚本或手工步骤），
+> **别把某台机器上的私有路径当成本仓库的组成部分**。
 
 ## 6. 合入主干（只允许快进）
 
@@ -96,8 +100,8 @@ git -C $repo -c http.proxy= ls-remote origin refs/heads/main    # 核对远端 =
 
 ## 8. 发布（插件仓库专属）
 
-- 发 Release / 改仓库可见性走 `G:\workspace\sakiko-plugin-dist\publish-github.ps1`
-  （`-Visibility public|private`、`-OnlyVisibility` 只改可见性；脚本自带"工作树不干净就拒绝"的安全闸）。
+- 发 Release / 改仓库可见性属于"**元操作**"：本仓库**不自带**发布脚本 ⇒ 由**人**在网页操作，或用**临时** token 走 GitHub API。
+  无论走哪条路，发布前都必须**工作树干净**（这是安全闸，别绕过）。
 - 验收/复审未过之前，仓库保持 **private**；全过之后再转 public。
 
 ### 8.1 凭据：**日常提交不需要 token**
@@ -120,7 +124,7 @@ git -C $repo -c http.proxy= ls-remote origin refs/heads/main    # 核对远端 =
 - ❌ 直接在 `main` 上改代码并提交（哪怕只有一个字符）。
 - ❌ 用普通 `merge` 制造 merge commit（破坏线性）。
 - ❌ `push --force` 到 `main`。
-- ❌ 在有未提交改动时发布（`publish-github.ps1` 会拒绝，别绕过）。
+- ❌ 在有未提交改动时发布（发布前工作树必须干净，**别绕过**这道安全闸；见 §8）。
 - ❌ 改历史提交来"修正"已推送的说明 —— 用**新提交**更正（例：`cdb3e83` 更正了 `31a4a57` 里自相矛盾的描述）。
 
 ## 10. 回滚
@@ -162,4 +166,16 @@ git -C $repo -c http.proxy= ls-remote origin refs/heads/main    # 核对远端 =
    - ⚠️ **别再用"日志里没有『插件卸载』行"反推 dispose 没跑**：那个日志文件是插件**内存环形缓冲的整份覆写**
      （每次启动清空重写），新实例一起来，上一代的记录就没了 ⇒ 事后取证无效。
      要判 dispose 是否执行，看**当次运行期间**的日志或 timeline（append-only），不要事后翻文件。
+5. **⚠️ 本机（Windows PowerShell 5.1）下，凡是带引号 / `$` / 中文 / 行号统计的命令，不要走 PowerShell 内联**
+   （2026-09-16 实测，三条都真的翻过车）：
+   - **`Get-Content` 默认按 ANSI 读 UTF-8** ⇒ **行数读错**（实测 `watchdog.mjs` 733 行读成 671 行）、
+     行号随之漂移 ⇒ 会把"文件根本没被改过"误判成"被改过"。
+   - **`>` 重定向是 UTF-16LE** ⇒ 把原生命令的输出写成 UTF-16（下游按 UTF-8 读会看到乱码/空行），
+     落盘取证一律别用它。
+   - **内联 `node -e` 里的 `$` 会被 PowerShell 先展开成空串**（于是算出/matched 到的是别的东西 ⇒ 得出**假阳性**结论）；
+     **`||` 会被当作 PowerShell 语句分隔符** ⇒ 整段 `node -e` 根本不执行，看起来却"没报错"。
+   - ⇒ 读写用 `read` / `edit` / `write` 工具或 **node 脚本**；要落盘输出就让脚本自己写文件（别用 `>`）。
+   - ⇒ 改写文件时注意本仓库 **`core.autocrlf=true`**（系统级）：**blob 是 LF、工作树曾被写成 CRLF**。
+     因此**比较"工作树文件"与"git blob"不能比原始字节 sha256** —— 纯文本必然对不上；用 **`git hash-object`**
+     （它按属性规范化），或先把两侧行尾统一再比。
 

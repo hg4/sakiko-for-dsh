@@ -40,25 +40,28 @@ $git  = { param($a) git -C $repo -c http.proxy= -c https.proxy= -c http.https://
 | 改了什么 | 必须验 |
 | --- | --- |
 | JS / Python | `node --check host.mjs`、`python -m py_compile` |
-| 包内容 / manifest / 路径 | `python G:\workspace\sakiko-plugin-dist\build_dist.py` 自检全过 |
-| 发布形态 / 入口 | `verify-github-install.ps1`（全新隔离 profile ⇒ 成为 bundle 层、路由 200） |
-| 语音链路 / 服务生命周期 | `verify-voice-autostart.ps1`（`owner=plugin`、父进程=DSH、合成 32000Hz、反例 500） |
+| 包内容 / manifest / 路径 | 打包后逐项对账 `package.json` 的 `files` / `config/manifest.json`：**必需项缺失=0** |
+| 发布形态 / 入口 | 装进**全新隔离 profile** ⇒ 成为 bundle 层、路由 200 |
+| 语音链路 / 服务生命周期 | `owner=plugin`、父进程=DSH、合成 32000Hz，并有**反例对照**（500 应被拒） |
 | **任何能决定结论真假的改动** | **独立复审**（非作者的子代理实测 + 结论）；有阻塞项先修再合 |
 
 **"跑完了 / 无报错 / 有产物"不算通过** —— 每步都要有已知答案的对照（正例 + 反例）。
+
+> 上表只写**判据**，不写具体脚本：本仓库**不自带**这些验证程序，用之前先自备一个能给出该判据的入口
+> （脚本或手工步骤），**别把某台机器上的私有路径当成本仓库的组成部分**。
 
 ## 禁止
 
 - ❌ 直接在 `main` 上改并提交（哪怕一个字符）
 - ❌ 普通 `merge` 造 merge commit、`push --force` 到 `main`
-- ❌ 工作树有未提交改动就发布（`publish-github.ps1` 会拒绝，别绕过）
+- ❌ 工作树有未提交改动就发布（发布前工作树必须干净，**别绕过**这道安全闸）
 - ❌ 改历史提交来"更正"已推送的说明 —— 用**新提交**更正
 
 ## 凭据
 
 日常流程（fetch / 分支 / rebase / **merge --ff-only** / **push** / 推 tag）**走 SSH，不需要 GitHub token**。
 只有三类"元操作"要 token（HTTPS API 独有，SSH 无对应能力）：**建仓库、改仓库可见性、发 Release（含上传资产）**——
-用 `publish-github.ps1 -Token <临时 token>` 做，**用完立刻撤销**；或让人在网页上点，完全不用交出凭据。
+用**临时** token 走 GitHub API（本仓库**不自带**发布脚本；也可让人在网页上点，完全不用交出凭据）做，**用完立刻撤销**。
 
 ## 本机特有的坑
 
