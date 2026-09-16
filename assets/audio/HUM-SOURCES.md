@@ -26,6 +26,8 @@
 
 ## 重做 / 换段
 
+> ⚠️ 下列路径属于**另一台机器的本地工具链**（RVC 环境与脚本），**不在本仓库内**，保留仅为可追溯。
+
 ```powershell
 # 1) 从 70s 清唱里按停顿切一段（--phrases 0 = 整段不拆句）
 & G:\workspace\rvc\env\Scripts\python.exe G:\workspace\rvc\scripts\pick_hum_segments.py `

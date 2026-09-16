@@ -13,7 +13,8 @@
 #    它必须被 git 跟踪。旧版把它放在 build_dist.py 的 publish-files/ 里打包时才注入，
 #    于是从 GitHub 源码装（`dsh plugin add github:hg4/sakiko-for-dsh`）拿到的那份
 #    **没有 bundle 声明** ⇒ DSH 打 `declares no dsh.bundle` 警告 ⇒ 插件永不加载。
-#    build_dist.py 现在只**校验**（校验仓库版 package.json 与 git 跟踪状态），不再注入。
+#    仓库外的本地打包脚本 build_dist.py（**不在本仓库内**）现在只**校验**
+#    （校验仓库版 package.json 与 git 跟踪状态），不再注入。
 
 - insert:
     - id: sakiko

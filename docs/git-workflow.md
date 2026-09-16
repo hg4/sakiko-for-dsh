@@ -168,16 +168,38 @@ git -C $repo -c http.proxy= ls-remote origin refs/heads/main    # 核对远端 =
    - ⚠️ **别再用"日志里没有『插件卸载』行"反推 dispose 没跑**：那个日志文件是插件**内存环形缓冲的整份覆写**
      （每次启动清空重写），新实例一起来，上一代的记录就没了 ⇒ 事后取证无效。
      要判 dispose 是否执行，看**当次运行期间**的日志或 timeline（append-only），不要事后翻文件。
-5. **⚠️ 本机（Windows PowerShell 5.1）下，凡是带引号 / `$` / 中文 / 行号统计的命令，不要走 PowerShell 内联**
-   （2026-09-16 实测，三条都真的翻过车）：
-   - **`Get-Content` 默认按 ANSI 读 UTF-8** ⇒ **行数读错**（实测 `watchdog.mjs` 733 行读成 671 行）、
-     行号随之漂移 ⇒ 会把"文件根本没被改过"误判成"被改过"。
-   - **`>` 重定向是 UTF-16LE** ⇒ 把原生命令的输出写成 UTF-16（下游按 UTF-8 读会看到乱码/空行），
-     落盘取证一律别用它。
-   - **内联 `node -e` 里的 `$` 会被 PowerShell 先展开成空串**（于是算出/matched 到的是别的东西 ⇒ 得出**假阳性**结论）；
-     **`||` 会被当作 PowerShell 语句分隔符** ⇒ 整段 `node -e` 根本不执行，看起来却"没报错"。
+5. **⚠️ 本机（Windows PowerShell 5.1）下，凡是带引号 / $ / 中文 / 行号统计的命令，不要走 PowerShell 内联**
+   （2026-09-16 实测复现，三条都真的翻过车）：
+   - **`Get-Content` 默认按 ANSI 读 UTF-8** ⇒ **行数读错**、行号随之漂移
+     ⇒ 会把"文件根本没被改过"误判成"被改过"。
+     实测对照（`watchdog.mjs`，真实 672 行）：默认 `(Get-Content f).Count` = **604**；
+     `(Get-Content -Encoding UTF8 f).Count` = **672**；`[System.IO.File]::ReadAllLines(f).Count` = **672**；
+     `(Get-Content f | Measure-Object -Line).Lines` = **573**（空行不计，别用它数行）。
+     ⇒ 行数一律用 `read` 工具或 node 数，别用 `Get-Content` 的默认编码。
+   - **`>` 重定向是 UTF-16LE** ⇒ 把原生命令的输出写成 UTF-16（落盘首字节 `FF FE`，下游按 UTF-8 读会看到乱码/空行），
+     落盘取证一律别用它。（实测：`node -e "console.log('hello')" > redir.txt` ⇒ `FF FE 68 00 65 00 …`）
+   - **内联 `node -e` 里的 `$` 会被 PowerShell 先展开成空串**（实测 `node -e "console.log('A$B')"` 只打印 `A`）
+     ⇒ 算出/matched 到的是别的东西，得出**假阳性**结论。
+   - **`||` 在 PS 5.1 不是合法语法**：实测 `node -e "..." || echo x` ⇒
+     `ParserError: The token '||' is not a valid statement separator in this version.`，退出码 1。
+     ⚠️ 它是**解析期**失败 ⇒ **整行（含 `||` 之前的部分）一条都不执行、stdout 全空**，
+     只看 stdout 就像"什么都没发生"（但 stderr 有红字、`$LASTEXITCODE` 是 1，**要去核**）。别指望它像 bash 那样做失败兜底。
+   - **无 BOM 的 UTF-8 `.ps1` 会被按 ANSI(1252) 读** ⇒ 脚本里的非 ASCII 字面量**静默变乱码**
+     （实测：内容写 `Write-Output "CJK:中文"` 的无 BOM 脚本输出 `CJK:涓枃`，退出码仍是 0；同一个文件加 UTF-8 BOM 就正常）。
+     ⇒ 含中文的 `.ps1` 要么存成**带 BOM 的 UTF-8**，要么（推荐）干脆别写成 `.ps1`，落成 node 脚本。
    - ⇒ 读写用 `read` / `edit` / `write` 工具或 **node 脚本**；要落盘输出就让脚本自己写文件（别用 `>`）。
    - ⇒ 改写文件时注意本仓库 **`core.autocrlf=true`**（系统级）：**blob 是 LF、工作树曾被写成 CRLF**。
      因此**比较"工作树文件"与"git blob"不能比原始字节 sha256** —— 纯文本必然对不上；用 **`git hash-object`**
      （它按属性规范化），或先把两侧行尾统一再比。
+   - ⇒ **已有克隆升级到本条 `.gitattributes` 之后，工作树不会自动变成 LF**（实测：用一个全新克隆
+     `git checkout` 本分支后仍有 **75** 个文本文件是 `i/lf w/crlf`；而 `git status` 是**干净**的，
+     所以你不会察觉）。要一次性刷成 LF（**先确认 `git status` 为空**）：
+     ```powershell
+     $f = git -C $repo ls-files --eol | Select-String 'w/crlf' | ForEach-Object { ($_.Line -split "`t")[-1] }
+     $f | ForEach-Object { Remove-Item -LiteralPath $_ -Force }   # 内容都在 index 里，删了能还原
+     git -C $repo checkout-index -a -f                            # 注意：对**已存在**的文件它会静默跳过，所以必须先删
+     git -C $repo add -A                                          # 只刷新 stat 缓存；实测 0 个 blob 变化
+     git -C $repo status --porcelain ; git -C $repo ls-files --eol | Select-String 'w/crlf'
+     ```
+     （全新 `git clone` 天然就是 LF，不需要这一步。）
 
