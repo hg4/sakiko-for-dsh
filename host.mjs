@@ -492,6 +492,7 @@ export function apply(ctx) {
     // tags 只取 announce/narrate/sid/label 四个可控字段并入日志（其它 tags 不入日志，避免夹带敏感数据）
     // sid/label（Task 2 播报归属）：`push` / `synth_start` 两类行随之带上工作区标签，便于按会话排查。
     // 注：`synth_done` / `synth_fail` 只记耗时（Fix R1 / M3：那两行本就没有 tags 字段，保持既有日志结构不变）。
+    //     `synth_skip`（v2.2.0，C-3）是语音关时的**正常跳过**（不合成、不算失败），只带 why；
     function tlTagFields(tags) {
       const o = {}
       if (tags && typeof tags === 'object') {
@@ -1936,7 +1937,10 @@ export function apply(ctx) {
     // auto 模式动态选后端、不参与共享缓存，故这里返回什么都不会被用到（保留原语义）。
     function stableJson(v) {
       if (v === null || v === undefined) return ''
-      if (typeof v !== 'object') return JSON.stringify(v)
+      // JSON.stringify 对 function / Symbol 返回 undefined（不是字符串），直接拼进结果会变成字面量
+      // "undefined"。配置全来自 JSON.parse + sanitizePatch，实际不可达；但这里标了"不抛、返回字符串"
+      // 的边界约定（测试也照此断言），就把它兜住。
+      if (typeof v !== 'object') { const s = JSON.stringify(v); return s === undefined ? '' : s }
       if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']'
       try {
         return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}'
@@ -1981,9 +1985,18 @@ export function apply(ctx) {
         return ['quest', c.questSpeaker || 8].join(':')
       }
       if (c.provider === 'edge') {
-        // B-1：edge 的音色由 voice/rate/pitch/emo（在外层 key 里）+ intensity 共同决定
+        // B-1：edge 的音色由 voice/rate/pitch/emo（在外层 key 里）+ intensity 共同决定。
+        // 独立复审 Minor-1：edge 失败时还会**回退到 quest**（fallbackToQuest 且 voiceStability!==true），
+        // 那条路的音色由 questSpeaker 决定 ⇒ 在"会回退"时它也是 edge 产出的隐式输入，必须入键，
+        // 否则改了 questSpeaker 会命中 edge 的旧音频（正是 B-1 要消灭的静默错音）。
+        // ⚠️ 这条判据必须与 synthesize 里**真实决定回退**的那道闸同口径
+        // （`if (config.fallbackToQuest === true && config.voiceStability !== true)`，见 synthesize 的 edge 分支）：
+        // 本行曾把 `!== true` 写成 `!== false`（两者互补）⇒ 在**唯一会走 quest 回退**的配置
+        // （fallbackToQuest=true + voiceStability=false）下 questSpeaker 反而不入键，改音色命中旧音频。
+        // test/provider-cache-key.test.mjs §2 现在从源码里取那道真实闸门逐组合对照，防再次写反。
         const intensity = typeof c.emotionIntensity === 'number' ? c.emotionIntensity : 1
-        return ['edge', String(intensity)].join(':')
+        const canFallbackQuest = c.fallbackToQuest === true && c.voiceStability !== true
+        return ['edge', String(intensity), canFallbackQuest ? String(c.questSpeaker || 8) : ''].join(':')
       }
       return String(c.provider)
     }
@@ -2133,6 +2146,9 @@ export function apply(ctx) {
       return Promise.all(workers)
     }
     function scheduleWarmTts() {
+      // 语音关时**不预热**：预热会真的走 synthesize（aqua 那条直接吃 GPU），而这条路径不受
+      // speakSynced 管辖 —— 2026-09-15 独立复审实测 voiceOn=false 时仍会白跑一次合成。
+      if (config.voiceOn !== true) return
       const items = queue.slice(0, 8).filter((u) => u && u.kind === 'say' && u.text)
       if (items.length === 0) return
       warmChain = warmChain.then(() => warmItems(items)).catch((e) => {
@@ -2178,6 +2194,11 @@ export function apply(ctx) {
       queue.push(item)
       nextId += 1
       maxIssuedId = Math.max(maxIssuedId, nextId - 1)
+      // 队列上限 60（与 pushUtterances / pushHum 同一套语义与位置：入队后、tlLog 前，总是淘汰最老者）。
+      // Minor-7（独立复审）：面板是拉取式的（/sakiko/poll 取走才移除），而本分支把**语音关时的全部**
+      // 播报流量从 pushUtterances 改走 pushCn ⇒ 少了这道上限，语音关的长会话在面板长时间不轮询时
+      // queue 会无界增长（每条约百字节）。这里是补平，不是新策略。
+      if (queue.length > 60) queue.shift()
       tlLog({ ev: 'push', id: item.id, kind: 'cn', text: '', cn: tlTrunc(item.cn, 120), force: false, emotion: emo })
     }
 
@@ -2241,8 +2262,10 @@ export function apply(ctx) {
     //   探针 13 次（≈4s 一次），直到 /health 报 api=true 才放行 —— 与冷启动 41~56s 的窗口正好对上。
     const VOICE_WAIT_MAX_MS = 240000      // 等待上限：api 首次加载模型的内部预算是 180s（L1472），留 60s 余量
     // C-2：voiceStability=false 表示「失败可以回退到别的通道」，那就不必按"宁可不出声"的上限死等。
-    // 60s 仍覆盖实测 41~56s 的冷启动；到点放行让 synthesize 去走回退链，比白等 4 分钟合理。
-    const VOICE_WAIT_FALLBACK_MAX_MS = 60000
+    // 上限取值依据：项目自记的冷启动样本是 41/45/56s，且有一次「api 就绪 → 语音链路就绪」实测正好 60s
+    // ⇒ 原来的 60s 是**零边距**（叠加 4s 轮询粒度，放行时刻正好落在最坏样本的就绪时刻上，等于没覆盖）。
+    // 独立复审建议 90s，采纳：既留出边距，又远小于"宁可不出声"那档的 240s。
+    const VOICE_WAIT_FALLBACK_MAX_MS = 90000
     const VOICE_WAIT_INTERVAL_MS = 4000   // 轮询间隔：4s。冷启动是几十秒级事件，4s 足够细且不会压垮桥
     const VOICE_WAIT_PROBE_MS = 1200      // 单次 /health 预算：比 8100 端口的 TCP 探测(1500)更紧，避免探针本身拖长等待
 
@@ -2307,7 +2330,8 @@ export function apply(ctx) {
         if (first.ready) {
           return { ready: true, waitedMs: Date.now() - t0, why: first.why, timeout: false, skipped: first.skipped === true }
         }
-        // C-2：voiceStability=false（允许回退）时不必按"宁可不出声"的上限死等，缩短到 60s
+        // C-2：voiceStability=false（允许回退）时不必按"宁可不出声"的上限死等，缩短到 90s
+        // （VOICE_WAIT_FALLBACK_MAX_MS = 90000；本行原写 60s，与本分支把常量从 60s 提到 90s 后不一致 —— Minor-1）
         const maxMs = config.voiceStability === false ? VOICE_WAIT_FALLBACK_MAX_MS : VOICE_WAIT_MAX_MS
         voiceLog('等待语音就绪：' + first.why + '（上限 ' + Math.round(maxMs / 1000) + 's）')
         for (;;) {
@@ -2379,7 +2403,17 @@ export function apply(ctx) {
           tlLog({ ev: 'synth_fail', ms: Date.now() - t0 })
         }
       }
-      if (kind === 'call') {
+      if (voiceOff) {
+        // 语音关：**只把中文气泡插进历史**（pushCn 推 kind:'cn'，面板走 revealHistory，不进播放队列）。
+        // ⚠️ 绝不能走 pushUtterances —— 那会推成 force 条目，而客户端的 voiceOn 闸**只挡非 force**
+        //    （panel.js:462 `if (!force && cfg.voiceOn !== true) return`），于是会真的发声。
+        //    2026-09-15 独立复审实测：voiceOn=false 时 timeline 出现 client_play(158) 并播完 4.3s，
+        //    与"只出气泡"的自述直接矛盾 —— 那是改 C-3 时修过头的回归（改前是"静默无气泡"，
+        //    我把它改成了"气泡+出声"，而正确目标是"气泡、但不出声"）。
+        // 代价：这条路径不带 tags（pushCn 无 tags 形参），因此日志里少了 narrate/sid/label 元数据；
+        //      气泡前缀仍正确，因为 cn 里已经含了「〔会话标签〕」。
+        pushCn(cn || jp, emo)
+      } else if (kind === 'call') {
         pushCall(jp, emo, cn || '')
       } else {
         pushUtterances([jp], kind === 'force', emo, cn || '', tags || {})
@@ -2969,6 +3003,12 @@ export function apply(ctx) {
       out.milestoneCount = (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0
       if (typeof v.lastSummary === 'string' && v.lastSummary.length > 0) out.lastSummary = truncCps(v.lastSummary, 200)
       if (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) out.updatedAt = v.updatedAt
+      // Minor-3（独立复审）：I-3 起 recordProgress 会把 LLM 总结的节流时刻写进**会话分片**，
+      // 而这里原先没有白名单 ⇒ 字段进了 sakiko-memory.json 却在 loadMemory 时被丢掉，
+      // 重启后 gateAt=0、该会话的第一句总结必然绕过 8s 门（实测：落盘 JSON 有值、读档后消失）。
+      // narrator.json 侧的孪生副本（narrGlobal.sessions[key].lastLLMAt）虽被 sanitizeNarratorSessions
+      // 保留，但节流门读的是 memory.progress[sid] —— 不修这里，那份副本是死数据。
+      if (typeof v.lastLLMAt === 'number' && isFinite(v.lastLLMAt)) out.lastLLMAt = v.lastLLMAt
       return out
     }
     function sanitizeProgressMap(m) {
@@ -2992,6 +3032,7 @@ export function apply(ctx) {
           label: typeof v.label === 'string' ? truncCps(v.label, 40) : '',
           milestoneCount: (typeof v.milestoneCount === 'number' && isFinite(v.milestoneCount)) ? Math.max(0, Math.floor(v.milestoneCount)) : 0,
           lastSummary: typeof v.lastSummary === 'string' ? truncCps(v.lastSummary, 200) : '',
+          lastLLMAt: (typeof v.lastLLMAt === 'number' && isFinite(v.lastLLMAt)) ? v.lastLLMAt : 0,
           updatedAt: (typeof v.updatedAt === 'number' && isFinite(v.updatedAt)) ? v.updatedAt : 0,
         }
       }
@@ -3028,6 +3069,10 @@ export function apply(ctx) {
       }
       if (p.milestoneBump === true) e.milestoneCount += 1
       if (typeof p.lastSummary === 'string' && p.lastSummary.length > 0) e.lastSummary = truncCps(p.lastSummary, 200)
+      // I-3（独立复审）：LLM 总结的**节流时刻**也按会话分片存。原先只有全局 narrGlobal.lastLLMAt，
+      // 于是一个会话刚总结过，另一个会话 8s 内的 done/milestone 会被直接拦掉、退回模板句
+      // （用户表现为"这次播报很泛"）—— 与串台同属跨会话耦合。
+      if (typeof p.lastLLMAt === 'number' && isFinite(p.lastLLMAt)) e.lastLLMAt = p.lastLLMAt
       e.updatedAt = Date.now()
       memory.progress[key] = e
       // narrator.json 侧的精简分片摘要（同源数据）
@@ -3035,6 +3080,7 @@ export function apply(ctx) {
         label: typeof e.label === 'string' ? e.label : '',
         milestoneCount: e.milestoneCount,
         lastSummary: typeof e.lastSummary === 'string' ? e.lastSummary : '',
+        lastLLMAt: (typeof e.lastLLMAt === 'number' && isFinite(e.lastLLMAt)) ? e.lastLLMAt : 0,
         updatedAt: e.updatedAt,
       }
       // 上限淘汰（Fix R1 / Minor-2）：与注册表侧 `sessionBlocksEviction(rec, now)` 语义**对称**——
@@ -3226,18 +3272,26 @@ export function apply(ctx) {
 
     async function narrateSummary(kind, opts) {
       if (config.narratorLLMSummary !== true) return null
-      const now = Date.now()
-      if (now - (narrGlobal.lastLLMAt || 0) < NARR_LLM_GAP_MS) return null
-      // 进入即登记 lastLLMAt（先于本函数首个 await）：以“启动时刻”卡 8s 门，
-      // 两个并发 LLM 总结的第二个必在门处被拦；失败返回 null 不回滚已登记时间（宁可少跑 LLM 不多烧 token）。
-      // lastLLMAt/lastSummary 为全局（跨会话共享：总结节奏与上一句总结都不因会话切换而重置）。
-      // ⚠️ 但全局 lastSummary **不可**当作某个会话的"上一句总结"用 —— 它是"最后说话的那个会话"的
-      //    总结，多会话下会张冠李戴（见下方 prevSummary 处的实测记录）；它现在只用于单会话兜底与兼容读。
-      //    `lastLLMAt` 的全局节流同理：一个会话的总结会压掉另一个会话的 LLM 总结（表现为退回模板句），
-      //    这是已知的次生影响，本次未动（不属于本次报的串台问题）。
-      narrGlobal.lastLLMAt = now
-      scheduleSaveNarrator()
       const o = opts && typeof opts === 'object' ? opts : {}
+      const now = Date.now()
+      // I-3（独立复审）：8s 节流从**全局**下沉到**会话分片**。
+      //   原来是 `now - narrGlobal.lastLLMAt < NARR_LLM_GAP_MS` ⇒ 会话 A 刚总结过，会话 B 在 8s 内的
+      //   done/milestone 会被直接拦掉、退回模板句（用户表现为"这次播报很泛"）。与串台同属跨会话耦合。
+      //   无归属（无 sid）时仍读全局值，与旧行为一致；分片里没有该字段（老档）也按 0 处理 ⇒ 立刻可总结。
+      const gateSid = (typeof o.sid === 'string' && o.sid.length > 0) ? o.sid : ''
+      const gateRec = (gateSid.length > 0 && memory.progress && typeof memory.progress === 'object') ? memory.progress[gateSid] : undefined
+      const gateAt = (gateSid.length > 0)
+        ? ((gateRec && typeof gateRec.lastLLMAt === 'number' && isFinite(gateRec.lastLLMAt)) ? gateRec.lastLLMAt : 0)
+        : (narrGlobal.lastLLMAt || 0)
+      if (now - gateAt < NARR_LLM_GAP_MS) return null
+      // 进入即登记（先于本函数首个 await）：以“启动时刻”卡 8s 门，
+      // 两个并发 LLM 总结的第二个必在门处被拦；失败返回 null 不回滚已登记时间（宁可少跑 LLM 不多烧 token）。
+      // 有归属时登记到**本会话分片**（同时保留全局值，供无归属路径与兼容读使用）。
+      // ⚠️ 全局 `lastSummary` **不可**当作某个会话的"上一句总结"用 —— 它是"最后说话的那个会话"的
+      //    总结，多会话下会张冠李戴（见下方 prevSummary 处的实测记录）；它现在只用于单会话兜底与兼容读。
+      narrGlobal.lastLLMAt = now
+      if (gateSid.length > 0) recordProgress(gateSid, { lastLLMAt: now })
+      scheduleSaveNarrator()
       // 会话态兜底：调用方未显式传 userMsg/tools/blocking 时，取该 sid 的回合态
       const st = stateFor(o.sid)
       const userMsg = truncCps(o.userMsg || st.lastUserText || '', 200)
@@ -3280,8 +3334,11 @@ export function apply(ctx) {
       //   而那其实是 B 会话（特效自动化LOD工具）上一轮的总结「审校…修完14条。QnMobile_Artist只剩最终确认」
       //   的改写 —— 两个会话的 shard 与全局 lastSummary 里都能看到这条污染链。
       //   ⇒ 多会话模式下**不再回落**：没有本会话分片就写「（なし）」。宁可少一层上下文，
-      //     也不能拿别的会话的进展当自己的。单会话（multiSession === false）下全局就是这个会话自己，
-      //     回落等价，保持原样以零回归；无 sid（无归属播报）时同样不回落，因为它本就不属于任何一个会话。
+      //     也不能拿别的会话的进展当自己的；无 sid（无归属播报）时同样不回落，因为它不属于任何一个会话。
+      //   ⚠️ 单会话（multiSession === false）下"全局就是这个会话自己"这个论断，只在**实际只有一个会话**时
+      //     成立 —— recordProgress 在 multiSession:false 下仍按 sid 写分片，所以"关掉多会话开关但真的开着
+      //     两个会话"时串台仍可能复现（独立复审 Minor-4 指出）。这是"一键回退到基线"的既定语义，予以保留；
+      //     要彻底消除该可能，得把全局兜底整个删掉（它只对升级前的老档有意义）。
       const shardProgress = (wsSid.length > 0 && memory.progress && typeof memory.progress === 'object') ? memory.progress[wsSid] : undefined
       const shardSummary = (shardProgress && typeof shardProgress.lastSummary === 'string' && shardProgress.lastSummary.length > 0) ? shardProgress.lastSummary : ''
       const globalSummary = (typeof narrGlobal.lastSummary === 'string' && narrGlobal.lastSummary.length > 0) ? narrGlobal.lastSummary : ''
@@ -3352,7 +3409,9 @@ export function apply(ctx) {
 
     // narrate(intent, opts)：
     //   同意图 8s 合并（按 opts.sid 所属会话计入其 lastSpokeByIntent）；同一时刻多事件由微任务批收集后取最高优先级一条；
-    //   done 受 narratorDone 开关；force=true（testNarrator）绕过节流/回合内一次性标记，仍受 narratorOn/voiceOn 约束。
+    //   done 受 narratorDone 开关；force=true（testNarrator）绕过节流/回合内一次性标记。
+    //   注：C-3 之后 voiceOn 的判定统一收在 speakSynced —— 语音关时**仍推中文气泡**（走 pushCn，
+    //   面板只 revealHistory）、只是不合成不出声，所以 narrate 路径本身不再判 voiceOn。
     //   opts.sid 缺省（子代理/工作流/后台任务/testNarrator）→ 落默认槽：与任何会话的节流互不干扰。
     //   气泡前缀在**本入口（事件处理同步段内）**算好并写入 opts（Fix R1 / Important-1）——
     //   交付发生在微任务之后，届时 turnActive 可能已被 handleTurnEnd 清掉；事件时刻快照才能反映
@@ -4602,7 +4661,8 @@ export function apply(ctx) {
       }
     }))
 
-    // 进度叙事发声测试：强制触发对应意图（绕过节流与回合内一次性标记；仍受 narratorOn/voiceOn 约束）
+    // 进度叙事发声测试：强制触发对应意图（绕过节流与回合内一次性标记；narratorOn 仍需为真）
+    // voiceOn 的判定在 speakSynced（语音关时仍推气泡、不出声），故此处不再受它约束
     // 多工作区（Task 1）：不带 sid → 走默认槽（force=true 本就绕过 lastSpokeByIntent/lastDoneFamilyAt 门）
     ctx.effect(() => harnessLocal.handle('testNarrator', async (args) => {
       const intent = args && typeof args.intent === 'string' ? args.intent : ''

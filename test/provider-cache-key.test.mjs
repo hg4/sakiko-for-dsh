@@ -50,9 +50,13 @@ try {
 
 let pass = 0
 let fail = 0
-function check(name, cond) {
+// 第三个形参是可选诊断串（独立复审 Minor-R2-5：这里原先只有两个形参，把下面
+// `check('voiceOn 守卫恰好 4 处…', …, guardFns.join(','))` 那个实况**静默吞掉**了 ——
+// 失败时只剩断言名，看不到实际的守卫清单）。不传时输出与原来逐字一致。
+// 与 narrator-multisession.test.mjs:40 的同名 helper 对齐。
+function check(name, cond, extra) {
   if (cond) { pass++; console.log('  [PASS] ' + name) }
-  else { fail++; console.log('  [FAIL] ' + name) }
+  else { fail++; console.log('  [FAIL] ' + name + (extra === undefined ? '' : '  ← ' + extra)) }
 }
 
 const AQUA = {
@@ -93,6 +97,38 @@ test('provider 缓存键覆盖所有会改变合成结果的参数', () => {
   check('edge：改 emotionIntensity → 键变（synthesizeEdge 用它算强度）',
     providerCacheKey(edge) !== providerCacheKey(Object.assign({}, edge, { emotionIntensity: 1.8 })))
   check('edge：缺省 intensity 与显式 1 等价', providerCacheKey({ provider: 'edge' }) === providerCacheKey(edge))
+  // Important-1（独立复审）：键里的回退判据曾写反成 `voiceStability !== false`，与 synthesize 里
+  // **真实决定回退**的那道闸（`fallbackToQuest === true && voiceStability !== true`）恰好互补
+  // ⇒ 在**唯一会走 quest 回退**的配置下 questSpeaker 反而不入键（改了音色命中 edge 的旧音频）。
+  // 下面按"这次配置到底会不会回退"分档钉住语义。
+  const edgeFB = { provider: 'edge', fallbackToQuest: true }
+  check('edge：会回退（voiceStability=false + fallbackToQuest=true）→ 改 questSpeaker 键**必须变**',
+    providerCacheKey(Object.assign({}, edgeFB, { voiceStability: false, questSpeaker: 8 })) !==
+    providerCacheKey(Object.assign({}, edgeFB, { voiceStability: false, questSpeaker: 3 })))
+  check('edge：不回退（voiceStability=true + fallbackToQuest=true）→ 改 questSpeaker 键**不变**（避免无谓 miss）',
+    providerCacheKey(Object.assign({}, edgeFB, { voiceStability: true, questSpeaker: 8 })) ===
+    providerCacheKey(Object.assign({}, edgeFB, { voiceStability: true, questSpeaker: 3 })))
+  check('edge：fallbackToQuest=false（两种 voiceStability）→ 改 questSpeaker 键都不变',
+    providerCacheKey({ provider: 'edge', fallbackToQuest: false, voiceStability: false, questSpeaker: 8 }) ===
+    providerCacheKey({ provider: 'edge', fallbackToQuest: false, voiceStability: false, questSpeaker: 3 }) &&
+    providerCacheKey({ provider: 'edge', fallbackToQuest: false, voiceStability: true, questSpeaker: 8 }) ===
+    providerCacheKey({ provider: 'edge', fallbackToQuest: false, voiceStability: true, questSpeaker: 3 }))
+  // 机械核对：把 synthesize 里那道**真实闸门**从源码里取出来求值，与"questSpeaker 是否入键"
+  // 在 4 种 (voiceStability × fallbackToQuest) 组合上逐一对照 —— 要求「会回退」⟺「questSpeaker 入键」。
+  // 取不到锚点就判失败（响亮），避免"闸门改了名/挪了家"变成静默绿灯。
+  const mRealGate = /if \((config\.fallbackToQuest === true[^)]*)\) \{/.exec(src)
+  let gateConsistent = false
+  if (mRealGate) {
+    const realGate = new Function('config', 'return (' + mRealGate[1] + ')')
+    gateConsistent = [[false, true], [true, true], [false, false], [true, false]].every((combo) => {
+      const cfg = { provider: 'edge', voiceStability: combo[0], fallbackToQuest: combo[1] }
+      const inKey = providerCacheKey(Object.assign({}, cfg, { questSpeaker: 8 })) !==
+        providerCacheKey(Object.assign({}, cfg, { questSpeaker: 3 }))
+      return inKey === realGate(cfg)
+    })
+  }
+  check('edge 键里的回退判据与 synthesize 的真实回退条件**逐组合同口径**（会回退 ⟺ questSpeaker 入键）',
+    gateConsistent)
 
   console.log('\n== 3) 反向：不吃该参数的 provider 不该被它影响（避免无谓 miss）==')
   const vv = { provider: 'voicevox', voicevoxSpeaker: 8, voicevoxUrl: 'http://127.0.0.1:50021', voicevoxEmotionSpeakers: { happy: 1 }, emotionIntensity: 1 }
@@ -155,8 +191,8 @@ test('provider 缓存键覆盖所有会改变合成结果的参数', () => {
       guardFns.push(fns.length ? fns[fns.length - 1][1] : '?')
     }
   }
-  check('voiceOn 守卫恰好 3 处，且分别在 checkCalls/checkIdle/checkHum（⇒ announce/narrate 里没有了）',
-    guardFns.join(',') === 'checkCalls,checkIdle,checkHum')
+  check('voiceOn 守卫恰好 4 处：scheduleWarmTts（语音关不预热合成）+ checkCalls/checkIdle/checkHum（语音关不做那件事）',
+    guardFns.join(',') === 'scheduleWarmTts,checkCalls,checkIdle,checkHum', guardFns.join(','))
   check('voiceOn 判定已收到 speakSynced 里', /const voiceOff = config\.voiceOn !== true/.test(src))
 
   console.log('\n[OK] ' + pass + ' 通过 / ' + fail + ' 失败')

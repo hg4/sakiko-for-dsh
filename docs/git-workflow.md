@@ -1,8 +1,11 @@
 # Git 线性开发流程（本项目规范）
 
 > 适用范围：本 workspace 下纳入 git 管理的项目，**首先指 `sakiko-for-dsh` 插件仓库**
-> （`C:\Users\Admin\.dsh\profiles\node_modules\sakiko-for-dsh`，远端 `git@github.com:hg4/sakiko-for-dsh.git`）。
+> （开发仓库根：`H:\sakiko-for-dsh`，远端 `https://github.com/hg4/sakiko-for-dsh.git`）。
 > 由用户 2026-09-13 明确要求：**改功能或修 bug 都必须走分支 → rebase → 合主干 → push，全程线性**。
+>
+> **开发仓库 ≠ 安装副本**：`H:\sakiko-for-dsh` 是开发仓库（含 `.git`），本文所有 `git -C $repo` 都指它；`%USERPROFILE%\.dsh\profiles\web\node_modules\sakiko-for-dsh` 是 **dsh 实际加载的安装副本**（pnpm 按 `github:hg4/sakiko-for-dsh` 装出来的目录，**不含 `.git`**，不能当 git 仓库用）。
+> 改开发仓库的代码**必须同步到安装副本并重启 DSH** 才会生效（见 §11 第 3 条）。
 
 ## 0. 一句话流程
 
@@ -26,7 +29,7 @@ main（保持最新） ──分支──▶ <type>/<topic> ──rebase origin/
 ## 2. 起手式：永远从**最新** main 开分支
 
 ```powershell
-$repo = 'C:\Users\Admin\.dsh\profiles\node_modules\sakiko-for-dsh'
+$repo = 'H:\sakiko-for-dsh'   # 本机实测值：开发仓库根，含 .git（安装副本不含 .git，不能当仓库用）
 git -C $repo -c http.proxy= -c https.proxy= fetch origin
 git -C $repo switch main
 git -C $repo -c http.proxy= -c https.proxy= pull --ff-only          # 或等价：git merge --ff-only origin/main

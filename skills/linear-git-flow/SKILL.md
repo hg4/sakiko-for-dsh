@@ -7,7 +7,7 @@ description: Use when changing or fixing code in the sakiko-for-dsh plugin repo 
 
 主干 `main` **只接受快进合并**：历史是一条直线，没有 merge commit，不 force push。
 
-详细规范（含每条命令与踩坑记录）：`G:\workspace\docs\git-workflow.md`。
+详细规范（含每条命令与踩坑记录）：仓库内 `docs/git-workflow.md`。
 
 ## 流程（每一步都别跳）
 
@@ -16,7 +16,7 @@ main 最新 ──分支──▶ <type>/<topic> ──rebase origin/main──�
 ```
 
 ```powershell
-$repo = 'C:\Users\Admin\.dsh\profiles\node_modules\sakiko-for-dsh'
+$repo = 'H:\sakiko-for-dsh'   # 本机实测值：开发仓库根，含 .git（安装副本不含 .git，不能当仓库用）
 $git  = { param($a) git -C $repo -c http.proxy= -c https.proxy= -c http.https://github.com/.proxy= @a }
 
 # 1) 从最新 main 开分支（并行干活就换成 worktree add）
@@ -30,6 +30,8 @@ $git  = { param($a) git -C $repo -c http.proxy= -c https.proxy= -c http.https://
 # 5) 推送并核对远端 == 本地 HEAD
 & $git @('push','origin','main'); & $git @('ls-remote','origin','refs/heads/main')
 ```
+
+> **开发仓库 ≠ 安装副本**：`$repo` 指开发仓库根 `H:\sakiko-for-dsh`（含 `.git`）；`%USERPROFILE%\.dsh\profiles\web\node_modules\sakiko-for-dsh` 是 dsh 实际加载的**安装副本**（不含 `.git`，**不能当 git 仓库用**），改了开发仓库要同步过去并重启 DSH 才生效。
 
 分支前缀：`feat/` `fix/` `chore/` `refactor/`，一个分支一件事。
 

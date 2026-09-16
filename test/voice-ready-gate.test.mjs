@@ -17,10 +17,18 @@
 //   旧代码：入口固定 15s 就播报 ⇒ 那一刻桥(当时默认 8000)没在听 ⇒ 连接被拒 ⇒ **有气泡没声音**
 //   本测试第 4 组就是复刻那个窗口：桥不可达时**必须等**，而不是探一次就放弃。
 //
-// 关于虚拟时钟：waitVoiceReady 内部用 `Date.now()` 算超时、用真 `setTimeout` 睡眠。
-//   测试把提取块里的 `Date` 换成一个由 driveClock() 手动推进的累加器
-//   （每 50ms 真实时间推进 VOICE_WAIT_INTERVAL_MS），于是「等 4 分钟」在测试里是亚秒级，
-//   而轮询次数、超时判定走的仍是真源码逻辑。
+// 关于虚拟时钟（独立复审 C-5 的修法：**让虚拟时钟由循环自己的睡眠驱动**）：
+//   waitVoiceReady 内部用 `Date.now()` 算超时、用真 `setTimeout` 睡眠。测试把提取块里的
+//   `Date` **和 `setTimeout`** 一起换成替身：`Date.now()` 读累加器 clock.t，而
+//   `setTimeout(fn, ms)` 做 `clock.t += ms`、再把回调交回真事件循环（realSetTimeout(fn, 0)）。
+//   ⇒ **虚拟时间 = 睡眠之和**，退出点只由源码里的步长 `Math.min(VOICE_WAIT_INTERVAL_MS, remaining)`
+//   决定，与真实定时器抖动、机器负载无关。原先的写法是拿一个 50ms 的真 setInterval 推进虚拟时钟，
+//   而循环自己用 ~120ms 的真睡眠 —— 两者速度解耦，一次迭代之间虚拟时钟可能跳过 2~3 步，
+//   于是「上限 + 一个周期」的余量时够时不够（实测同一条命令 6/10 报红）。
+//   现在 `waitedMs` 恰好等于上限，所以 §9 直接断言「不超上限」这条**生产属性本身**。
+//   ⚠️ 替身只作用于**提取块内部**：模块作用域的 realHttpProbe（:117）仍用真定时器，探针的超时
+//   预算照常真实计时，而且探针耗时**不**推进虚拟时钟。若这个前提不成立（探针的定时器也被遮蔽），
+//   clock.t 会被探针预算撞飞，C-5 会立刻报红 —— §9 因此同时是这条前提的守卫。
 //
 // 跑法：node test/voice-ready-gate.test.mjs
 // 零新依赖：只用 node: 内置模块。
@@ -59,10 +67,18 @@ const block = src.slice(i0, i1)
   ok('host.mjs 有 VOICE_WAIT_INTERVAL_MS 且在 1s~10s 之间（不是 0：防轮询风暴）',
     mInt !== null && Number(mInt[1]) >= 1000 && Number(mInt[1]) <= 10000, mInt === null ? 'missing' : mInt[1])
 }
-// 测试用的加速版：等待上限 700ms 虚拟时间、间隔 120ms 虚拟时间
+// 测试用的加速版：等待上限 / fallback 上限 / 轮询间隔，单位都是**虚拟毫秒**。
+// 三个数**具名**，§9 的断言直接引用它们 —— 免得"改个比例"之后断言里的字面量变成对不上的常量
+// （反向对照正是这么做的）。取值满足 上限 ≈ 6 个周期、fallback ≈ 2.5 个周期。
+const FAST_MAX_MS = 700
+const FAST_FALLBACK_MAX_MS = 300
+const FAST_INTERVAL_MS = 120
 const blockFast = block
-  .replace(/const VOICE_WAIT_MAX_MS = \d+/, 'const VOICE_WAIT_MAX_MS = 700')
-  .replace(/const VOICE_WAIT_INTERVAL_MS = \d+/, 'const VOICE_WAIT_INTERVAL_MS = 120')
+  .replace(/const VOICE_WAIT_MAX_MS = \d+/, 'const VOICE_WAIT_MAX_MS = ' + FAST_MAX_MS)
+  .replace(/const VOICE_WAIT_INTERVAL_MS = \d+/, 'const VOICE_WAIT_INTERVAL_MS = ' + FAST_INTERVAL_MS)
+  // C-2 的 fallback 上限也要加速：否则 voiceStability:false 的用例要在虚拟时间里跑满 90s
+  // （≈37s 真实时间）。对现有用例无影响 —— 它们都没设 voiceStability，走的是上面那条上限。
+  .replace(/const VOICE_WAIT_FALLBACK_MAX_MS = \d+/, 'const VOICE_WAIT_FALLBACK_MAX_MS = ' + FAST_FALLBACK_MAX_MS)
 
 // 按抽取到的源码构造一个可调用环境（依赖全用 mock 包起来）。
 //   eval 的位置是关键，两处都踩过坑：
@@ -71,15 +87,27 @@ const blockFast = block
 //        内层返回后它就丢了（实测报 `voiceShared is not defined`，因为它退化成全局查找）；
 //     ② 必须用**直接 eval**（`eval(code)` 而不是 `(0, eval)(code)`），这样提取块里的
 //        函数声明才能看见工厂参数施加的**词法环境**（voiceShared/config/voiceLog/httpProbe）；
-//     ③ `const Date = ...` 在 eval 之前求值，用于遮蔽块内全部 `Date.now()`（虚拟时钟），
-//        不影响测试自己的真实 Date。
+//     ③ `const Date` / `const setTimeout` 在 eval 之前求值，用于遮蔽块内全部 `Date.now()`
+//        与定时器（虚拟时钟），不影响测试自己的真 Date / 真定时器。
+//   定时器替身的语义（C-5 的修法）：**先把虚拟时钟推进 ms，再把回调交回真事件循环** ——
+//   既不引入真实等待（realSetTimeout(fn, 0) 只是让 promise 有机会 resolve），
+//   又让虚拟时间恰好等于睡眠之和。sleeps 记账交给 §9：那条断言要求
+//   「虚拟时间 === 睡眠之和」，也就是"没有任何外部时间源掺进虚拟时钟"这个确定性前提。
 function makeGate(opts) {
   const o = opts || {}
   const logs = []
   const calls = { httpProbe: 0 }
   const clock = { t: 0 }
-  const factory = new Function('voiceShared', 'config', 'voiceLog', 'httpProbe', 'clock', 'body', `
+  const sleeps = []
+  const realSetTimeout = setTimeout   // 捕获真定时器（模块作用域）：替身借它把回调交回真事件循环
+  const factory = new Function('voiceShared', 'config', 'voiceLog', 'httpProbe', 'clock', 'realSetTimeout', 'sleeps', 'body', `
     const Date = { now: () => clock.t }
+    const setTimeout = (fn, ms) => {
+      const d = Number(ms) || 0
+      sleeps.push(d)
+      clock.t += d
+      return realSetTimeout(fn, 0)
+    }
     eval(body)
     return {
       readyNow: () => voiceBackendReadyNow(),
@@ -89,25 +117,39 @@ function makeGate(opts) {
   const impl = factory(o.voiceShared, o.config, (m) => logs.push(m), async (url, ms) => {
     calls.httpProbe++
     return o.httpProbe(url, ms)
-  }, clock, blockFast)
-  return { impl, logs, calls, clock }
+  }, clock, realSetTimeout, sleeps, blockFast)
+  return { impl, logs, calls, clock, sleeps }
 }
 
-// 虚拟时钟：随真实时间推进（不推的话超时分支永远到不了）
-function driveClock(gate) {
-  const t = setInterval(() => { gate.clock.t += 120 }, 50)
-  return () => clearInterval(t)
-}
-
-// 起一个真 HTTP 假桥（不 mock fetch —— 测的是真探针）
-function listen(port, body) {
-  return new Promise((resolve) => {
-    const s = createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(body))
+// 起一个真 HTTP 假桥（不 mock fetch —— 测的是真探针）。
+// ⚠️ 必须带「可达性自检 + 换端口重试」（2026-09-15 实测的偶发红，与闸门逻辑无关）：
+//   合跑实测约 2~3% 的运行里，`listen(0)` 分配到的那个端口**bind 成功、探针却连不通**
+//   （undici 只报笼统的 `fetch failed`）。落地症状是 §2 / §5 以"桥不可达"的样子偶发红：
+//     [FAIL] registered={} → ready=true  ← {"ready":false,"why":"桥 http://127.0.0.1:6679/health 不可达（fetch failed）"}
+//     [FAIL] 先不可达、后可达 → ready=true ← {"ready":false,"waitedMs":700,…"（等待超过上限，按未就绪降级）"}
+//   取证：一次运行里**只有那一个端口**不通、同一次运行其它端口（含 §4/§6/§9 的 DEAD_PORT）行为全部正常
+//   ⇒ 是逐端口的环境故障，不是连接池被污染（单独顺序 bind+探 400 个端口，0 失败）。
+//   那是 harness 的前提「假桥可达」没成立，而**不是**闸门判错了 ⇒ 起桥时必须自检：
+//   探不通就换一个端口重起（`listen(0)` 会顺序给下一个端口）；试满 10 个还不行就 FATAL 报清楚 ——
+//   宁可炸，不可让"假桥其实连不通"这件事悄悄变成断言里的红灯。
+async function listen(port, body) {
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    const s = await new Promise((resolve, reject) => {
+      const srv = createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(body))
+      })
+      srv.once('error', reject)      // 端口真的被占（EADDRINUSE）也算自检失败，换端口
+      srv.listen(port, '127.0.0.1', () => resolve(srv))
     })
-    s.listen(port, '127.0.0.1', () => resolve(s))
-  })
+    const p = s.address().port
+    const alive = await realHttpProbe('http://127.0.0.1:' + p + '/health', 1200)
+    if (alive.up === true) return s
+    console.error('[WARN] 假桥自检不通（第 ' + attempt + ' 次，port=' + p + '：' + String(alive.err) + '）—— 换端口重起')
+    await new Promise((r) => s.close(r))
+  }
+  console.error('[FATAL] 起不出可达的假桥（连试 10 个端口都不通）—— 本机的 localhost 端口分配有问题，先排查环境再跑本测试')
+  process.exit(2)
 }
 
 // ---- 与 host.mjs 同形的 httpProbe（默认预算、返回 {up,status,body} 或 {up:false,err}）----
@@ -120,7 +162,10 @@ async function realHttpProbe(url, ms) {
     try { body = await r.text() } catch (e) { body = '' }
     return { up: true, status: r.status, body }
   } catch (e) {
-    return { up: false, err: e && e.message ? String(e.message) : String(e) }
+    // undici 对连接层故障只报笼统的 `fetch failed`——把底层 cause 一并留下，否则事后无法定位
+    // （2026-09-15 的偶发红就是被这层笼统错误盖住的：到底是 ECONNREFUSED 还是 ECONNRESET 看不出来）
+    const cause = e && e.cause ? (e.cause.code || e.cause.message || String(e.cause)) : ''
+    return { up: false, err: (e && e.message ? String(e.message) : String(e)) + (cause ? ' / ' + cause : '') }
   } finally { clearTimeout(timer) }
 }
 
@@ -218,9 +263,7 @@ console.log('== 4) waitVoiceReady：桥不可达时必须等（复刻启动窗�
 {
   const vs = { state: { phase: 'starting', detail: '触发: DSH 启动 / 插件加载', log: [] }, procs: {} }
   const g = makeGate({ voiceShared: vs, config: { provider: 'aqua', voiceBridgePort: DEAD_PORT, aquaUrl: 'http://127.0.0.1:' + DEAD_PORT }, httpProbe: realHttpProbe })
-  const stop = driveClock(g)
   const w = await g.impl.wait()
-  stop()
   ok('桥不可达 → ready=false（不假装成功）', w.ready === false, JSON.stringify(w))
   ok('桥不可达 → timeout=true', w.timeout === true, JSON.stringify(w))
   ok('桥不可达 → 真的轮询了（不是探一次就放弃）', g.calls.httpProbe >= 2, 'probes=' + g.calls.httpProbe)
@@ -239,9 +282,7 @@ console.log('== 5) waitVoiceReady：等到就绪立刻放行（不等满上限�
     return await realHttpProbe(url, ms)
   }
   const g = makeGate({ voiceShared: vs, config: { provider: 'aqua', voiceBridgePort: port, aquaUrl: 'http://127.0.0.1:' + port }, httpProbe: probe })
-  const stop = driveClock(g)
   const w = await g.impl.wait()
-  stop()
   ok('先不可达、后可达 → ready=true', w.ready === true, JSON.stringify(w))
   ok('就绪后 timeout=false', w.timeout === false, JSON.stringify(w))
   ok('就绪后打了「语音已就绪」日志', g.logs.some((l) => l.indexOf('语音已就绪') >= 0), JSON.stringify(g.logs))
@@ -263,9 +304,7 @@ console.log('== 7) 结算后不再轮询（防"就绪了还在探"）==')
 {
   const vs = { state: { phase: 'starting', detail: '', log: [] }, procs: {} }
   const g = makeGate({ voiceShared: vs, config: { provider: 'aqua', voiceBridgePort: DEAD_PORT, aquaUrl: 'http://127.0.0.1:' + DEAD_PORT }, httpProbe: realHttpProbe })
-  const stop = driveClock(g)
   const w = await g.impl.wait()
-  stop()
   await new Promise((r) => setTimeout(r, 250))
   const probesAtEnd = g.calls.httpProbe
   await new Promise((r) => setTimeout(r, 400))
@@ -277,11 +316,66 @@ console.log('== 8) 在途去重：并发等只跑一条轮询链 ==')
 {
   const vs = { state: { phase: 'starting', detail: '', log: [] }, procs: {} }
   const g = makeGate({ voiceShared: vs, config: { provider: 'aqua', voiceBridgePort: DEAD_PORT, aquaUrl: 'http://127.0.0.1:' + DEAD_PORT }, httpProbe: realHttpProbe })
-  const stop = driveClock(g)
   const [a, b] = await Promise.all([g.impl.wait(), g.impl.wait()])
-  stop()
   ok('两次并发调用返回同一个结果对象（共用一条链）', a === b, a === b ? 'same' : 'different')
   ok('并发下探针数仍在轮询量级（没翻倍）', g.calls.httpProbe <= 8, 'probes=' + g.calls.httpProbe)
+}
+
+console.log('== 9) C-2 / C-5：上限取值与「不超上限」（独立复审 I-1：这两条原先零覆盖）==')
+{
+  // --- 静态锚点：把实现改回去就会红 ---
+  const mMax = /const VOICE_WAIT_MAX_MS = (\d+)/.exec(block)
+  const mFb = /const VOICE_WAIT_FALLBACK_MAX_MS = (\d+)/.exec(block)
+  ok('host.mjs 有 VOICE_WAIT_FALLBACK_MAX_MS', mFb !== null, mFb === null ? 'missing' : mFb[1])
+  // Minor-R2-4（独立复审）：原先只判 `>= 60000` ⇒ 把常量改回 60000 仍然全绿（锁不住本分支把它
+  // 提到 90s 的取值）。改成按**源码注释里写明的取值依据**锁：≥ 90s（最坏冷启动样本 60s + 4s
+  // 轮询粒度之上留边距，注释里"独立复审建议 90s，采纳"就是这条）。改回 60000 必须报红。
+  ok('fallback 上限 ≥ 90s（Minor-R2-4：改回 60000 必须报红；注释里的取值依据就是 90s）',
+    mFb !== null && Number(mFb[1]) >= 90000, mFb === null ? 'missing' : mFb[1])
+  ok('fallback 上限 < 默认上限（否则 C-2 没有意义）',
+    mFb !== null && mMax !== null && Number(mFb[1]) < Number(mMax[1]),
+    (mFb ? mFb[1] : '?') + ' vs ' + (mMax ? mMax[1] : '?'))
+  ok('C-2：上限按 voiceStability 二选一（删掉这个三元分支即失败）',
+    /const maxMs = config\.voiceStability === false \? VOICE_WAIT_FALLBACK_MAX_MS : VOICE_WAIT_MAX_MS/.test(block))
+  ok('C-5：睡眠被剩余预算夹住（Math.min(INTERVAL, remaining)）',
+    /Math\.min\(VOICE_WAIT_INTERVAL_MS, remaining\)/.test(block))
+  ok('C-5：超时判据基于 remaining（不再是"先判超时再睡满一个周期"）',
+    /const remaining = maxMs - \(Date\.now\(\) - t0\)/.test(block) && /if \(remaining <= 0\)/.test(block))
+
+  // --- 行为：voiceStability=false 应当更早结算（fallback 上限 vs 默认上限，单位都是虚拟毫秒）---
+  // 这两组用的**必须是** makeGate 里那个"由睡眠驱动"的确定性时钟：虚拟时间 = 睡眠之和，
+  // 退出点只由 `Math.min(INTERVAL, remaining)` 决定 ⇒ waitedMs 恰好等于上限，
+  // 「有没有超出上限」才成为可判别的生产属性（原先用真 setInterval 推时钟，测的是时钟比）。
+  async function settle(stability) {
+    const vs = { state: { phase: 'starting', detail: '', log: [] }, procs: {} }
+    const cfg = { provider: 'aqua', voiceBridgePort: DEAD_PORT, aquaUrl: 'http://127.0.0.1:' + DEAD_PORT }
+    if (stability !== undefined) cfg.voiceStability = stability
+    const g = makeGate({ voiceShared: vs, config: cfg, httpProbe: realHttpProbe })
+    const w = await g.impl.wait()
+    return { w, sleeps: g.sleeps }
+  }
+  const rFb = await settle(false)
+  const rDef = await settle(undefined)
+  const wFb = rFb.w
+  const wDef = rDef.w
+  ok('voiceStability=false 确实更早结算（走了 fallback 上限）',
+    wFb.timeout === true && wDef.timeout === true && wFb.waitedMs < wDef.waitedMs,
+    'fallback=' + wFb.waitedMs + 'ms  default=' + wDef.waitedMs + 'ms')
+  // C-5 本体：睡眠被 remaining 夹住 ⇒ 两种情形都**不超各自上限**（虚拟时间 = 睡眠之和）。
+  // 正对照（把生产里那行改成睡满 VOICE_WAIT_INTERVAL_MS）实测报红：默认 720>700、fallback 360>300。
+  ok('C-5：两种情形都没有超出各自上限（睡眠被 remaining 夹住 ⇒ 虚拟耗时恰好 = 上限）',
+    wFb.waitedMs <= FAST_FALLBACK_MAX_MS && wDef.waitedMs <= FAST_MAX_MS,
+    'fallback=' + wFb.waitedMs + 'ms<=' + FAST_FALLBACK_MAX_MS +
+    '  default=' + wDef.waitedMs + 'ms<=' + FAST_MAX_MS)
+  // 前提自检（上面那条判据的立足点）：虚拟时间必须**恰好**等于块内睡眠之和 —— 即时钟完全由循环
+  // 自己的睡眠驱动、探针耗时/外部定时器一律没有掺进虚拟时间（探针用的是模块作用域的真定时器）。
+  // 若有人把真定时器时钟（旧的 driveClock）加回来、或让探针也被遮蔽，这条会先报红，
+  // 从而避免"又变回测时钟比却仍显示绿灯"。
+  const sum = (a) => a.reduce((x, y) => x + y, 0)
+  ok('C-5：虚拟时间恰好 = 块内睡眠之和（确定性前提：探针耗时与外部定时器都没掺进虚拟时钟）',
+    sum(rFb.sleeps) === wFb.waitedMs && sum(rDef.sleeps) === wDef.waitedMs,
+    'fb sleeps=' + JSON.stringify(rFb.sleeps) + ' → ' + wFb.waitedMs + 'ms；def sleeps=' +
+    JSON.stringify(rDef.sleeps) + ' → ' + wDef.waitedMs + 'ms')
 }
 
 console.log('')
