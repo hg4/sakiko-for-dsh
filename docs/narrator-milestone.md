@@ -102,8 +102,9 @@ maybeMilestone → narrate()（3430）   入批前先过它自己的同意图 8s
 **没有任何工具调用**）的**第一个**工具调用会让 `narrate('start')`(5) 与里程碑(10) 在**同一 tick** 入批，
 `flushNarrBatch` 按 sid 只取最高优先级 ⇒ **里程碑赢、START 被吞**（`spoken=["milestone"]`）。
 改动前这条路径只播 START（旧预筛 `st.stepCount >= steps` 在 `stepCount===1` 时不成立，
-所以那个 Milestone 压根不会入批）。用户仍能听到一条，且那种场景下 START（「开工了」）本就陈旧
-—— 记为可接受的新行为，不是缺陷。
+所以那个 Milestone 压根不会入批）。实测红绿：未改动的 main 上 `spoken=["start"]`、本分支 `["milestone"]`
+（测试 §7f 逐字执行生产里 tool/call 分支那一整段，不是手工重演那几行）。
+用户仍能听到一条，且那种场景下 START（「开工了」）本就陈旧 —— 记为可接受的新行为，不是缺陷。
 
 ## 6. 怎么验
 

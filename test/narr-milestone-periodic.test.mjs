@@ -107,6 +107,17 @@ function objNumConst(name) {
   return out
 }
 
+// tool/call 分支（事件分发里那段）：按行锚 `if (t === 'tool/call') {` + 花括号配对切出。
+// 「START 与里程碑同 tick 入批」的真实顺序只在这段里 —— §7f 的判据不能靠手工重演那几行
+// （手工重演会绕开生产里真正变过的那一步：旧代码的「本回合一次性」预筛就在这段内）。
+function sliceToolCallBranch(hostSrc) {
+  const m = /^ {8}if \(t === 'tool\/call'\) \{$/m.exec(hostSrc)
+  if (m === null) return null
+  const open = hostSrc.indexOf('{', m.index)
+  const end = matchBraces(hostSrc, open)
+  return end < 0 ? null : hostSrc.slice(m.index, end + 1)
+}
+
 // deliverNarration 的**同步门**（首个 await 之前那段）：按行原样切出。
 // 起点 = `const now = Date.now()`（紧邻 `const force = opts.force === true` 之前那一行）
 // 终点 = 同意图占位登记 `mySameAt = now` 所在的那个 `if (!force) { … }` 块的**闭括号**。
@@ -142,7 +153,8 @@ function makeRig(hostSrc) {
   const resetSrc = sliceFunction(hs, 'resetTurn')
   const endSrc = sliceFunction(hs, 'handleTurnEnd')
   const gateSrc = sliceDeliverGate(hs)
-  if ([mmSrc, narrateSrc, flushSrc, mkSrc, resetSrc, endSrc, gateSrc].some((s) => typeof s !== 'string')) return null
+  const toolCallSrc = sliceToolCallBranch(hs)
+  if ([mmSrc, narrateSrc, flushSrc, mkSrc, resetSrc, endSrc, gateSrc, toolCallSrc].some((s) => typeof s !== 'string')) return null
 
   const clock = { t: 0 }                       // 受控时钟（毫秒）：生产代码里的 Date.now() 全走它
   const FakeDate = { now: () => clock.t }
@@ -200,9 +212,14 @@ function makeRig(hostSrc) {
     'config', 'recordProgress', 'narrate', 'Date',
     endSrc + '\nreturn handleTurnEnd')(config, recordProgress, narrate, FakeDate)
 
+  // tool/call 分支的逐字执行器：形参与生产同名（t / st / d / sid / config / narrate / maybeMilestone）
+  const toolCallFn = new Function('t', 'st', 'd', 'sid', 'config', 'narrate', 'maybeMilestone',
+    toolCallSrc + '\nreturn null')
+  const toolCall = (st, sid, name) => toolCallFn('tool/call', st, { name: name }, sid, config, narrate, maybeMilestone)
+
   return {
-    hostSrc: hs, mmSrc, gateSrc, clock, config, stateFor, maybeMilestone, narrate, resetTurn, handleTurnEnd,
-    pending, delivered, progress, makeTurnState,
+    hostSrc: hs, mmSrc, gateSrc, toolCallSrc, clock, config, stateFor, maybeMilestone, narrate, resetTurn, handleTurnEnd,
+    toolCall, pending, delivered, progress, makeTurnState,
     // 清空微任务队列：narrate 用 queueMicrotask 排 flushNarrBatch，里程碑的「交付确认」回调排在它之后
     drain: () => new Promise((resolve) => setTimeout(resolve, 0)),
   }
@@ -236,7 +253,7 @@ test('里程碑按周期播报（长回合里每满间隔再播一条），且�
   console.log('\n== 0) 切片健全性（切不到就报红，后面的断言也要看到实况）==')
   // ============================================================
   const R0 = makeRig()
-  check('maybeMilestone / narrate / flushNarrBatch / makeTurnState / resetTurn / handleTurnEnd / 同步门 全部切到',
+  check('maybeMilestone / narrate / flushNarrBatch / makeTurnState / resetTurn / handleTurnEnd / 同步门 / tool/call 分支 全部切到',
     R0 !== null, 'R0=' + (R0 === null ? 'null' : 'ok'))
   if (R0 === null) {
     console.log('\n[OK] ' + pass + ' 通过 / ' + fail + ' 失败')
@@ -531,16 +548,14 @@ test('里程碑按周期播报（长回合里每满间隔再播一条），且�
     R5.config.narratorMilestoneSteps = 50
     const st5 = startTurn(R5, 'sidM', T0)
     R5.clock.t = T0 + MIN_MS + 1000             // 静默已超过一个周期（期间无工具调用 ⇒ 巡检被 stepCount<1 挡住）
-    st5.stepCount += 1                          // tool/call 分支：先 stepCount += 1
-    if (!st5.startSpoken) { st5.startSpoken = true; R5.narrate('start', { sid: 'sidM' }) }
-    R5.maybeMilestone(st5)                      // ……紧接其后（生产里是同一同步 tick）
+    R5.toolCall(st5, 'sidM', 'Read')            // 逐字跑生产里 tool/call 分支那一整段（含它的 START 与里程碑次序）
     await R5.drain()
-    check('7f 静默长回合的第一个工具调用 ⇒ 里程碑(10) 挤掉 START(5)（同 tick、按 sid 只取最高优先级）',
+    check('7f 静默长回合的第一个工具调用 ⇒ 里程碑(10) 挤掉 START(5)（同 tick、按 sid 只取最高优先级；旧码此处只播 START）',
       JSON.stringify(R5.delivered.map((d) => d.intent)) === JSON.stringify(['milestone']) &&
       msCount(R5, 'sidM') === 1,
       'spoken=' + JSON.stringify(R5.delivered.map((d) => d.intent)))
-    check('7f 源码锚点：tool/call 分支仍是「先 narrate(start) 再 maybeMilestone(st)」，且 NARR_PRIORITY.milestone > .start',
-      /if \(!st\.startSpoken\) \{[\s\S]{0,180}?narrate\('start', \{ sid \}\)[\s\S]{0,420}?maybeMilestone\(st\)/.test(SRC) &&
+    check('7f 源码锚点：tool/call 分支已无「本回合一次性」预筛（旧写法必须消失），且 NARR_PRIORITY.milestone > .start',
+      !/!st\.milestoneSpoken && st\.stepCount >= steps/.test(SRC) &&
       (objNumConst('NARR_PRIORITY') || {}).milestone > (objNumConst('NARR_PRIORITY') || {}).start)
 
     // 7g milestoneCount 的真实口径 = 「**触发**次数」，不是「播出条数」：
