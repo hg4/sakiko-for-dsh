@@ -39,9 +39,10 @@
 #   而"被当成文本删掉 CR 字节"要危险得多。
 *.mtn binary
 
-# 说明：仓库里 140 个跟踪文件的扩展名分布（2026-09-16 实测）是
+# 说明：仓库里 141 个跟踪文件的扩展名分布（2026-09-16 实测，含本分支新增的 .gitattributes）是
 #   .mtn(52) .json(35) .js(12) .mjs(8) .py(7) .md(7) .wav(6) .txt(3) .png(2)
-#   .css(1) .html(1) .mp3(1) .moc(1) .yml(1) + 2 个无扩展名
+#   .css(1) .html(1) .mp3(1) .moc(1) .yml(1) + 无扩展名(2：LICENSE/NOTICE) + 点文件(.gitattributes/.gitignore)
+# ⇒ 137 + 2 + 2 = 141
 # 除上面显式列出的二进制之外，其余扩展名（.json/.js/.mjs/.py/.md/.txt/.css/.html/.yml）
 # 都是文本，由 `* text=auto eol=lf` 覆盖。
 # ⚠️ `.moc`（Live2D 编译模型）本身是二进制容器，扩展名却像模型定义 —— 所以单独列出来。
