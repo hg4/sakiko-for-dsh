@@ -87,22 +87,32 @@ maybeMilestone → narrate()（3430）   入批前先过它自己的同意图 8s
   本次修复者用本仓库测试台 §7g 逐值复现：`13/2`、`4/2`、`4/4`，
   并打印 `at=[5000,13000]` / `[10000,20000,30000,40000]`。）
   最朴素的「触发→被吞→重试成功」是 +2 而播 1 条（改动前是 +1 播 0 条）。
-  该字段只进 `narratorStatus`（4668）与 `narrator.json` 的分片摘要，**不参与任何判定、也不进 LLM prompt**，
-  `client.js` / `client.mjs` 零引用。分片摘要这条链是**三处、不是一处**，归属别记错：
-  `recordProgress`（3054）体内组 `narrGlobal.sessions[key]`（3083~3089），3085 就是其中那行
-  `milestoneCount: e.milestoneCount`；`narrPersistSnapshot`（3117）是**纯读取器**——只把 `narrGlobal` 的字段抄进
-  返回值（`sessions` 在 3124），既不写这个字段、也不被 `recordProgress` 调用；真正落盘在 `saveNarratorNow`
-  （3149）的 3151 `writeTextSafe(NARRATOR_PATH, JSON.stringify(narrPersistSnapshot() …))`，
-  由 `recordProgress` 末尾的 `scheduleSaveNarrator()`（3109）经 800 ms 定时器间接触发。
+  该字段**不参与任何判定、也不进 LLM prompt**（prompt 组装在 `narrateSummary`（3284~3395），体内 0 处引用）；
+  `client.js` / `client.mjs` / `panel.js` **零引用**（`git grep -c` 判两个字段均为 0 命中）。
+  它的**落盘面不止一处**，写/读分别是：
+  · 写（两条独立落盘路径，各自**整对象**写出）：`recordProgress`（3054）体内累加
+    `memory.progress[sid].milestoneCount`（3074 触发时 +1；3059~3060 初始化/纠偏，3081 写回 `memory.progress`）
+    ⇒ 同函数末尾的 `scheduleSaveMemory()`（3108）触发 `saveMemoryNow`（740）的 742
+    `JSON.stringify(memory, …)`，落 **`sakiko-memory.json`**（python 兜底 748）；
+    同一函数体内 3085 另写一份内存摘要 `narrGlobal.sessions[key].milestoneCount`（在 3083~3089 那个对象字面量里）
+    ⇒ `scheduleSaveNarrator()`（3109）经 800 ms 定时器触发 `saveNarratorNow`（3149）的 3151，落 **`narrator.json`**；
+    这份摘要是 `narrPersistSnapshot`（3117）在 3124 **原样带走**的 —— 那个函数不是写入方，也不被 `recordProgress` 调用。
+  · 读（两侧各有白名单）：`sakiko-memory.json` 经 `loadMemory`（717）→ `sanitizeProgressMap`（3018）→
+    `sanitizeProgressEntry`（2992）的 3007 保留；`narrator.json` 经 `loadNarrator`（3127）→
+    `sanitizeNarratorSessions`（3028）的 3037 保留。唯一对外读取方是 `narratorStatus`（4668）。
   要让口径贴近「播出一条 +1」：把 3623 的 `recordProgress(st.sid, { milestoneBump: true })`
   挪进确认回调的「已受理」分支即可（本次未改，改了要重跑红绿并重新验证）。
-- `st.milestoneSpoken` 保留（`narratorStatus`（4691）的调试回显；`client.js` / `client.mjs` **零引用**，
+- `st.milestoneSpoken` 保留（`narratorStatus`（4691）的调试回显；`client.js` / `client.mjs` / `panel.js` **零引用**，
   不是「面板契约」—— 代码注释写的是「供 narratorStatus」，那个才准确），语义收窄为「本回合**触发**过
   里程碑（含**未被受理**的尝试）」—— 与 `lastMilestoneAt`（2519）**同款口径**，**不是**「播出过」：
   它在**触发点**置位（3621）；§4 的回滚路径（3637~3641）**只回退基准、不清它**；
   清零只发生在 `resetTurn`（3183）/ `handleTurnEnd`（3670）/ `clearTurnState`（2854）。
   ⇒「`milestoneSpoken === true` 而本回合一条里程碑都没播出」是**可达状态**（触发后被同 tick 的更高优先级
   吞掉，或被 `narrate()` 的同意图 8s 预筛挡掉，见 §4），它本身**不再是闸门**。
+  它**只活在内存、不落盘**：全文件仅 7 处引用（2518 字段初值 / 2854 / 3183 / 3621 / 3670 / 3601 注释 / 4691 回显），
+  在 `narrPersistSnapshot`（3117~3126）、`saveNarratorNow`（3149~3155）、`scheduleSaveNarrator`（3156~3162）、
+  `saveMemoryNow`（740~752）以及两侧 sanitize（2992 / 3018 / 3028）里**都不出现**，全文件所有 `writeTextSafe`
+  调用点也不含它 ⇒ `narrator.json` / `sakiko-memory.json` 里**都没有这个键**。
 - 30 s 巡检 tick（5047 起）与 `narrateSubagents` 过滤逻辑未改；`tool/call` 分支改为直接调用
   `maybeMilestone(st)`（4943；不再用「本回合一次性」标志预筛），时间型因此最迟 30 s 到点。
 - 优先级系统、`pickNarrLine`、`narrateSummary` 的 prompt 均未改。
