@@ -7,10 +7,15 @@
 //   没有第 2 条 —— 而那次触发是**步数**（回合 17:29:43 起、17:30:29 播，46 秒 < 120 秒），
 //   所以「时间型间隔」在这条会话上从头到尾只生效过一次。
 //
-// 根因（改前 host.mjs:3586-3602）：maybeMilestone 用「本回合一次性」标志 st.milestoneSpoken 当闸门
-//   （3590 `if (st.milestoneSpoken) return` / 3598 `st.milestoneSpoken = true`），而该标志只在
-//   回合开始（resetTurn:3179）与结束（handleTurnEnd:3627）复位 ⇒ 一个回合最多播一条；
-//   narratorMilestoneMs / narratorMilestoneSteps 事实上只是「这一条什么时候播」的阈值，不是周期。
+// 根因（**这批「改前」行号的坐标 = `983251e`，即 rebase 前的 main**；本文件不写 `983251e:` 前缀的行号一律取自
+//   本文件所在的那次提交 —— 与 docs/narrator-milestone.md「本页行号取自本页所在的那次提交」同一口径）：
+//   该版 maybeMilestone 在 `983251e`:3586-3602，用「本回合一次性」标志 st.milestoneSpoken 当闸门
+//   （`983251e`:3590 `if (st.milestoneSpoken) return` / `983251e`:3598 `st.milestoneSpoken = true`），而该标志
+//   只在回合开始（`983251e`:3179，在 resetTurn 内）与结束（`983251e`:3627，在 handleTurnEnd 内）复位
+//   ⇒ 一个回合最多播一条；narratorMilestoneMs / narratorMilestoneSteps 事实上只是「这一条什么时候播」的阈值，
+//   不是周期。
+//   同一批位置在当前 main（`c87d8a8`）上的值 —— 偏移**不是统一的 +4**：maybeMilestone 3603-3645、闸门那行
+//   已删除（无对应行）、置位 3621、resetTurn 内的复位 3183（+4）、handleTurnEnd 内的复位 3670（+43）。
 //
 // 本测试钉住的行为契约（改后）：
 //   · 同一回合内，距上次里程碑满 narratorMilestoneMs（或步数增量满 narratorMilestoneSteps）**再播一条**；

@@ -2515,7 +2515,7 @@ export function apply(ctx) {
         turnStartAt: 0,
         stepCount: 0,
         startSpoken: false,
-        milestoneSpoken: false,   // Task 10 起语义收窄为「本回合播报过里程碑」（供 narratorStatus），不再是闸门
+        milestoneSpoken: false,   // Task 10 起语义收窄为「本回合**触发**过里程碑（含未被受理的尝试）」—— 与 lastMilestoneAt 同款口径：在触发点置位，交付被吞时**不回退**；只在回合起止/抹态时清零（供 narratorStatus），不再是闸门
         lastMilestoneAt: 0,       // Task 10 周期制：上次里程碑（含未被受理的尝试）的时刻；基准 = 回合起点
         lastMilestoneStep: 0,     // Task 10 周期制：上次里程碑时的步数；步数型按「步数增量」判定
         turnGoalDone: false,
