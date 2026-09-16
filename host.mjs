@@ -2515,7 +2515,9 @@ export function apply(ctx) {
         turnStartAt: 0,
         stepCount: 0,
         startSpoken: false,
-        milestoneSpoken: false,
+        milestoneSpoken: false,   // Task 10 起语义收窄为「本回合播报过里程碑」（供 narratorStatus），不再是闸门
+        lastMilestoneAt: 0,       // Task 10 周期制：上次里程碑（含未被受理的尝试）的时刻；基准 = 回合起点
+        lastMilestoneStep: 0,     // Task 10 周期制：上次里程碑时的步数；步数型按「步数增量」判定
         turnGoalDone: false,
         blocking: null,        // 'b1'..'b4' | null
         lastUserText: '',
@@ -2850,6 +2852,8 @@ export function apply(ctx) {
       st.stepCount = 0
       st.startSpoken = false
       st.milestoneSpoken = false
+      st.lastMilestoneAt = 0
+      st.lastMilestoneStep = 0
       st.turnGoalDone = false
       st.blocking = null
       st.lastUserText = ''
@@ -3177,6 +3181,9 @@ export function apply(ctx) {
       st.stepCount = 0
       st.startSpoken = false
       st.milestoneSpoken = false
+      // Task 10 周期制：里程碑基准 = 本回合起点（回合刚起不算「距上次」已过），步数增量从 0 起算。
+      st.lastMilestoneAt = now
+      st.lastMilestoneStep = 0
       st.turnGoalDone = false
       st.turnActive = true
       st.turnStartAt = now
@@ -3584,25 +3591,57 @@ export function apply(ctx) {
       await speakSynced(line.jp, bubbleCn, line.emotion || 'neutral', 'force', { announce: true, narrate: intent, sid: sidKey, label: narrLabel })
     }
 
-    // ---------------- 里程碑巡检（per-session：时间/步数，各自单回合一次） ----------------
-    // st = stateFor(sid)：时间阈值按该会话自己的 turnStartAt 计，步数按自己的 stepCount 计；
-    // 空闲会话（turnActive !== true）直接跳过——别的会话在忙不推迟本会话，本会话阻塞不抑制别的会话。
+    // ---------------- 里程碑巡检（per-session 周期制：时间/步数各自到点即再播一条） ----------------
+    // st = stateFor(sid)：时间阈值按该会话自己的 lastMilestoneAt（基准 = 回合起点）计，步数按
+    // lastMilestoneStep 起的**增量**计；空闲会话（turnActive !== true）直接跳过——别的会话在忙不推迟
+    // 本会话，本会话阻塞不抑制别的会话。
+    // Task 10（用户明确选择的行为）：narratorMilestoneMs / narratorMilestoneSteps 是**周期**，不是
+    // 「本回合一次性」阈值 —— 长回合里每满 ms 毫秒（或每满 steps 步）再播一条，直到回合结束。
+    // 现场证据：一个 turnActive 的会话 stepCount=90 只播过 1 条里程碑，此后 16+ 分钟没有再播，
+    // 而 narratorMilestoneMs=120000 ⇒ 旧实现的闸门 st.milestoneSpoken 只在回合起止复位，
+    // 一个回合最多播一条（时间型「间隔」实际上从头到尾只生效过一次）。
     function maybeMilestone(st) {
       if (config.narratorOn !== true) return
       if (st === null || st === undefined) return
       if (st.turnActive !== true) return
-      if (st.milestoneSpoken) return
       if (st.blocking) return
       if (st.stepCount < 1) return
       const ms = typeof config.narratorMilestoneMs === 'number' ? config.narratorMilestoneMs : 240000
       const steps = typeof config.narratorMilestoneSteps === 'number' ? config.narratorMilestoneSteps : 10
-      const overTime = Date.now() - st.turnStartAt >= ms
-      const overSteps = st.stepCount >= steps
+      const now = Date.now()
+      // 基准 = 上次里程碑的时刻/步数；缺字段时按回合起点/0 兜底（与 resetTurn 写入的语义一致）
+      const prevAt = (typeof st.lastMilestoneAt === 'number' && st.lastMilestoneAt > 0) ? st.lastMilestoneAt : st.turnStartAt
+      const prevStep = (typeof st.lastMilestoneStep === 'number' && st.lastMilestoneStep > 0) ? st.lastMilestoneStep : 0
+      const overTime = now - prevAt >= ms
+      const overSteps = st.stepCount - prevStep >= steps
       if (!overTime && !overSteps) return
+      // 先推进基准（占位）：同一 tick 内再进来不会二次触发（时间差 0、步数增量 0）
+      st.lastMilestoneAt = now
+      st.lastMilestoneStep = st.stepCount
       st.milestoneSpoken = true
       // Fix T4：里程碑触发 → 该会话的里程碑计数 +1（进度记忆分片）
       recordProgress(st.sid, { milestoneBump: true })
+      // Task 10：交付确认。narrate() 只是把条目放进 narrPendingBatch 并排一个 flushNarrBatch 微任务；
+      // 同 tick 里该 sid 若有更高优先级事件（BLOCK40 > FAIL30 > DONE/GOAL20 > SPECIAL15 > MILESTONE10），
+      // flushNarrBatch 按 sid **只取最高优先级一条** ⇒ 这次里程碑根本走不到 deliverNarration；
+      // 被 deliverNarration 的同意图 8s 门挡掉时同理。两种情况下 st.lastSpokeByIntent 的 milestone 槽都不变。
+      // 观测点就是它：narrate 里那次微任务先入队、本回调后入队 ⇒ 本回调必然在 flushNarrBatch **之后**跑，
+      // 届时同步门已判完（deliverNarration 首个 await 之前那段）。
+      // 没被受理 ⇒ 把基准回滚到本次尝试之前，让**下一次巡检/下一个周期**重试，而不是把机会永久消耗掉。
+      const beforeSameAt = st.lastSpokeByIntent.get('milestone')
+      const attemptStep = st.stepCount
       narrate('milestone', { sid: st.sid })
+      const confirmDelivery = () => {
+        // 先核对基准还是本次推进的那个：期间若回合已结束（handleTurnEnd 清零）或已开新回合
+        // （resetTurn 重设），就不能把旧基准写回去，否则「回合结束后基准清零」会出现例外。
+        if (st.lastMilestoneAt !== now || st.lastMilestoneStep !== attemptStep) return
+        if (st.lastSpokeByIntent.get('milestone') === beforeSameAt) {
+          st.lastMilestoneAt = prevAt
+          st.lastMilestoneStep = prevStep
+        }
+      }
+      if (typeof queueMicrotask === 'function') queueMicrotask(confirmDelivery)
+      else Promise.resolve().then(confirmDelivery)
     }
 
     // turn/end：goal 完成过 → A3（'goal'）；否则 narratorDone 时 'done'（LLM 总结/模板兜底）；随后清该会话回合状态
@@ -3629,6 +3668,8 @@ export function apply(ctx) {
       st.turnEndedAt = Date.now()   // Fix R1：先记收尾时刻，再 narrate（快照判定时本会话即「刚收尾」）
       st.blocking = null
       st.milestoneSpoken = false
+      st.lastMilestoneAt = 0
+      st.lastMilestoneStep = 0
       st.startSpoken = false
       st.stepCount = 0
       st.turnGoalDone = false
@@ -4896,9 +4937,10 @@ export function apply(ctx) {
             st.startSpoken = true
             narrate('start', { sid })
           }
-          // 步数型里程碑即时检查（时间型由 30s 巡检兜底）
-          const steps = typeof config.narratorMilestoneSteps === 'number' ? config.narratorMilestoneSteps : 10
-          if (!st.milestoneSpoken && st.stepCount >= steps) maybeMilestone(st)
+          // 里程碑即时检查。Task 10 周期制：步数增量与时间间隔都在 maybeMilestone 内判定，
+          // 这里不能再拿「本回合一次性」标志预筛 —— 否则第 2 个步数周期永远到不了点。
+          // 时间型另有 30s 巡检兜底，覆盖「没有工具调用的静默长回合」。
+          maybeMilestone(st)
           return
         }
         if (t === 'approval/asked') {
@@ -5002,7 +5044,7 @@ export function apply(ctx) {
       try { scheduleSaveNarrator() } catch (e) { /* ignore */ }
     }, 60000))
 
-    // 进度叙事：里程碑巡检（30s 独立 tick；遍历各活跃会话，各按自己的时间/步数与 milestoneSpoken 判定；
+    // 进度叙事：里程碑巡检（30s 独立 tick；遍历各活跃会话，各按自己的 lastMilestoneAt/lastMilestoneStep 判定；
     // 空闲会话（无 turnActive）在 maybeMilestone 内直接跳过；multiSession:false 时只有默认槽一项 = 现状行为）
     // Fix R2（Important-新-1）：本 tick **只读**——不做任何「陈旧回合收尾」清扫（那会破坏静默但仍在跑的回合）。
     // 陈旧 turnActive 的两处影响改由只读判据处理：auto 判定见 sessionCountsAsActive，淘汰见 sessionBlocksEviction。
