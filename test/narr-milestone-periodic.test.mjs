@@ -18,7 +18,12 @@
 //   · narratorOn / turnActive / blocking / stepCount<1 四道门照旧；
 //   · 回合起点即基准（回合刚起不算「距上次」已过）；回合结束后基准清零；
 //   · 同 tick 里输给更高优先级（BLOCK40/FAIL30/DONE20/SPECIAL15）的那次里程碑**不永久丢失**
-//     —— 基准回滚，下一次巡检/下一个周期重试。
+//     —— 基准回滚，下一次巡检/下一个周期重试。三条回滚路径各有守卫：
+//     批次优先级（§7b）、回合边界（§7d）、narrate() 自己的同意图 8s 预筛（§7e）。
+//   · `milestoneCount` 的口径是「**触发**次数」，不是「播出条数」（§7g 量化：0.5s/步跑 40 步
+//     ⇒ bump 13 次而只播 2 条；1s/步 ⇒ 4/4）—— 任何断言都不得把它当成播出条数。
+//   · 边角新行为（§7f）：去掉 tool/call 的一次性预筛后，静默长回合的第一个工具调用会让
+//     START(5) 与 MILESTONE(10) 同 tick 入批 ⇒ 里程碑赢、START 被吞。
 //
 // 手法（沿用 test/narrator-multisession.test.mjs §5 与 test/voiceoff-no-audio.test.mjs）：
 //   按**函数名**把生产代码原样切出来求值（不改写、不复制、不重排版），依赖用 new Function 参数注入。
@@ -267,7 +272,11 @@ test('里程碑按周期播报（长回合里每满间隔再播一条），且�
       at[2] === 360000, 'at=' + JSON.stringify(at))
     check('6 分钟里恰好 3 条（120/240/360s 各一条，没有多播）',
       at.length === 3 && msCount(R, 'sidA') === 3, 'at=' + JSON.stringify(at))
-    check('recordProgress 的 milestoneBump 与播出条数一致（每播一次 +1，语义不变）',
+    // 口径说明：bumpCount 统计的是「**触发**时 +1」，不是「播出一条 +1」——被同 tick 优先级吞掉、
+    // 或被 narrate() 的同意图 8s 合并窗挡回时都会 +1 而不发声（见 §7b；量级见 §7g：
+    // 步数型 0.5s/次工具调用跑 40 步时 bump 13 次而只播 2 条）。本段没有吞/合并发生，
+    // 所以「3 次触发 = 3 次 bump」成立；不得据此声称「每播一次 +1」。
+    check('§1 这段没有吞/合并 ⇒ 3 次触发 = 3 次 bump（口径 = 触发时 +1，不等价于播出条数）',
       bumpCount(R) === 3, 'bump=' + bumpCount(R))
   }
 
@@ -492,6 +501,73 @@ test('里程碑按周期播报（长回合里每满间隔再播一条），且�
     check('7d 同 tick 里回合结束 ⇒ 基准保持 handleTurnEnd 清出的 0（确认回调不把旧基准写回）',
       st3.turnActive === false && st3.lastMilestoneAt === 0 && st3.lastMilestoneStep === 0,
       'turnActive=' + String(st3.turnActive) + ' lastMilestoneAt=' + String(st3.lastMilestoneAt) + ' lastMilestoneStep=' + String(st3.lastMilestoneStep))
+
+    // 7e 第三条回滚路径：narrate() **自己的**同意图 8s 预筛（host.mjs 3436~3440）在**入批之前**就把这次
+    //    尝试挡回（reason='merged-same-intent'，连批都进不去）⇒ 槽不变 ⇒ 回滚 ⇒ 窗口一过就补播。
+    //    这是 §7b（批次优先级）与 §7d（回合边界）之外的第三条路径，必须单独有守卫。
+    const R4 = makeRig()
+    R4.config.narratorMilestoneMs = MAX_MS      // 时间型不参与，只看步数周期
+    R4.config.narratorMilestoneSteps = 3
+    const st4 = startTurn(R4, 'sidL', T0)
+    for (let i = 1; i <= 14; i++) {             // 1 巡 = 1 步 = 1000ms
+      st4.stepCount = i
+      await tick(R4, st4, 1000)
+    }
+    const at4 = msAt(R4, 'sidL').map((t) => t - T0)
+    // 第 3 步（t=3000）播第 1 条；此后每步都「距上次里程碑满 3 步」，但 8s 窗内会被挡回：
+    // 补播时刻 = max(6000, 3000 + ceil(GAP/1000)*1000)（GAP = NARR_INTENT_GAP_MS；8000 ⇒ 11000）
+    const GAP = numConst('NARR_INTENT_GAP_MS')
+    const expectRetry4 = Math.max(6000, 3000 + Math.ceil(GAP / 1000) * 1000)
+    check('7e narrate 的 8s 预筛挡回 ⇒ 不丢也不重：窗口一过补上第 2 条（回滚让重试落在最早可能的一巡）',
+      JSON.stringify(at4) === JSON.stringify([3000, expectRetry4]),
+      'at=' + JSON.stringify(at4) + ' expect=' + JSON.stringify([3000, expectRetry4]))
+
+    // 7f 边角新行为：静默长回合（已过一个周期、期间没有任何工具调用）的**第一个**工具调用会让
+    //    START(5) 与 MILESTONE(10) 在**同一 tick** 入批 ⇒ 里程碑赢、START 被吞。
+    //    改动前这条路径只播 START（旧预筛 `st.stepCount >= steps` 在 stepCount===1 时不成立）。
+    //    用户仍能听到一条，且那种场景下 START（「开工了」）本就陈旧 —— 记为可接受的新行为。
+    const R5 = makeRig()
+    R5.config.narratorMilestoneMs = MIN_MS       // 60s
+    R5.config.narratorMilestoneSteps = 50
+    const st5 = startTurn(R5, 'sidM', T0)
+    R5.clock.t = T0 + MIN_MS + 1000             // 静默已超过一个周期（期间无工具调用 ⇒ 巡检被 stepCount<1 挡住）
+    st5.stepCount += 1                          // tool/call 分支：先 stepCount += 1
+    if (!st5.startSpoken) { st5.startSpoken = true; R5.narrate('start', { sid: 'sidM' }) }
+    R5.maybeMilestone(st5)                      // ……紧接其后（生产里是同一同步 tick）
+    await R5.drain()
+    check('7f 静默长回合的第一个工具调用 ⇒ 里程碑(10) 挤掉 START(5)（同 tick、按 sid 只取最高优先级）',
+      JSON.stringify(R5.delivered.map((d) => d.intent)) === JSON.stringify(['milestone']) &&
+      msCount(R5, 'sidM') === 1,
+      'spoken=' + JSON.stringify(R5.delivered.map((d) => d.intent)))
+    check('7f 源码锚点：tool/call 分支仍是「先 narrate(start) 再 maybeMilestone(st)」，且 NARR_PRIORITY.milestone > .start',
+      /if \(!st\.startSpoken\) \{[\s\S]{0,180}?narrate\('start', \{ sid \}\)[\s\S]{0,420}?maybeMilestone\(st\)/.test(SRC) &&
+      (objNumConst('NARR_PRIORITY') || {}).milestone > (objNumConst('NARR_PRIORITY') || {}).start)
+
+    // 7g milestoneCount 的真实口径 = 「**触发**次数」，不是「播出条数」：
+    //    回滚 + narrate() 的 8s 合并窗 ⇒ 每次被挡回的重试都白记一次 ⇒ 密集工具调用下会放大。
+    //    （数字与独立验证 `real-chain.mjs` S8 一致：0.5s/步 13 次/2 条、对照组 4/2、1s/步 4/4）
+    const bumpRun = async (rig, perStepMs, steps) => {
+      rig.config.narratorMilestoneMs = MAX_MS
+      rig.config.narratorMilestoneSteps = 10
+      const st = startTurn(rig, 'sidN', T0)
+      for (let i = 1; i <= steps; i++) { st.stepCount = i; await tick(rig, st, perStepMs) }
+      return { bump: bumpCount(rig), spoken: msCount(rig, 'sidN'), at: msAt(rig, 'sidN').map((t) => t - T0) }
+    }
+    const dense = await bumpRun(makeRig(), 500, 40)      // 0.5s/步：窗口内被挡回的重试每次白记一次
+    const slow = await bumpRun(makeRig(), 1000, 40)      // 1s/步：每次到点都真发声
+    const noRbSrc = R0.mmSrc.replace(/if \(st\.lastSpokeByIntent\.get\('milestone'\) === beforeSameAt\) \{/, 'if (false) {')
+    const noRbRig = noRbSrc !== R0.mmSrc ? makeRig(R0.hostSrc.replace(R0.mmSrc, noRbSrc)) : null
+    const denseNoRb = noRbRig === null ? null : await bumpRun(noRbRig, 500, 40)
+    console.log('  [info] 7g 40 步 @0.5s：带回滚 bump=' + dense.bump + ' / spoken=' + dense.spoken + ' at=' + JSON.stringify(dense.at) +
+      '；去掉回滚 bump=' + (denseNoRb === null ? 'n/a' : denseNoRb.bump) + ' / spoken=' + (denseNoRb === null ? 'n/a' : denseNoRb.spoken))
+    console.log('  [info] 7g 40 步 @1.0s：带回滚 bump=' + slow.bump + ' / spoken=' + slow.spoken + ' at=' + JSON.stringify(slow.at))
+    check('7g 计数口径 = 触发次数：密集节奏下 bump 多于播出条数，慢节奏下两者相等',
+      dense.bump > dense.spoken && slow.bump === slow.spoken && dense.bump > slow.bump,
+      'dense=' + dense.bump + '/' + dense.spoken + ' slow=' + slow.bump + '/' + slow.spoken)
+    check('7g 对照组（去掉回滚）同场景 bump 更少、播出条数相同 ⇒ 放大确实来自回滚',
+      denseNoRb !== null && denseNoRb.bump < dense.bump && denseNoRb.spoken === dense.spoken,
+      'noRollback=' + (denseNoRb === null ? 'null' : denseNoRb.bump + '/' + denseNoRb.spoken) +
+      ' rollback=' + dense.bump + '/' + dense.spoken)
   }
 
   // ============================================================
